@@ -9,8 +9,8 @@ import { Button } from "../components/ui";
 const SUGGESTIONS = [
   "What's on my calendar today?",
   "Which to-dos are overdue?",
-  "Summarize my high-priority tasks.",
-  "What notes mention the Q3 report?",
+  "Add a to-do to call the dentist tomorrow at 2pm",
+  "Create a Work note titled 'Sprint goals'",
 ];
 
 export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
@@ -72,7 +72,7 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
           <Sparkles size={18} className="text-blue-500" /> Assistant
         </h1>
         <div className="flex items-center gap-3">
-          <span className="text-xs text-neutral-400">Read-only · answers from your data</span>
+          <span className="text-xs text-neutral-400">Asks and edits · works on your data</span>
           {messages.length > 0 && (
             <Button variant="ghost" onClick={() => { setMessages([]); setError(null); }}>
               <span className="flex items-center gap-1.5"><Trash2 size={14} /> Clear</span>

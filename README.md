@@ -1,6 +1,6 @@
 # 🧠 Second Brain
 
-A local-first personal life-management desktop app: **Calendar, Reminders, To-Do, and Notes** in one integrated tool, with an optional **AI assistant** that can answer questions about your data. Built with Tauri v2 + React + TypeScript + SQLite. Fully offline (the only network call is to OpenAI, and only if you opt in) — no account, no cloud sync.
+A local-first personal life-management desktop app: **Calendar, Reminders, To-Do, and Notes** in one integrated tool, with an optional **AI assistant** that can answer questions about your data *and* create/update items on your behalf. Built with Tauri v2 + React + TypeScript + SQLite. Fully offline (the only network call is to OpenAI, and only if you opt in) — no account, no cloud sync.
 
 ## Stack
 
@@ -54,7 +54,7 @@ Migrations are versioned and idempotent (managed by `tauri-plugin-sql`); they ru
 - **Reminders** — Apple-Reminders-style with a filter sidebar (**All / Scheduled / Flagged / Completed**, each with live counts). Due date + optional alert time, recurrence, priority, link to a to-do. Native OS notifications fire when due (polled once a minute while the app is open).
 - **To-Do** — multiple lists (defaults: **Personal**, **Work**), inline list creation, subtasks, priority, due dates, drag-to-reorder, and "Convert to event". Incomplete tasks always sort above completed ones.
 - **Notes** — markdown with live preview, pin, FTS5 full-text search. The editor holds local state and debounces saves, so typing stays smooth.
-- **Assistant** — a read-only AI chat that answers questions about your data (see below).
+- **Assistant** — an AI chat that answers questions about your data and can create/update items (see below).
 - **Settings** — enter your OpenAI API key + model.
 - **Integration** — shared tagging and generic `links` (any item ↔ any item) across all four types; global search across everything.
 
@@ -62,13 +62,15 @@ The UI uses a consistent modern icon set (`lucide-react`) throughout — no emoj
 
 ## AI Assistant
 
-An optional, **read-only** assistant that answers questions about your events, to-dos, reminders, and notes. Bring your own OpenAI API key.
+An optional assistant that answers questions about your events, to-dos, reminders, and notes — and can also **create and update** them for you. Bring your own OpenAI API key.
 
-**Setup:** open **Settings** (sidebar, bottom) → paste your `sk-…` key → pick a model (default `gpt-4o-mini`) → Save. Then open **Assistant** and ask, e.g. *"What's due next week in Work?"* or *"Which notes mention the Q3 report?"*
+**Setup:** open **Settings** (sidebar, bottom) → paste your `sk-…` key → pick a model (default `gpt-4o-mini`) → Save. Then open **Assistant** and try:
+- *"What's due next week in Work?"* / *"Which notes mention the Q3 report?"* (read)
+- *"Add a to-do to call the dentist tomorrow at 2pm"* / *"Mark 'Buy groceries' as done"* / *"Create a weekly team-lunch event on Fridays at noon"* (write)
 
-**How it works — tool calling, not context stuffing:** rather than sending your entire dataset with every request (which doesn't scale), the model is given a set of read-only **tools** and pulls only what it needs via an agentic loop (`src/lib/ai.ts`):
+**How it works — tool calling, not context stuffing:** rather than sending your entire dataset with every request (which doesn't scale), the model is given a set of **tools** and pulls/changes only what it needs via an agentic loop (`src/lib/ai.ts`):
 
-| Tool | Purpose |
+| Read tool | Purpose |
 |------|---------|
 | `get_overview` | counts, list/tag names, current time (cheap orientation) |
 | `search_todos` | filter by query, list, status, priority, due-date range, tag |
@@ -77,9 +79,24 @@ An optional, **read-only** assistant that answers questions about your events, t
 | `search_notes` | FTS5 keyword search (or recent), pinned filter |
 | `get_item` | full detail of one item + its tags and linked items |
 
-**Built to scale:** every tool is filtered and paginated — bounded `limit` (default 25, max 100) — and returns a `total` count and `truncated` flag so the model knows when there's more and narrows its filters instead of assuming it saw everything. Nothing loads a whole table blindly: searches push filters into SQL, notes use the FTS index, and `search_events` only fully expands *recurring* events while pre-filtering non-recurring ones by the requested window. Live tool activity ("Checking the calendar…") is shown while the assistant works.
+| Write tool | Purpose |
+|------|---------|
+| `create_todo` / `update_todo` | create or edit a task (incl. list, due date, priority, mark complete) |
+| `create_event` / `update_event` | create or edit a calendar event (incl. recurrence, all-day, location) |
+| `create_reminder` / `update_reminder` | create or edit a reminder (incl. alert time, recurrence, complete) |
+| `create_note` / `update_note` | create or edit a markdown note |
+| `create_list` | add a new to-do list |
+| `add_tag` | tag any item |
 
-**Privacy & safety:** the key is stored locally and sent directly to OpenAI (via the Rust HTTP plugin, scoped to `api.openai.com`). The assistant is read-only by construction — it has lookup tools only and cannot create, edit, or delete anything. Adding write tools later is just more entries in the tool list.
+**Built to scale:** every read tool is filtered and paginated — bounded `limit` (default 25, max 100) — and returns a `total` count and `truncated` flag so the model knows when there's more and narrows its filters instead of assuming it saw everything. Nothing loads a whole table blindly: searches push filters into SQL, notes use the FTS index, and `search_events` only fully expands *recurring* events while pre-filtering non-recurring ones by the requested window. Live tool activity ("Checking the calendar…", "Creating a to-do…") is shown while the assistant works.
+
+**Write behavior & safety:**
+- **No delete** — there are no delete tools by design; every change the assistant makes is reversible by you in the app. Deletions are yours to do manually.
+- The system prompt instructs the model to look up an item's id before updating it, to **ask a clarifying question when a request is ambiguous** rather than guess, and to briefly **confirm what it created or updated** afterwards.
+- Changes appear in the other views the next time you open them (each view reloads its data on navigation).
+- The key is stored locally and sent directly to OpenAI (via the Rust HTTP plugin, scoped to `api.openai.com`).
+
+Adding further capabilities later is just more entries in the `TOOLS` array and the `executeTool` switch — the agentic loop already handles multi-tool rounds.
 
 ## Demo data (easter egg)
 
@@ -106,7 +123,7 @@ src/
     notifications.ts    # due-item notification poller
     format.ts           # date helpers
     settings.ts         # app settings (OpenAI key/model) in localStorage
-    ai.ts               # AI assistant: read-only tools + agentic loop
+    ai.ts               # AI assistant: read + write tools + agentic loop
     demo.ts             # reset + seed demo data
   components/
     ui.tsx              # Modal, Button, priority helpers
@@ -125,7 +142,7 @@ src-tauri/
 
 ## Notes / current limitations
 
-- The AI assistant is **read-only** for now and requires your own OpenAI API key. Replies are non-streaming (the whole answer appears once ready).
+- The AI assistant can read and create/update data (no delete) and requires your own OpenAI API key. It acts without a per-change confirmation dialog — it relies on the model to confirm ambiguous requests in chat first — so review changes it reports. Replies are non-streaming (the whole answer appears once ready).
 - Desktop notifications are **poll-based** (checked every 60s while the app is open) — the plugin has no cross-platform "schedule for later" API. Alerts won't fire while the app is closed.
 - Drag-to-reschedule is day-granularity in month view and disabled for recurring series (dragging a single instance is ambiguous; edit the series, or use "Skip this day").
 - No timezone handling beyond the machine's local zone (fine for single-user local use; revisit before CalDAV sync).

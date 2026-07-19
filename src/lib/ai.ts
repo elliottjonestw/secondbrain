@@ -13,9 +13,10 @@
 
 import { fetch } from "@tauri-apps/plugin-http";
 import { format } from "date-fns";
-import type { EventRow } from "../types";
+import type { EventRow, ItemType } from "../types";
 import {
   db, listLists, listTags, linksForItem, tagsForItem, getItemLabel,
+  upsertTodo, upsertEvent, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
 } from "../db";
 import { expandEvents } from "./recurrence";
 import { getSettings } from "./settings";
@@ -54,6 +55,35 @@ function parseDate(s: unknown, endOfDay = false): Date | null {
   const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(s.trim());
   const d = new Date(dateOnly ? `${s.trim()}T${endOfDay ? "23:59:59" : "00:00:00"}` : s);
   return isNaN(d.getTime()) ? null : d;
+}
+
+/** Coerce a value to an ISO string, or null if absent/invalid. */
+function asIso(v: unknown, endOfDay = false): string | null {
+  const d = parseDate(v, endOfDay);
+  return d ? d.toISOString() : null;
+}
+
+/** Coerce a priority value (0–3 or a name) to an integer. */
+function asPriority(v: unknown): number {
+  if (typeof v === "number") return Math.max(0, Math.min(3, Math.floor(v)));
+  const i = PRIORITY.indexOf(String(v ?? "").toLowerCase());
+  return i >= 0 ? i : 0;
+}
+
+const WRITE_TABLES = { event: "events", reminder: "reminders", todo: "todos", note: "notes" } as const;
+
+async function getRowById(table: string, id: unknown): Promise<any | null> {
+  if (typeof id !== "string" || !id) return null;
+  const d = await db();
+  const rows = await d.select<any[]>(`SELECT * FROM ${table} WHERE id = ?`, [id]);
+  return rows[0] ?? null;
+}
+
+/** Resolve a list name to its id (case-insensitive); null if not found. */
+async function resolveListId(name: unknown): Promise<string | null> {
+  if (typeof name !== "string" || !name.trim()) return null;
+  const lists = await listLists();
+  return lists.find((l) => l.name.toLowerCase() === name.trim().toLowerCase())?.id ?? null;
 }
 
 /** item_ids that carry a given tag name, for a given item type. */
@@ -165,6 +195,194 @@ const TOOLS = [
           id: { type: "string" },
         },
         required: ["type", "id"],
+      },
+    },
+  },
+
+  // ---- Write tools (create / update). No delete tools by design. ----
+  {
+    type: "function",
+    function: {
+      name: "create_todo",
+      description: "Create a new to-do task. Confirm ambiguous details with the user before creating.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          list: { type: "string", description: "List name; falls back to the first list if unknown." },
+          notes: { type: "string" },
+          due_at: { type: "string", description: "ISO date/datetime." },
+          priority: { type: "integer", description: "0 none, 1 low, 2 medium, 3 high." },
+          parent_todo_id: { type: "string", description: "Make this a subtask of the given to-do id." },
+        },
+        required: ["title"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_todo",
+      description: "Update fields of an existing to-do by id. Only include the fields you want to change. Use completed to mark done/undone.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          title: { type: "string" },
+          list: { type: "string" },
+          notes: { type: "string" },
+          due_at: { type: "string", description: "ISO date/datetime, or null to clear." },
+          priority: { type: "integer" },
+          completed: { type: "boolean" },
+        },
+        required: ["id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_event",
+      description: "Create a new calendar event. Confirm ambiguous details with the user before creating.",
+      parameters: {
+        type: "object",
+        properties: {
+          summary: { type: "string" },
+          start: { type: "string", description: "ISO date/datetime (required)." },
+          end: { type: "string", description: "ISO datetime; defaults to 1 hour after start." },
+          all_day: { type: "boolean" },
+          location: { type: "string" },
+          description: { type: "string" },
+          rrule: { type: "string", description: "RFC 5545 recurrence, e.g. FREQ=WEEKLY;BYDAY=MO,WE,FR." },
+          category: { type: "string" },
+        },
+        required: ["summary", "start"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_event",
+      description: "Update fields of an existing event by id. Only include the fields you want to change.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          summary: { type: "string" },
+          start: { type: "string", description: "ISO date/datetime." },
+          end: { type: "string", description: "ISO datetime, or null to clear." },
+          all_day: { type: "boolean" },
+          location: { type: "string" },
+          description: { type: "string" },
+          rrule: { type: "string", description: "RFC 5545 recurrence, or null to stop repeating." },
+          category: { type: "string" },
+        },
+        required: ["id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_reminder",
+      description: "Create a new reminder. Confirm ambiguous details with the user before creating.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          due_at: { type: "string", description: "ISO date/datetime." },
+          remind_at: { type: "string", description: "ISO datetime for the alert." },
+          rrule: { type: "string", description: "RFC 5545 recurrence." },
+          priority: { type: "integer" },
+          notes: { type: "string" },
+        },
+        required: ["title"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_reminder",
+      description: "Update fields of an existing reminder by id. Only include the fields you want to change. Use completed to mark done/undone.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          title: { type: "string" },
+          due_at: { type: "string", description: "ISO, or null to clear." },
+          remind_at: { type: "string", description: "ISO, or null to clear." },
+          rrule: { type: "string", description: "RFC 5545, or null to stop repeating." },
+          priority: { type: "integer" },
+          notes: { type: "string" },
+          completed: { type: "boolean" },
+        },
+        required: ["id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_note",
+      description: "Create a new markdown note.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          body: { type: "string", description: "Markdown content." },
+          pinned: { type: "boolean" },
+        },
+        required: ["title"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_note",
+      description: "Update fields of an existing note by id. Only include the fields you want to change.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          title: { type: "string" },
+          body: { type: "string" },
+          pinned: { type: "boolean" },
+        },
+        required: ["id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "create_list",
+      description: "Create a new to-do list.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          color: { type: "string", description: "Hex color, e.g. #3b82f6." },
+        },
+        required: ["name"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "add_tag",
+      description: "Attach a tag to an item (creating the tag if needed).",
+      parameters: {
+        type: "object",
+        properties: {
+          type: { type: "string", enum: ["event", "reminder", "todo", "note"] },
+          id: { type: "string" },
+          tag: { type: "string", description: "Tag name without the leading #." },
+        },
+        required: ["type", "id", "tag"],
       },
     },
   },
@@ -381,14 +599,181 @@ async function toolGetItem(args: Record<string, unknown>) {
   return { type, item, tags, linked };
 }
 
+// ---------------------------------------------------------------------------
+// Tool executors (write: create / update). No delete tools by design; all
+// changes are reversible by the user in the UI.
+// ---------------------------------------------------------------------------
+async function toolCreateTodo(args: Record<string, unknown>) {
+  if (typeof args.title !== "string" || !args.title.trim()) return { error: "title is required." };
+  const lists = await listLists();
+  const listId = (await resolveListId(args.list)) ?? lists[0]?.id ?? null;
+  const id = await upsertTodo({
+    title: args.title.trim(),
+    notes: typeof args.notes === "string" ? args.notes : null,
+    list_id: listId,
+    due_at: asIso(args.due_at),
+    priority: asPriority(args.priority),
+    completed: 0, completed_at: null,
+    parent_todo_id: typeof args.parent_todo_id === "string" ? args.parent_todo_id : null,
+    position: null,
+  });
+  return { ok: true, id, list: lists.find((l) => l.id === listId)?.name };
+}
+
+async function toolUpdateTodo(args: Record<string, unknown>) {
+  const t = await getRowById("todos", args.id);
+  if (!t) return { error: `No todo found with id ${args.id}.` };
+  const listId = "list" in args ? (await resolveListId(args.list)) ?? t.list_id : t.list_id;
+  const completed = "completed" in args ? (args.completed ? 1 : 0) : t.completed;
+  await upsertTodo({
+    id: t.id,
+    title: "title" in args ? String(args.title) : t.title,
+    notes: "notes" in args ? (args.notes as string | null) : t.notes,
+    list_id: listId,
+    due_at: "due_at" in args ? asIso(args.due_at) : t.due_at,
+    priority: "priority" in args ? asPriority(args.priority) : t.priority,
+    completed,
+    completed_at: completed ? (t.completed_at ?? nowIso()) : null,
+    parent_todo_id: t.parent_todo_id,
+    position: t.position,
+  });
+  return { ok: true, id: t.id };
+}
+
+async function toolCreateEvent(args: Record<string, unknown>) {
+  if (typeof args.summary !== "string" || !args.summary.trim()) return { error: "summary is required." };
+  const dtstart = asIso(args.start);
+  if (!dtstart) return { error: "A valid ISO start is required." };
+  const allDay = args.all_day === true;
+  const dtend = allDay ? null : (asIso(args.end) ?? new Date(new Date(dtstart).getTime() + 3600e3).toISOString());
+  const id = await upsertEvent({
+    summary: args.summary.trim(),
+    description: typeof args.description === "string" ? args.description : null,
+    location: typeof args.location === "string" ? args.location : null,
+    dtstart, dtend, all_day: allDay ? 1 : 0,
+    rrule: typeof args.rrule === "string" ? args.rrule : null,
+    exdates: null, status: "CONFIRMED",
+    categories: typeof args.category === "string" ? JSON.stringify([args.category]) : null,
+    color: null,
+  });
+  return { ok: true, id };
+}
+
+async function toolUpdateEvent(args: Record<string, unknown>) {
+  const e = await getRowById("events", args.id);
+  if (!e) return { error: `No event found with id ${args.id}.` };
+  const allDay = "all_day" in args ? (args.all_day ? 1 : 0) : e.all_day;
+  await upsertEvent({
+    id: e.id,
+    summary: "summary" in args ? String(args.summary) : e.summary,
+    description: "description" in args ? (args.description as string | null) : e.description,
+    location: "location" in args ? (args.location as string | null) : e.location,
+    dtstart: "start" in args ? (asIso(args.start) ?? e.dtstart) : e.dtstart,
+    dtend: "end" in args ? asIso(args.end) : e.dtend,
+    all_day: allDay,
+    rrule: "rrule" in args ? (args.rrule ? String(args.rrule) : null) : e.rrule,
+    exdates: e.exdates,
+    status: e.status,
+    categories: "category" in args ? (args.category ? JSON.stringify([args.category]) : null) : e.categories,
+    color: e.color,
+  });
+  return { ok: true, id: e.id };
+}
+
+async function toolCreateReminder(args: Record<string, unknown>) {
+  if (typeof args.title !== "string" || !args.title.trim()) return { error: "title is required." };
+  const id = await upsertReminder({
+    title: args.title.trim(),
+    notes: typeof args.notes === "string" ? args.notes : null,
+    due_at: asIso(args.due_at),
+    remind_at: asIso(args.remind_at),
+    rrule: typeof args.rrule === "string" ? args.rrule : null,
+    priority: asPriority(args.priority),
+    completed: 0, completed_at: null, linked_todo_id: null,
+  });
+  return { ok: true, id };
+}
+
+async function toolUpdateReminder(args: Record<string, unknown>) {
+  const r = await getRowById("reminders", args.id);
+  if (!r) return { error: `No reminder found with id ${args.id}.` };
+  const completed = "completed" in args ? (args.completed ? 1 : 0) : r.completed;
+  await upsertReminder({
+    id: r.id,
+    title: "title" in args ? String(args.title) : r.title,
+    notes: "notes" in args ? (args.notes as string | null) : r.notes,
+    due_at: "due_at" in args ? asIso(args.due_at) : r.due_at,
+    remind_at: "remind_at" in args ? asIso(args.remind_at) : r.remind_at,
+    rrule: "rrule" in args ? (args.rrule ? String(args.rrule) : null) : r.rrule,
+    priority: "priority" in args ? asPriority(args.priority) : r.priority,
+    completed,
+    completed_at: completed ? (r.completed_at ?? nowIso()) : null,
+    linked_todo_id: r.linked_todo_id,
+  });
+  return { ok: true, id: r.id };
+}
+
+async function toolCreateNote(args: Record<string, unknown>) {
+  if (typeof args.title !== "string" && typeof args.body !== "string") return { error: "Provide a title and/or body." };
+  const id = await upsertNote({
+    title: typeof args.title === "string" ? args.title : "Untitled",
+    body: typeof args.body === "string" ? args.body : "",
+    pinned: args.pinned === true ? 1 : 0,
+  });
+  return { ok: true, id };
+}
+
+async function toolUpdateNote(args: Record<string, unknown>) {
+  const n = await getRowById("notes", args.id);
+  if (!n) return { error: `No note found with id ${args.id}.` };
+  await upsertNote({
+    id: n.id,
+    title: "title" in args ? (args.title as string | null) : n.title,
+    body: "body" in args ? (args.body as string | null) : n.body,
+    pinned: "pinned" in args ? (args.pinned ? 1 : 0) : n.pinned,
+  });
+  return { ok: true, id: n.id };
+}
+
+async function toolCreateList(args: Record<string, unknown>) {
+  if (typeof args.name !== "string" || !args.name.trim()) return { error: "name is required." };
+  const id = await upsertList({ name: args.name.trim(), color: typeof args.color === "string" ? args.color : null });
+  return { ok: true, id };
+}
+
+async function toolAddTag(args: Record<string, unknown>) {
+  const type = args.type as string;
+  const id = args.id as string;
+  const tag = args.tag as string;
+  if (!(type in WRITE_TABLES) || !id || typeof tag !== "string" || !tag.trim()) {
+    return { error: "Provide type, id, and a non-empty tag." };
+  }
+  const existing = await getRowById(WRITE_TABLES[type as ItemType], id);
+  if (!existing) return { error: `No ${type} found with id ${id}.` };
+  await tagItem(tag.trim().replace(/^#/, ""), type as ItemType, id);
+  return { ok: true };
+}
+
 async function executeTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   switch (name) {
+    // read
     case "get_overview": return toolGetOverview();
     case "search_todos": return toolSearchTodos(args);
     case "search_events": return toolSearchEvents(args);
     case "search_reminders": return toolSearchReminders(args);
     case "search_notes": return toolSearchNotes(args);
     case "get_item": return toolGetItem(args);
+    // write
+    case "create_todo": return toolCreateTodo(args);
+    case "update_todo": return toolUpdateTodo(args);
+    case "create_event": return toolCreateEvent(args);
+    case "update_event": return toolUpdateEvent(args);
+    case "create_reminder": return toolCreateReminder(args);
+    case "update_reminder": return toolUpdateReminder(args);
+    case "create_note": return toolCreateNote(args);
+    case "update_note": return toolUpdateNote(args);
+    case "create_list": return toolCreateList(args);
+    case "add_tag": return toolAddTag(args);
     default: return { error: `Unknown tool: ${name}` };
   }
 }
@@ -402,21 +787,39 @@ function statusFor(name: string, args: Record<string, unknown>): string {
     case "search_reminders": return "Searching reminders…";
     case "search_notes": return args.query ? `Searching notes for "${args.query}"…` : "Looking through notes…";
     case "get_item": return "Fetching details…";
+    case "create_todo": return "Creating a to-do…";
+    case "update_todo": return "Updating a to-do…";
+    case "create_event": return "Adding a calendar event…";
+    case "update_event": return "Updating an event…";
+    case "create_reminder": return "Creating a reminder…";
+    case "update_reminder": return "Updating a reminder…";
+    case "create_note": return "Creating a note…";
+    case "update_note": return "Updating a note…";
+    case "create_list": return "Creating a list…";
+    case "add_tag": return "Adding a tag…";
     default: return "Working…";
   }
 }
 
 const SYSTEM_PROMPT =
   "You are a helpful personal assistant embedded in a local life-management app called Second Brain. " +
-  "You answer the user's questions about THEIR data — calendar events, reminders, to-dos, notes, lists, and tags. " +
-  "You are READ-ONLY: you have only lookup tools and cannot create, edit, or delete anything; if asked to make " +
-  "changes, explain that you can only answer questions for now.\n\n" +
-  "Use the provided tools to look up whatever you need — do not assume or invent data. Prefer specific, filtered " +
-  "queries (by date range, list, tag, or keyword) over broad ones. Call get_overview first if you need orientation. " +
-  "Results are paginated: if a tool reports `truncated: true`, there is more data than shown — narrow your filters " +
-  "or raise the limit rather than assuming you've seen everything. " +
-  "When you have enough information, answer concisely and specifically, using dates/times naturally relative to now. " +
-  "If the data doesn't contain the answer, say so plainly.";
+  "You help the user with THEIR data — calendar events, reminders, to-dos, notes, lists, and tags.\n\n" +
+  "You can both READ and WRITE data:\n" +
+  "- Read/lookup tools: get_overview, search_todos, search_events, search_reminders, search_notes, get_item.\n" +
+  "- Create/update tools: create_todo, update_todo, create_event, update_event, create_reminder, " +
+  "update_reminder, create_note, update_note, create_list, add_tag.\n" +
+  "There are NO delete tools — you cannot delete anything; if asked to delete, say the user must do that in the app.\n\n" +
+  "Guidelines:\n" +
+  "- Never assume or invent data; use the read tools to look things up first. To update or tag an existing item, " +
+  "find its id with a search tool before calling the write tool.\n" +
+  "- Prefer specific, filtered queries (by date range, list, tag, or keyword). If a tool reports `truncated: true`, " +
+  "narrow your filters rather than assuming you've seen everything.\n" +
+  "- Before creating or updating, make sure the request is clear. If key details are ambiguous (which item, what " +
+  "date/time, which list), ask a brief clarifying question instead of guessing. For clearly-specified requests, just " +
+  "do it.\n" +
+  "- Interpret relative dates/times (\"tomorrow at 3pm\", \"next Friday\") against the current date, and pass concrete " +
+  "ISO 8601 values to the tools.\n" +
+  "- After making changes, briefly confirm exactly what you created or updated. Answer concisely and specifically.";
 
 async function callOpenAI(model: string, key: string, messages: OAIMessage[]) {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -446,8 +849,19 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
   const key = openaiApiKey.trim();
   if (!key) throw new Error("No OpenAI API key set. Add one in Settings.");
 
+  const now = new Date();
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "local time";
+  const localIso = format(now, "yyyy-MM-dd'T'HH:mm:ssXXX"); // e.g. 2026-07-20T14:30:00+08:00
+  const dateContext =
+    `\n\nThe current date and time is ${format(now, "EEEE, MMMM d, yyyy, h:mm a")} in the user's ` +
+    `local timezone (${tz}, ISO ${localIso}). Interpret ALL dates and clock times the user mentions ` +
+    `(\"10am\", \"today\", \"tomorrow\", \"next Friday\", \"in 2 hours\") in this local timezone, using the ` +
+    `correct current year. When passing datetimes to tools, write ISO 8601 with the user's local UTC ` +
+    `offset (like ${localIso}). Do NOT use UTC or a trailing \"Z\" — that would save the event at the ` +
+    `wrong hour.`;
+
   const messages: OAIMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: SYSTEM_PROMPT + dateContext },
     ...history.map((m) => ({ role: m.role, content: m.content } as OAIMessage)),
   ];
 
