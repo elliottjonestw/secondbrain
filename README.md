@@ -138,7 +138,12 @@ src-tauri/
     002_default_lists.sql   # seed Personal/Work, drop Inbox
   capabilities/default.json  # plugin permissions (sql, notification, dialog,
                              #   fs scope, http scope for api.openai.com)
+CLAUDE.md              # architecture, conventions & gotchas for contributors
 ```
+
+## Contributing / development
+
+See [CLAUDE.md](CLAUDE.md) for architecture principles, conventions, and the gotchas that have bitten us (migrations are checksummed, `window.prompt` doesn't work in the webview, timezone handling, the view-remount pattern, adding AI tools, etc.). Please run `tsc` and `vite build` (and `cargo check` if Rust changed) before considering a change done — **and keep this README up to date with every change.**
 
 ## Notes / current limitations
 
