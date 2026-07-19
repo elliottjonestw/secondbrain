@@ -21,6 +21,10 @@
     {
       "identifier": "fs:allow-read-text-file",
       "allow": [{ "path": "$HOME/**" }, { "path": "$DESKTOP/**" }, { "path": "$DOCUMENT/**" }, { "path": "$DOWNLOAD/**" }]
+    },
+    {
+      "identifier": "http:default",
+      "allow": [{ "url": "https://api.openai.com/*" }]
     }
   ]
 }

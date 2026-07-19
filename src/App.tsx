@@ -1,17 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { Home, Calendar, Bell, ListChecks, StickyNote, Search, Brain, Sparkles, LucideIcon } from "lucide-react";
+import { Home, Calendar, Bell, ListChecks, StickyNote, Search, Brain, Sparkles, Settings as SettingsIcon, LucideIcon } from "lucide-react";
 import TodayView from "./views/TodayView";
 import CalendarView from "./views/CalendarView";
 import RemindersView from "./views/RemindersView";
 import TodosView from "./views/TodosView";
 import NotesView from "./views/NotesView";
 import SearchView from "./views/SearchView";
+import AssistantView from "./views/AssistantView";
+import SettingsView from "./views/SettingsView";
 import { startReminderPoller } from "./lib/notifications";
 import { db } from "./db";
 import { resetAndSeedDemo } from "./lib/demo";
 import { Modal, Button } from "./components/ui";
 
-type View = "today" | "calendar" | "reminders" | "todos" | "notes" | "search";
+type View = "today" | "calendar" | "reminders" | "todos" | "notes" | "assistant" | "search" | "settings";
 
 // Secret keystroke: hold Shift + 8 + 9 together anywhere in the app to open the
 // "load demo data" prompt. Keys are matched by physical code so it works
@@ -23,6 +25,7 @@ const NAV: { id: View; label: string; icon: LucideIcon }[] = [
   { id: "reminders", label: "Reminders", icon: Bell },
   { id: "todos", label: "To-Do", icon: ListChecks },
   { id: "notes", label: "Notes", icon: StickyNote },
+  { id: "assistant", label: "Assistant", icon: Sparkles },
 ];
 
 export default function App() {
@@ -135,6 +138,16 @@ export default function App() {
             );
           })}
         </div>
+        <div className="px-2 pb-1">
+          <button
+            onClick={() => { setView("settings"); setSearch(""); }}
+            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium ${
+              view === "settings" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800"
+            }`}
+          >
+            <SettingsIcon size={18} /> Settings
+          </button>
+        </div>
         <div className="p-3 text-xs text-neutral-400">Local · offline · SQLite</div>
       </nav>
 
@@ -145,6 +158,8 @@ export default function App() {
         {view === "reminders" && <RemindersView key={resetNonce} onChange={bump} />}
         {view === "todos" && <TodosView key={resetNonce} onChange={bump} />}
         {view === "notes" && <NotesView key={resetNonce} onChange={bump} />}
+        {view === "assistant" && <AssistantView key={resetNonce} goTo={(v) => setView(v as View)} />}
+        {view === "settings" && <SettingsView />}
         {view === "search" && <SearchView query={search} goTo={(v) => { setView(v as View); setSearch(""); }} />}
       </main>
 
