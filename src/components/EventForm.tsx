@@ -1,0 +1,192 @@
+import { useEffect, useState } from "react";
+import type { EventRow } from "../types";
+import { upsertEvent, deleteEvent, addExdate, allLinkTargets } from "../db";
+import { Button, Modal, CATEGORY_COLORS } from "./ui";
+import { TagEditor, LinksPanel, LinkTarget } from "./ItemMeta";
+import { toLocalInput, toDateInput, fromLocalInput } from "../lib/format";
+import { describeRrule } from "../lib/recurrence";
+
+// RRULE presets. "custom" reveals a raw RFC 5545 text field.
+const RRULE_PRESETS: { label: string; value: string | null }[] = [
+  { label: "Does not repeat", value: null },
+  { label: "Daily", value: "FREQ=DAILY" },
+  { label: "Every weekday", value: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR" },
+  { label: "Weekly", value: "FREQ=WEEKLY" },
+  { label: "Monthly", value: "FREQ=MONTHLY" },
+  { label: "Yearly", value: "FREQ=YEARLY" },
+];
+
+export default function EventForm({
+  event, defaultStart, occurrenceDate, onClose, onSaved,
+}: {
+  event: EventRow | null;              // null = create
+  defaultStart?: Date;                 // prefill for new events
+  occurrenceDate?: Date;               // the specific instance clicked (for exdate)
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const start0 = event ? new Date(event.dtstart) : defaultStart ?? new Date();
+  const end0 = event?.dtend ? new Date(event.dtend) : new Date(start0.getTime() + 60 * 60 * 1000);
+
+  const [summary, setSummary] = useState(event?.summary ?? "");
+  const [description, setDescription] = useState(event?.description ?? "");
+  const [location, setLocation] = useState(event?.location ?? "");
+  const [allDay, setAllDay] = useState(event?.all_day === 1);
+  const [start, setStart] = useState(start0);
+  const [end, setEnd] = useState(end0);
+  const [rrule, setRrule] = useState<string | null>(event?.rrule ?? null);
+  const [customRrule, setCustomRrule] = useState(
+    event?.rrule && !RRULE_PRESETS.some((p) => p.value === event.rrule) ? event.rrule : "",
+  );
+  const [color, setColor] = useState(event?.color ?? CATEGORY_COLORS[0]);
+  const [category, setCategory] = useState<string>(() => {
+    try { return event?.categories ? (JSON.parse(event.categories)[0] ?? "") : ""; } catch { return ""; }
+  });
+  const [targets, setTargets] = useState<LinkTarget[]>([]);
+  const isCustom = customRrule !== "" || (rrule != null && !RRULE_PRESETS.some((p) => p.value === rrule));
+
+  useEffect(() => { void allLinkTargets().then(setTargets); }, []);
+
+  // Changing the start shifts the end to keep the same duration (min 1 hour),
+  // so the end can never land before the start.
+  function updateStart(ns: Date) {
+    const prevDurationMs = end.getTime() - start.getTime();
+    const durationMs = prevDurationMs > 0 ? prevDurationMs : 60 * 60 * 1000;
+    setStart(ns);
+    setEnd(new Date(ns.getTime() + durationMs));
+  }
+
+  // Keep end from being set before start.
+  function updateEnd(ne: Date) {
+    setEnd(ne <= start ? new Date(start.getTime() + 60 * 60 * 1000) : ne);
+  }
+
+  async function save() {
+    const effectiveRrule = isCustom ? (customRrule.trim() || null) : rrule;
+    await upsertEvent({
+      id: event?.id,
+      summary: summary.trim() || "(untitled)",
+      description: description || null,
+      location: location || null,
+      dtstart: allDay ? new Date(toDateInput(start) + "T00:00:00").toISOString() : start.toISOString(),
+      dtend: allDay ? null : end.toISOString(),
+      all_day: allDay ? 1 : 0,
+      rrule: effectiveRrule,
+      exdates: event?.exdates ?? null,
+      status: event?.status ?? "CONFIRMED",
+      categories: category ? JSON.stringify([category]) : null,
+      color,
+    });
+    onSaved();
+    onClose();
+  }
+
+  async function excludeThisOccurrence() {
+    if (!event || !occurrenceDate) return;
+    await addExdate(event.id, occurrenceDate.toISOString());
+    onSaved();
+    onClose();
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={event ? "Edit event" : "New event"}
+      footer={
+        <>
+          {event && (
+            <Button variant="danger" onClick={async () => { await deleteEvent(event.id); onSaved(); onClose(); }}>
+              Delete{event.rrule ? " series" : ""}
+            </Button>
+          )}
+          {event?.rrule && occurrenceDate && (
+            <Button onClick={excludeThisOccurrence}>Skip this day</Button>
+          )}
+          <Button variant="primary" onClick={save}>Save</Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <input
+          autoFocus
+          value={summary}
+          onChange={(e) => setSummary(e.target.value)}
+          placeholder="Event title"
+          className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-lg dark:border-neutral-600 dark:bg-neutral-700"
+        />
+
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} className="accent-blue-600" />
+          All day
+        </label>
+
+        <div className="grid grid-cols-2 gap-3">
+          <label className="text-sm">
+            <span className="mb-1 block text-xs text-neutral-500">Start</span>
+            {allDay ? (
+              <input type="date" value={toDateInput(start)} onChange={(e) => updateStart(new Date(e.target.value + "T00:00"))} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700" />
+            ) : (
+              <input type="datetime-local" value={toLocalInput(start)} onChange={(e) => updateStart(new Date(fromLocalInput(e.target.value)))} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700" />
+            )}
+          </label>
+          {!allDay && (
+            <label className="text-sm">
+              <span className="mb-1 block text-xs text-neutral-500">End</span>
+              <input type="datetime-local" value={toLocalInput(end)} onChange={(e) => updateEnd(new Date(fromLocalInput(e.target.value)))} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700" />
+            </label>
+          )}
+        </div>
+
+        <label className="block text-sm">
+          <span className="mb-1 block text-xs text-neutral-500">Repeat</span>
+          <select
+            value={isCustom ? "__custom__" : (rrule ?? "__none__")}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === "__custom__") { setCustomRrule(customRrule || "FREQ=WEEKLY;BYDAY=MO,WE,FR"); setRrule(null); }
+              else { setCustomRrule(""); setRrule(v === "__none__" ? null : v); }
+            }}
+            className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700"
+          >
+            {RRULE_PRESETS.map((p) => (
+              <option key={p.label} value={p.value ?? "__none__"}>{p.label}</option>
+            ))}
+            <option value="__custom__">Custom (RFC 5545)…</option>
+          </select>
+        </label>
+        {isCustom && (
+          <div>
+            <input
+              value={customRrule}
+              onChange={(e) => setCustomRrule(e.target.value)}
+              placeholder="FREQ=WEEKLY;BYDAY=MO,WE,FR"
+              className="w-full rounded border border-neutral-200 px-2 py-1.5 font-mono text-xs dark:border-neutral-600 dark:bg-neutral-700"
+            />
+            <p className="mt-1 text-xs text-neutral-400">{describeRrule(customRrule)}</p>
+          </div>
+        )}
+
+        <input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Location" className="w-full rounded-lg border border-neutral-200 px-3 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
+        <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description" rows={2} className="w-full rounded-lg border border-neutral-200 px-3 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
+
+        <div className="flex items-center gap-3">
+          <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Category" className="flex-1 rounded-lg border border-neutral-200 px-3 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
+          <div className="flex gap-1">
+            {CATEGORY_COLORS.map((c) => (
+              <button key={c} onClick={() => setColor(c)} className={`h-6 w-6 rounded-full ${color === c ? "ring-2 ring-offset-1 ring-neutral-500" : ""}`} style={{ background: c }} />
+            ))}
+          </div>
+        </div>
+
+        {event && (
+          <>
+            <hr className="border-neutral-200 dark:border-neutral-700" />
+            <TagEditor type="event" id={event.id} />
+            <LinksPanel type="event" id={event.id} targets={targets} />
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
