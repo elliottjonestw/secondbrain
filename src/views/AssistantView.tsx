@@ -17,6 +17,7 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("Thinking…");
   const [error, setError] = useState<string | null>(null);
   const [keyed, setKeyed] = useState(hasApiKey());
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -34,8 +35,9 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
     setMessages(next);
     setInput("");
     setLoading(true);
+    setStatus("Thinking…");
     try {
-      const reply = await askAssistant(next);
+      const reply = await askAssistant(next, { onStatus: setStatus });
       setMessages([...next, { role: "assistant", content: reply }]);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -120,8 +122,8 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
 
           {loading && (
             <div className="flex justify-start">
-              <div className="rounded-2xl bg-white px-4 py-2.5 text-sm text-neutral-400 shadow-sm ring-1 ring-neutral-200 dark:bg-neutral-800 dark:ring-neutral-700">
-                Thinking…
+              <div className="flex items-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm text-neutral-400 shadow-sm ring-1 ring-neutral-200 dark:bg-neutral-800 dark:ring-neutral-700">
+                <Sparkles size={14} className="animate-pulse text-blue-400" /> {status}
               </div>
             </div>
           )}
