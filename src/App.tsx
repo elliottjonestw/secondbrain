@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Home, Calendar, Bell, ListChecks, StickyNote, Search, Brain, LucideIcon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Home, Calendar, Bell, ListChecks, StickyNote, Search, Brain, Sparkles, LucideIcon } from "lucide-react";
 import TodayView from "./views/TodayView";
 import CalendarView from "./views/CalendarView";
 import RemindersView from "./views/RemindersView";
@@ -8,8 +8,14 @@ import NotesView from "./views/NotesView";
 import SearchView from "./views/SearchView";
 import { startReminderPoller } from "./lib/notifications";
 import { db } from "./db";
+import { resetAndSeedDemo } from "./lib/demo";
+import { Modal, Button } from "./components/ui";
 
 type View = "today" | "calendar" | "reminders" | "todos" | "notes" | "search";
+
+// Secret keystroke: hold Shift + 8 + 9 together anywhere in the app to open the
+// "load demo data" prompt. Keys are matched by physical code so it works
+// regardless of what Shift+8/9 types on the user's layout.
 
 const NAV: { id: View; label: string; icon: LucideIcon }[] = [
   { id: "today", label: "Today", icon: Home },
@@ -24,6 +30,11 @@ export default function App() {
   const [search, setSearch] = useState("");
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showDemoPrompt, setShowDemoPrompt] = useState(false);
+  const [seeding, setSeeding] = useState(false);
+  // Bumped only on a data reset, to force every view to remount and reload.
+  // (Not bumped on ordinary edits, so it never disrupts in-progress editing.)
+  const [resetNonce, setResetNonce] = useState(0);
 
   // Each view reloads its own data after mutations and on mount; switching
   // views remounts the next one, so no global refresh signal is needed.
@@ -40,6 +51,41 @@ export default function App() {
       }
     })();
   }, []);
+
+  // Listen for the secret chord: Shift + 8 + 9 held together.
+  const held = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      held.current.add(e.code);
+      if (e.shiftKey && held.current.has("Digit8") && held.current.has("Digit9")) {
+        held.current.clear();
+        setShowDemoPrompt(true);
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => held.current.delete(e.code);
+    const clear = () => held.current.clear();
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", clear);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", clear);
+    };
+  }, []);
+
+  async function loadDemo() {
+    setSeeding(true);
+    try {
+      await resetAndSeedDemo();
+      setShowDemoPrompt(false);
+      setSearch("");
+      setView("today");
+      setResetNonce((n) => n + 1); // remount views so they pick up the new data
+    } finally {
+      setSeeding(false);
+    }
+  }
 
   if (error) {
     return (
@@ -94,13 +140,36 @@ export default function App() {
 
       {/* Main */}
       <main className="flex-1 overflow-hidden bg-neutral-50 dark:bg-neutral-900">
-        {view === "today" && <TodayView onChange={bump} goTo={(v) => setView(v as View)} />}
-        {view === "calendar" && <CalendarView onChange={bump} />}
-        {view === "reminders" && <RemindersView onChange={bump} />}
-        {view === "todos" && <TodosView onChange={bump} />}
-        {view === "notes" && <NotesView onChange={bump} />}
+        {view === "today" && <TodayView key={resetNonce} onChange={bump} goTo={(v) => setView(v as View)} />}
+        {view === "calendar" && <CalendarView key={resetNonce} onChange={bump} />}
+        {view === "reminders" && <RemindersView key={resetNonce} onChange={bump} />}
+        {view === "todos" && <TodosView key={resetNonce} onChange={bump} />}
+        {view === "notes" && <NotesView key={resetNonce} onChange={bump} />}
         {view === "search" && <SearchView query={search} goTo={(v) => { setView(v as View); setSearch(""); }} />}
       </main>
+
+      <Modal
+        open={showDemoPrompt}
+        onClose={() => !seeding && setShowDemoPrompt(false)}
+        title="Load demo data?"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setShowDemoPrompt(false)}>Cancel</Button>
+            <Button variant="danger" onClick={loadDemo}>
+              <span className="flex items-center gap-1.5">
+                <Sparkles size={15} /> {seeding ? "Loading…" : "Reset & load demo"}
+              </span>
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-neutral-600 dark:text-neutral-300">
+          You found the secret! This will <strong>permanently delete all of your current
+          events, reminders, to-dos, notes, lists, tags, and links</strong>, then fill the
+          app with a sample dataset to explore.
+        </p>
+        <p className="mt-2 text-sm text-neutral-500">This cannot be undone.</p>
+      </Modal>
     </div>
   );
 }
