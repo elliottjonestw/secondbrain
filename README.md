@@ -1,6 +1,6 @@
 # 🧠 Second Brain
 
-A local-first personal life-management desktop app: **Calendar, Reminders, To-Do, and Notes** in one integrated tool. Built with Tauri v2 + React + TypeScript + SQLite. Fully offline, no account, no cloud.
+A local-first personal life-management desktop app: **Calendar, Reminders, To-Do, and Notes** in one integrated tool, with an optional **AI assistant** that can answer questions about your data. Built with Tauri v2 + React + TypeScript + SQLite. Fully offline (the only network call is to OpenAI, and only if you opt in) — no account, no cloud sync.
 
 ## Stack
 
@@ -8,11 +8,13 @@ A local-first personal life-management desktop app: **Calendar, Reminders, To-Do
 |-------|--------|
 | Shell | Tauri v2 (Rust) |
 | Frontend | React 19 + TypeScript + Vite + Tailwind CSS |
+| Icons | `lucide-react` |
 | Database | SQLite via `tauri-plugin-sql` (sqlx) |
 | Notifications | `tauri-plugin-notification` |
 | Recurrence | `rrule` (RFC 5545) |
 | ICS import/export | `ical-generator` (export) + `ical.js` (import) |
 | File I/O | `tauri-plugin-dialog` + `tauri-plugin-fs` |
+| AI networking | `tauri-plugin-http` (bypasses webview CORS to reach OpenAI) |
 
 The Rust side is intentionally thin — just plugin registration + versioned migrations (`src-tauri/src/lib.rs`, `src-tauri/migrations/`). **All business logic lives in TypeScript** (`src/db.ts` is the only module that touches the DB), so a plain-browser or Windows build later is a packaging change, not a rewrite.
 
@@ -43,16 +45,45 @@ A single SQLite file, `secondbrain.db`, in Tauri's app-data directory:
 
 - macOS: `~/Library/Application Support/com.elliottjones.secondbrain/`
 
-Migrations are versioned and idempotent (managed by `tauri-plugin-sql`); they run automatically on startup.
+Migrations are versioned and idempotent (managed by `tauri-plugin-sql`); they run automatically on startup. App **settings** (your OpenAI key + model) live separately in the webview's `localStorage`, not in the database — so they survive a data reset and stay out of the syncable calendar data.
 
 ## Features
 
 - **Today** — dashboard of today's schedule, due/overdue tasks & reminders, pinned + recent notes. ICS import/export buttons.
 - **Calendar** — month / week / day views, event CRUD, drag-to-reschedule (month view, non-recurring events), RRULE recurrence, all-day + color-coded events. Todos with due dates appear as dashed chips.
-- **Reminders** — due date + optional alert time, recurrence, priority, link to a to-do. Native OS notifications fire when due (polled once a minute while the app is open).
-- **To-Do** — multiple lists, subtasks, priority, due dates, drag-to-reorder, and "Convert to event".
-- **Notes** — markdown with live preview, pin, FTS5 full-text search.
+- **Reminders** — Apple-Reminders-style with a filter sidebar (**All / Scheduled / Flagged / Completed**, each with live counts). Due date + optional alert time, recurrence, priority, link to a to-do. Native OS notifications fire when due (polled once a minute while the app is open).
+- **To-Do** — multiple lists (defaults: **Personal**, **Work**), inline list creation, subtasks, priority, due dates, drag-to-reorder, and "Convert to event". Incomplete tasks always sort above completed ones.
+- **Notes** — markdown with live preview, pin, FTS5 full-text search. The editor holds local state and debounces saves, so typing stays smooth.
+- **Assistant** — a read-only AI chat that answers questions about your data (see below).
+- **Settings** — enter your OpenAI API key + model.
 - **Integration** — shared tagging and generic `links` (any item ↔ any item) across all four types; global search across everything.
+
+The UI uses a consistent modern icon set (`lucide-react`) throughout — no emoji.
+
+## AI Assistant
+
+An optional, **read-only** assistant that answers questions about your events, to-dos, reminders, and notes. Bring your own OpenAI API key.
+
+**Setup:** open **Settings** (sidebar, bottom) → paste your `sk-…` key → pick a model (default `gpt-4o-mini`) → Save. Then open **Assistant** and ask, e.g. *"What's due next week in Work?"* or *"Which notes mention the Q3 report?"*
+
+**How it works — tool calling, not context stuffing:** rather than sending your entire dataset with every request (which doesn't scale), the model is given a set of read-only **tools** and pulls only what it needs via an agentic loop (`src/lib/ai.ts`):
+
+| Tool | Purpose |
+|------|---------|
+| `get_overview` | counts, list/tag names, current time (cheap orientation) |
+| `search_todos` | filter by query, list, status, priority, due-date range, tag |
+| `search_events` | events in a date range (recurring events expanded to occurrences) + query/tag |
+| `search_reminders` | filter by query, status, flagged, date range, tag |
+| `search_notes` | FTS5 keyword search (or recent), pinned filter |
+| `get_item` | full detail of one item + its tags and linked items |
+
+**Built to scale:** every tool is filtered and paginated — bounded `limit` (default 25, max 100) — and returns a `total` count and `truncated` flag so the model knows when there's more and narrows its filters instead of assuming it saw everything. Nothing loads a whole table blindly: searches push filters into SQL, notes use the FTS index, and `search_events` only fully expands *recurring* events while pre-filtering non-recurring ones by the requested window. Live tool activity ("Checking the calendar…") is shown while the assistant works.
+
+**Privacy & safety:** the key is stored locally and sent directly to OpenAI (via the Rust HTTP plugin, scoped to `api.openai.com`). The assistant is read-only by construction — it has lookup tools only and cannot create, edit, or delete anything. Adding write tools later is just more entries in the tool list.
+
+## Demo data (easter egg)
+
+Hold **Shift + 8 + 9** together anywhere in the app to open a "Load demo data?" prompt. Confirming **permanently deletes all current data** and seeds a realistic, cross-linked sample dataset (events, recurring events, to-dos with subtasks, reminders, notes, tags, and links) — handy for exploring the app. Your API key is **not** affected (it lives in `localStorage`). See `src/lib/demo.ts`.
 
 ## Standards / future sync
 
@@ -74,19 +105,28 @@ src/
     ics.ts              # ICS import/export
     notifications.ts    # due-item notification poller
     format.ts           # date helpers
+    settings.ts         # app settings (OpenAI key/model) in localStorage
+    ai.ts               # AI assistant: read-only tools + agentic loop
+    demo.ts             # reset + seed demo data
   components/
     ui.tsx              # Modal, Button, priority helpers
     ItemMeta.tsx        # shared Tags + Links panels
     EventForm.tsx       # event create/edit
-  views/                # Today, Calendar, Reminders, Todos, Notes, Search
+  views/                # Today, Calendar, Reminders, Todos, Notes,
+                        #   Assistant, Settings, Search
 src-tauri/
   src/lib.rs            # plugin wiring + migration registration (thin)
-  migrations/001_init.sql
-  capabilities/default.json  # plugin permissions
+  migrations/
+    001_init.sql            # initial schema
+    002_default_lists.sql   # seed Personal/Work, drop Inbox
+  capabilities/default.json  # plugin permissions (sql, notification, dialog,
+                             #   fs scope, http scope for api.openai.com)
 ```
 
 ## Notes / current limitations
 
+- The AI assistant is **read-only** for now and requires your own OpenAI API key. Replies are non-streaming (the whole answer appears once ready).
 - Desktop notifications are **poll-based** (checked every 60s while the app is open) — the plugin has no cross-platform "schedule for later" API. Alerts won't fire while the app is closed.
 - Drag-to-reschedule is day-granularity in month view and disabled for recurring series (dragging a single instance is ambiguous; edit the series, or use "Skip this day").
 - No timezone handling beyond the machine's local zone (fine for single-user local use; revisit before CalDAV sync).
+- The OpenAI API key is stored in plaintext in `localStorage` (typical for a local single-user app); anyone with access to the machine profile can read it.
