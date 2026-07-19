@@ -30,10 +30,15 @@ export default function TodosView({ onChange }: { onChange: () => void }) {
   const bump = () => { void reload(); onChange(); };
 
   const topLevel = useMemo(
-    () => todos.filter((t) => !t.parent_todo_id && t.list_id === activeList),
+    // Incomplete tasks always sort above completed ones; position order is
+    // preserved within each group (Array.prototype.sort is stable).
+    () => todos
+      .filter((t) => !t.parent_todo_id && t.list_id === activeList)
+      .sort((a, b) => a.completed - b.completed),
     [todos, activeList],
   );
-  const subtasksOf = (id: string) => todos.filter((t) => t.parent_todo_id === id);
+  const subtasksOf = (id: string) =>
+    todos.filter((t) => t.parent_todo_id === id).sort((a, b) => a.completed - b.completed);
 
   async function addTodo() {
     const title = newTitle.trim();
