@@ -12,7 +12,7 @@ import {
   listCustomFields, ensureCustomField, deleteCustomFieldDef, reorderCustomFields,
   CustomFieldDef,
 } from "../db";
-import { Button } from "../components/ui";
+import { Button, Modal } from "../components/ui";
 import { Avatar } from "../components/Avatar";
 import { TagEditor, LinksPanel, LinkTarget } from "../components/ItemMeta";
 
@@ -471,6 +471,10 @@ function CustomFields({ values, onChange }: { values: PersonCustomField[]; onCha
   const [adding, setAdding] = useState(false);
   const [newLabel, setNewLabel] = useState("");
   const [dragIdx, setDragIdx] = useState<number | null>(null);
+  // Field the user asked to remove — drives the "delete for everyone vs. clear
+  // here" modal. Deleting the def is destructive across all people, so we never
+  // do it from a bare click.
+  const [confirmField, setConfirmField] = useState<CustomFieldDef | null>(null);
 
   const reloadDefs = () => listCustomFields().then(setDefs);
 
@@ -497,11 +501,19 @@ function CustomFields({ values, onChange }: { values: PersonCustomField[]; onCha
     await reloadDefs();
   }
 
-  async function removeField(def: CustomFieldDef) {
-    if (!confirm(t("people.confirmRemoveField", { label: def.label }))) return;
+  // Delete the field globally: drops the shared def and, via the db helper,
+  // strips its value from every person. Also clear it from this in-memory draft.
+  async function deleteForEveryone(def: CustomFieldDef) {
+    setConfirmField(null);
     await deleteCustomFieldDef(def.id);
     onChange(values.filter((v) => v.label !== def.label));
     await reloadDefs();
+  }
+
+  // Clear only this person's value. The field (and other people's values) stay.
+  function clearForThisPerson(def: CustomFieldDef) {
+    setConfirmField(null);
+    onChange(values.filter((v) => v.label !== def.label));
   }
 
   async function onDrop(target: number) {
@@ -528,7 +540,7 @@ function CustomFields({ values, onChange }: { values: PersonCustomField[]; onCha
           <GripVertical size={15} className="shrink-0 cursor-grab text-neutral-300" />
           <span className="w-40 shrink-0 truncate text-sm text-neutral-600 dark:text-neutral-300" title={def.label}>{def.label}</span>
           <input value={valueFor(def.label)} onChange={(e) => setValue(def.label, e.target.value)} placeholder={t("people.value")} className={`flex-1 ${inputBase}`} />
-          <button onClick={() => removeField(def)} className="rounded p-1.5 text-neutral-400 hover:text-red-500" aria-label={t("people.removeField", { label: def.label })}><X size={14} /></button>
+          <button onClick={() => setConfirmField(def)} className="rounded p-1.5 text-neutral-400 hover:text-red-500" aria-label={t("people.removeField", { label: def.label })}><X size={14} /></button>
         </div>
       ))}
       {defs.length === 0 && !adding && (
@@ -547,6 +559,24 @@ function CustomFields({ values, onChange }: { values: PersonCustomField[]; onCha
       ) : (
         <Button variant="ghost" className="px-1" onClick={() => setAdding(true)}><span className="flex items-center gap-1"><Plus size={14} /> {t("people.addField")}</span></Button>
       )}
+
+      <Modal
+        open={confirmField !== null}
+        onClose={() => setConfirmField(null)}
+        title={t("people.removeFieldTitle")}
+        footer={confirmField && (
+          <>
+            <Button variant="ghost" onClick={() => clearForThisPerson(confirmField)}>{t("people.removeFieldThisPerson")}</Button>
+            <Button variant="danger" onClick={() => void deleteForEveryone(confirmField)}>{t("people.removeFieldEveryone")}</Button>
+          </>
+        )}
+      >
+        {confirmField && (
+          <p className="text-sm text-neutral-600 dark:text-neutral-300">
+            {t("people.removeFieldBody", { label: confirmField.label })}
+          </p>
+        )}
+      </Modal>
     </div>
   );
 }
