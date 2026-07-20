@@ -17,7 +17,7 @@ import i18next from "i18next";
 // wrapper: these strings go into the model's prompt, which stays English
 // regardless of the UI language. Localizing them would only confuse the model.
 import { format, startOfDay } from "date-fns";
-import type { EventRow, ItemRef, ItemType } from "../types";
+import type { EventRow, ItemRef, ItemType, UnifiedEvent } from "../types";
 import {
   db, listLists, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
   upsertTodo, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
@@ -374,8 +374,10 @@ const TOOLS = [
                 occurrence_start: {
                   type: "string",
                   description:
-                    "For events: the `start` of the specific occurrence you mean. A recurring series returns the " +
-                    "same id for every occurrence, so pass this to show the right one.",
+                    "For events: the `start` of the specific occurrence you mean, copied verbatim from that " +
+                    "event's `start` in the search_events results. ALWAYS include it when showing a recurring " +
+                    "event (one with `recurring: true`) — the series shares one id across every occurrence, so " +
+                    "without it the card shows the wrong date.",
                 },
               },
               required: ["type", "id"],
@@ -1063,6 +1065,34 @@ const MAX_SHOWN_ITEMS = 8;
  * Every ref is verified to exist before it's accepted, so a hallucinated id
  * comes back as an error the model can correct rather than a blank card.
  */
+/**
+ * For recurring events shown without an explicit occurrence, fill in the
+ * upcoming occurrence (from the start of today) so the card shows a current
+ * date instead of the series' origin.
+ *
+ * Anchored at start-of-today, not now, so today's earlier events (a 9:30
+ * standup viewed at 2pm) still resolve to today. Local events expand via
+ * rrule; remote events must go through ical.js, so their occurrences are
+ * fetched once and shared. A horizon past a year covers up to yearly repeats;
+ * anything with no occurrence in range keeps the series start as a last resort.
+ */
+async function fillOccurrenceStarts(items: { ref: ItemRef; ev: UnifiedEvent }[]): Promise<void> {
+  if (items.length === 0) return;
+  const from = startOfDay(new Date());
+  const to = new Date(from.getTime() + 366 * 864e5);
+
+  const hasRemote = items.some((it) => it.ev.source !== "local");
+  const remote = hasRemote ? (await getRemoteOccurrences(from, to)).occurrences : [];
+
+  for (const { ref, ev } of items) {
+    const occs = ev.source === "local"
+      ? expandEvents([ev], from, to)
+      : remote.filter((o) => o.event.id === ev.id);
+    const next = occs.find((o) => o.start.getTime() >= from.getTime());
+    if (next) ref.occurrenceStart = next.start.toISOString();
+  }
+}
+
 async function toolShowItems(
   args: Record<string, unknown>,
   emit?: (items: ItemRef[]) => void,
@@ -1072,6 +1102,11 @@ async function toolShowItems(
 
   const refs: ItemRef[] = [];
   const missing: string[] = [];
+  // Recurring event refs the model didn't pin to an occurrence. Left as-is,
+  // their card renders the series' stored start (a weekday standup shows the
+  // day the series began, not today), so we resolve the right occurrence below.
+  const needOccurrence: { ref: ItemRef; ev: UnifiedEvent }[] = [];
+
   for (const entry of raw.slice(0, MAX_SHOWN_ITEMS)) {
     if (!entry || typeof entry !== "object") continue;
     const { type, id, calendar_id, occurrence_start } = entry as Record<string, unknown>;
@@ -1079,22 +1114,31 @@ async function toolShowItems(
       missing.push(`${String(type)} ${String(id)}`);
       continue;
     }
-    // Events may live in a connected calendar, where there is no SQLite row.
-    const exists = type === "event"
-      ? !!(await resolveEvent({ id, calendar_id }))
-      : !!(await getRowById(WRITE_TABLES[type as ItemType], id));
-    if (!exists) { missing.push(`${type} ${id}`); continue; }
-    refs.push({
-      type: type as ItemType,
-      id,
-      calendarId: typeof calendar_id === "string" ? calendar_id : undefined,
-      occurrenceStart: asIso(occurrence_start) ?? undefined,
-    });
+    if (type === "event") {
+      // Events may live in a connected calendar, where there is no SQLite row.
+      const ev = await resolveEvent({ id, calendar_id });
+      if (!ev) { missing.push(`event ${id}`); continue; }
+      const ref: ItemRef = {
+        type: "event",
+        id,
+        // Default to the event's own calendar so the card can fetch it directly
+        // rather than scanning every calendar for the id.
+        calendarId: typeof calendar_id === "string" ? calendar_id : ev.calendarId,
+        occurrenceStart: asIso(occurrence_start) ?? undefined,
+      };
+      refs.push(ref);
+      if (ev.rrule && !ref.occurrenceStart) needOccurrence.push({ ref, ev });
+    } else {
+      const exists = !!(await getRowById(WRITE_TABLES[type as ItemType], id));
+      if (!exists) { missing.push(`${type} ${id}`); continue; }
+      refs.push({ type: type as ItemType, id });
+    }
   }
 
   if (refs.length === 0) {
     return { error: `None of those items exist: ${missing.join(", ")}. Look the ids up with a search tool.` };
   }
+  await fillOccurrenceStarts(needOccurrence);
   emit?.(refs);
   return {
     ok: true,
