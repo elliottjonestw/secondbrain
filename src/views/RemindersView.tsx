@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Bell, Trash2, Inbox, CalendarClock, Flag, CheckCircle2, LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { ReminderRow, TodoRow } from "../types";
@@ -29,7 +29,7 @@ function matchesFilter(r: ReminderRow, f: Filter): boolean {
   }
 }
 
-export default function RemindersView({ onChange }: { onChange: () => void }) {
+export default function RemindersView({ onChange, initialId }: { onChange: () => void; initialId?: string }) {
   const { t } = useTranslation();
   const [reminders, setReminders] = useState<ReminderRow[]>([]);
   const [editing, setEditing] = useState<ReminderRow | null>(null);
@@ -40,6 +40,18 @@ export default function RemindersView({ onChange }: { onChange: () => void }) {
   const reload = async () => setReminders(await listReminders());
   useEffect(() => { void reload(); void ensureNotificationPermission().then(setNotifOk); }, []);
   const bump = () => { void reload(); onChange(); };
+
+  // Open a specific reminder when navigated here with a target (e.g. from an
+  // assistant card). Only fires once, so it can't re-open after the user closes it.
+  const opened = useRef(false);
+  useEffect(() => {
+    if (opened.current || !initialId || reminders.length === 0) return;
+    const match = reminders.find((r) => r.id === initialId);
+    if (match) {
+      opened.current = true;
+      setEditing(match);
+    }
+  }, [reminders, initialId]);
 
   async function add() {
     if (!newTitle.trim()) return;

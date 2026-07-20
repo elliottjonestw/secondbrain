@@ -4,6 +4,37 @@
 
 export type ItemType = "event" | "reminder" | "todo" | "note" | "person";
 
+/**
+ * A pointer to one item, used to render it as a card in the assistant chat.
+ *
+ * Deliberately *only* identity — never the item's fields. The card loads the
+ * current row itself so what it shows is the real data, not whatever the model
+ * happened to write. For events, `calendarId` says which calendar the id lives
+ * in (remote events have no SQLite row) and `occurrenceStart` picks one
+ * instance of a recurring series, whose id is shared by every occurrence.
+ */
+export interface ItemRef {
+  type: ItemType;
+  id: string;
+  calendarId?: string;
+  occurrenceStart?: string; // ISO
+}
+
+/**
+ * A specific item to open when navigating into a view — e.g. clicking a note on
+ * the Today dashboard, or an assistant card, opens that item rather than the
+ * bare list. Each view consumes its own key on mount.
+ */
+export interface NavTarget {
+  noteId?: string;
+  eventId?: string;
+  todoId?: string;
+  reminderId?: string;
+  personId?: string;
+}
+
+export type GoTo = (view: string, target?: NavTarget) => void;
+
 export interface EventRow {
   id: string;
   summary: string;

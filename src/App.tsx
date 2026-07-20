@@ -8,8 +8,9 @@ import TodosView from "./views/TodosView";
 import NotesView from "./views/NotesView";
 import PeopleView from "./views/PeopleView";
 import SearchView from "./views/SearchView";
-import AssistantView from "./views/AssistantView";
+import AssistantView, { UiMessage } from "./views/AssistantView";
 import SettingsView from "./views/SettingsView";
+import type { NavTarget } from "./types";
 import { startReminderPoller } from "./lib/notifications";
 import { db } from "./db";
 import { resetAndSeedDemo } from "./lib/demo";
@@ -49,6 +50,12 @@ export default function App() {
   // cleared on any other navigation so it never mis-fires later.
   const [noteTarget, setNoteTarget] = useState<string | null>(null);
   const [calTarget, setCalTarget] = useState<string | null>(null);
+  const [todoTarget, setTodoTarget] = useState<string | null>(null);
+  const [reminderTarget, setReminderTarget] = useState<string | null>(null);
+  const [personTarget, setPersonTarget] = useState<string | null>(null);
+  // The assistant conversation lives here, not in AssistantView: clicking an
+  // item card navigates away, which would otherwise unmount the chat and lose it.
+  const [chat, setChat] = useState<UiMessage[]>([]);
 
   // Each view reloads its own data after mutations and on mount; switching
   // views remounts the next one, so no global refresh signal is needed.
@@ -56,11 +63,20 @@ export default function App() {
 
   // Single entry point for view changes. Resets any pending open-target unless
   // one is passed for this navigation.
-  function navigate(v: View, target?: { noteId?: string; eventId?: string }) {
+  function navigate(v: View, target?: NavTarget) {
     setNoteTarget(target?.noteId ?? null);
     setCalTarget(target?.eventId ?? null);
+    setTodoTarget(target?.todoId ?? null);
+    setReminderTarget(target?.reminderId ?? null);
+    setPersonTarget(target?.personId ?? null);
     setSearch("");
     setView(v);
+  }
+
+  /** Clear every pending open-target (search box, plain nav). */
+  function clearTargets() {
+    setNoteTarget(null); setCalTarget(null);
+    setTodoTarget(null); setReminderTarget(null); setPersonTarget(null);
   }
 
   useEffect(() => {
@@ -104,6 +120,10 @@ export default function App() {
       setShowDemoPrompt(false);
       setSearch("");
       setView("today");
+      // The chat outlives view remounts now, so the reset has to clear it —
+      // it would otherwise reference items that no longer exist.
+      setChat([]);
+      clearTargets();
       setResetNonce((n) => n + 1); // remount views so they pick up the new data
     } finally {
       setSeeding(false);
@@ -137,7 +157,7 @@ export default function App() {
             <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400" />
             <input
               value={search}
-              onChange={(e) => { setNoteTarget(null); setCalTarget(null); setSearch(e.target.value); setView(e.target.value ? "search" : "today"); }}
+              onChange={(e) => { clearTargets(); setSearch(e.target.value); setView(e.target.value ? "search" : "today"); }}
               placeholder={t("app.searchPlaceholder")}
               className="w-full rounded-lg border border-neutral-200 py-1.5 pl-8 pr-3 text-sm outline-none focus:border-blue-400 dark:border-neutral-600 dark:bg-neutral-800"
             />
@@ -177,13 +197,20 @@ export default function App() {
       <main className="flex-1 overflow-hidden bg-neutral-50 dark:bg-neutral-900">
         {view === "today" && <TodayView key={resetNonce} onChange={bump} goTo={(v, target) => navigate(v as View, target)} />}
         {view === "calendar" && <CalendarView key={resetNonce} onChange={bump} openEventId={calTarget ?? undefined} />}
-        {view === "reminders" && <RemindersView key={resetNonce} onChange={bump} />}
-        {view === "todos" && <TodosView key={resetNonce} onChange={bump} />}
+        {view === "reminders" && <RemindersView key={resetNonce} onChange={bump} initialId={reminderTarget ?? undefined} />}
+        {view === "todos" && <TodosView key={resetNonce} onChange={bump} initialId={todoTarget ?? undefined} />}
         {view === "notes" && <NotesView key={resetNonce} onChange={bump} initialId={noteTarget ?? undefined} />}
-        {view === "people" && <PeopleView key={resetNonce} onChange={bump} />}
-        {view === "assistant" && <AssistantView key={resetNonce} goTo={(v) => navigate(v as View)} />}
+        {view === "people" && <PeopleView key={resetNonce} onChange={bump} initialId={personTarget ?? undefined} />}
+        {view === "assistant" && (
+          <AssistantView
+            key={resetNonce}
+            messages={chat}
+            setMessages={setChat}
+            goTo={(v, target) => navigate(v as View, target)}
+          />
+        )}
         {view === "settings" && <SettingsView />}
-        {view === "search" && <SearchView query={search} goTo={(v) => navigate(v as View)} />}
+        {view === "search" && <SearchView query={search} goTo={(v, target) => navigate(v as View, target)} />}
       </main>
 
       <Modal

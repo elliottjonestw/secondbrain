@@ -9,6 +9,8 @@ import {
   startRecording, transcribe, speak, stopSpeaking, isSpeechSupported, isRecordingSupported, Recording,
 } from "../lib/voice";
 import { Button } from "../components/ui";
+import { ItemRefCard, VIEW_FOR, targetFor } from "../components/ItemCard";
+import type { GoTo, ItemRef } from "../types";
 
 // Rendered from the catalog so the examples read naturally in each language
 // rather than being English prompts shown to a Chinese speaker.
@@ -17,9 +19,20 @@ const SUGGESTION_KEYS = [
   "assistant.suggestion3", "assistant.suggestion4",
 ] as const;
 
-export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
+/** A chat message plus the items the assistant chose to show alongside it.
+ *  ai.ts strips everything but role/content before calling the API, so the
+ *  extra field never reaches the model. */
+export type UiMessage = ChatMessage & { items?: ItemRef[] };
+
+export default function AssistantView({
+  messages, setMessages, goTo,
+}: {
+  // Owned by App so navigating to an item and back doesn't wipe the conversation.
+  messages: UiMessage[];
+  setMessages: (m: UiMessage[]) => void;
+  goTo: GoTo;
+}) {
   const { t } = useTranslation();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);   // assistant thinking / transcribing
   const [status, setStatus] = useState("Thinking…");
@@ -46,14 +59,29 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
     const q = text.trim();
     if (!q) return;
     setError(null);
-    const next: ChatMessage[] = [...messages, { role: "user", content: q }];
+    const next: UiMessage[] = [...messages, { role: "user", content: q }];
     setMessages(next);
     setInput("");
     setLoading(true);
     setStatus("Thinking…");
+    // show_items can fire more than once in a turn (and once more from the
+    // card-recovery round), so collect, de-dupe, and attach the whole set to
+    // the reply once it arrives. Same key the cards render with.
+    const shown: ItemRef[] = [];
+    const seen = new Set<string>();
     try {
-      const reply = await askAssistant(next, { onStatus: setStatus });
-      setMessages([...next, { role: "assistant", content: reply }]);
+      const reply = await askAssistant(next, {
+        onStatus: setStatus,
+        onItems: (items) => {
+          for (const it of items) {
+            const key = `${it.type}:${it.id}:${it.occurrenceStart ?? ""}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            shown.push(it);
+          }
+        },
+      });
+      setMessages([...next, { role: "assistant", content: reply, items: shown.length ? shown : undefined }]);
       if (spoken && voiceOutput) {
         setSpeaking(true);
         speak(reply);
@@ -183,22 +211,37 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
           )}
 
           {messages.map((m, i) => (
-            <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-              <div
-                className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm ${
-                  m.role === "user"
-                    ? "bg-blue-600 text-white"
-                    : "bg-white text-neutral-800 shadow-sm ring-1 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-100 dark:ring-neutral-700"
-                }`}
-              >
-                {m.role === "assistant" ? (
-                  <div className="prose prose-sm max-w-none dark:prose-invert">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
-                  </div>
-                ) : (
-                  <span className="whitespace-pre-wrap">{m.content}</span>
-                )}
+            <div key={i}>
+              <div className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                <div
+                  className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm ${
+                    m.role === "user"
+                      ? "bg-blue-600 text-white"
+                      : "bg-white text-neutral-800 shadow-sm ring-1 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-100 dark:ring-neutral-700"
+                  }`}
+                >
+                  {m.role === "assistant" ? (
+                    <div className="prose prose-sm max-w-none dark:prose-invert">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                    </div>
+                  ) : (
+                    <span className="whitespace-pre-wrap">{m.content}</span>
+                  )}
+                </div>
               </div>
+              {/* Outside the bubble so the cards get the full column width.
+                  A recurring series shares one id, so the occurrence is part of the key. */}
+              {m.items && m.items.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {m.items.map((it) => (
+                    <ItemRefCard
+                      key={`${it.type}:${it.id}:${it.occurrenceStart ?? ""}`}
+                      item={it}
+                      onOpen={(r) => goTo(VIEW_FOR[r.type], targetFor(r))}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           ))}
 

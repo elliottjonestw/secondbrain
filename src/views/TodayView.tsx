@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Bell, Pin, Cake } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import type { EventOccurrence, TodoRow, ReminderRow, NoteRow, PersonRow } from "../types";
+import type { EventOccurrence, TodoRow, ReminderRow, NoteRow, PersonRow, GoTo } from "../types";
 import { listTodos, listReminders, listNotes, listPeople, toggleTodo, toggleReminder } from "../db";
 import { getOccurrences } from "../lib/calendars";
 import {
@@ -9,8 +9,6 @@ import {
   fmtRelativeDays, isOverdue, isToday,
 } from "../lib/format";
 import { PriorityFlag } from "../components/ui";
-
-type GoTo = (v: string, target?: { noteId?: string; eventId?: string }) => void;
 
 export default function TodayView({ onChange, goTo }: { onChange: () => void; goTo: GoTo }) {
   const { t: tr } = useTranslation();

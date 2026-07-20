@@ -30,6 +30,9 @@
     "2": "中",
     "3": "高"
   },
+  "card": {
+    "due": "到期 {{when}}"
+  },
   "itemType": {
     "event": "行程",
     "reminder": "提醒",
@@ -317,6 +320,7 @@
     "searchPeople": "瀏覽聯絡人中…",
     "searchPeopleFor": "搜尋聯絡人「{{query}}」中…",
     "getItem": "取得詳細資料中…",
+    "showItems": "正在整理項目…",
     "createTodo": "建立待辦事項中…",
     "updateTodo": "更新待辦事項中…",
     "createEvent": "新增行事曆行程中…",

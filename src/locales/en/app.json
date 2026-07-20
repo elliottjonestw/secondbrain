@@ -30,6 +30,9 @@
     "2": "Medium",
     "3": "High"
   },
+  "card": {
+    "due": "Due {{when}}"
+  },
   "itemType": {
     "event": "Event",
     "reminder": "Reminder",
@@ -319,6 +322,7 @@
     "searchPeople": "Looking through contacts…",
     "searchPeopleFor": "Searching people for “{{query}}”…",
     "getItem": "Fetching details…",
+    "showItems": "Pulling up the items…",
     "createTodo": "Creating a to-do…",
     "updateTodo": "Updating a to-do…",
     "createEvent": "Adding a calendar event…",

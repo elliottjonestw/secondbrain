@@ -41,10 +41,10 @@ function emptyPersonInput() {
   };
 }
 
-export default function PeopleView({ onChange }: { onChange: () => void }) {
+export default function PeopleView({ onChange, initialId }: { onChange: () => void; initialId?: string }) {
   const { t } = useTranslation();
   const [people, setPeople] = useState<PersonRow[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialId ?? null);
   const [query, setQuery] = useState("");
   const [targets, setTargets] = useState<LinkTarget[]>([]);
 

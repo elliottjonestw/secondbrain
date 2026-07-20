@@ -153,7 +153,17 @@ An optional assistant that answers questions about your events, to-dos, reminder
 | `delete_todo` / `delete_event` / `delete_reminder` / `delete_note` / `delete_person` | permanently delete an item |
 | `delete_list` | delete a list (its tasks move to another list; can't delete the last list) |
 
+| Presentation tool | Purpose |
+|------|---------|
+| `show_items` | display the items the reply is about as cards under the message (max 8; changes no data) |
+
 **Built to scale:** every read tool is filtered and paginated — bounded `limit` (default 25, max 100) — and returns a `total` count and `truncated` flag so the model knows when there's more and narrows its filters instead of assuming it saw everything. Nothing loads a whole table blindly: searches push filters into SQL, notes use the FTS index, and `search_events` only fully expands *recurring* local events while pre-filtering non-recurring ones by the requested window (connected calendars are filtered server-side by the CalDAV time-range query). Live tool activity ("Checking the calendar…", "Creating a to-do…") is shown while the assistant works.
+
+**How replies read — prose plus cards:** the assistant answers in **one or two sentences of natural prose**, not a formatted data dump. It's told explicitly not to use tables, lists, or bold field labels: replies are often read aloud by the voice feature, where a numbered list with **Time:** sub-bullets is unlistenable. The detail lives in the UI instead — the model calls `show_items` with the items it's actually discussing, and those render as **clickable cards beneath the message**. Click one to jump straight to that item in its own view; the conversation is preserved when you navigate back.
+
+Two things follow from this design. The cards are the model's *explicit* choice, so items it merely searched through don't clutter the reply — and each card **loads the item's own row to render itself**, so the times and titles shown are the real stored values rather than whatever the model wrote (and stay correct if the item has changed since). Recurring events pass an `occurrence_start` so a card shows the occurrence being discussed, not the first in the series. This is prompt-governed, so tone is tuned in `SYSTEM_PROMPT` (`src/lib/ai.ts`), not in the UI.
+
+Because writing a reply and calling a tool compete for the same step, the model skips `show_items` a fair fraction of the time no matter how the prompt is worded. So there's a **recovery round**: if a turn ends having looked items up but never shown them, the assistant re-asks once with only the `show_items` schema, requesting the item references alone. The reply you already have is never regenerated, and if the recovery call fails it's ignored — cards are an enhancement and never cost you an answer.
 
 **Calendars and the assistant:** `search_events` covers the built-in calendar and every visible Apple calendar in one call, and the assistant can view, edit, and delete events in all of them. New events go to your **default calendar** unless you name another one ("put it in my Work calendar"). Two things it's told to be honest about: events in connected calendars have **no tags, links, or attached people** (those are local-only), and if a calendar can't be reached the tool reports `unavailable_calendars` so the assistant says which ones it couldn't see rather than implying it saw your whole schedule.
 
@@ -165,7 +175,7 @@ An optional assistant that answers questions about your events, to-dos, reminder
 
 **Write behavior & safety:**
 - The assistant can **create, update, and delete**. Deletion is **permanent and irreversible**, so the system prompt tells the model to look up the exact item first and **confirm which item(s) it will delete** unless you've already named a specific one — and never to delete more than you asked for.
-- The system prompt also instructs the model to look up an item's id before updating it, to **ask a clarifying question when a request is ambiguous** rather than guess, and to briefly **confirm what it created, updated, or deleted** afterwards.
+- The system prompt also instructs the model to look up an item's id before updating it, to **ask a clarifying question when a request is ambiguous** rather than guess, and to briefly **confirm what it created, updated, or deleted** afterwards (in one sentence, with the item shown as a card).
 - Changes appear in the other views the next time you open them (each view reloads its data on navigation).
 - The key is stored locally and sent directly to OpenAI (via the Rust HTTP plugin, scoped to `api.openai.com`).
 
@@ -216,6 +226,7 @@ src/
     ui.tsx              # Modal, Button, priority helpers
     Avatar.tsx          # contact avatar (photo or initials)
     ItemMeta.tsx        # shared Tags + Links + People panels
+    ItemCard.tsx        # item row: search results + assistant chat cards
     EventForm.tsx       # event create/edit
   views/                # Today, Calendar, Reminders, Todos, Notes, People,
                         #   Assistant, Settings, Search

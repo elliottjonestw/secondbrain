@@ -165,6 +165,11 @@ export async function listReminders(): Promise<ReminderRow[]> {
   );
 }
 
+export async function getReminder(id: string): Promise<ReminderRow | undefined> {
+  const rows = await (await db()).select<ReminderRow[]>("SELECT * FROM reminders WHERE id = ?", [id]);
+  return rows[0];
+}
+
 export type ReminderInput = Omit<
   ReminderRow,
   "id" | "sequence" | "created_at" | "updated_at"
@@ -251,6 +256,11 @@ export async function listTodos(): Promise<TodoRow[]> {
   );
 }
 
+export async function getTodo(id: string): Promise<TodoRow | undefined> {
+  const rows = await (await db()).select<TodoRow[]>("SELECT * FROM todos WHERE id = ?", [id]);
+  return rows[0];
+}
+
 export type TodoInput = Omit<
   TodoRow,
   "id" | "sequence" | "created_at" | "updated_at"
@@ -314,6 +324,11 @@ export async function listNotes(): Promise<NoteRow[]> {
   return (await db()).select<NoteRow[]>(
     "SELECT * FROM notes ORDER BY pinned DESC, updated_at DESC",
   );
+}
+
+export async function getNote(id: string): Promise<NoteRow | undefined> {
+  const rows = await (await db()).select<NoteRow[]>("SELECT * FROM notes WHERE id = ?", [id]);
+  return rows[0];
 }
 
 export type NoteInput = Omit<NoteRow, "id" | "created_at" | "updated_at"> & { id?: string };

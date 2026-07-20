@@ -54,6 +54,8 @@ Runtime DB: `~/Library/Application Support/com.elliottjones.secondbrain/secondbr
 - **Don't add a `key={version}` that bumps on mutations** — it remounts the view and wipes in-progress edits (this broke Notes typing). `resetNonce` exists only for demo resets.
 - **The note editor debounces writes (400ms)**, flushing on unmount. Don't revert to save-per-keystroke.
 - **Icons: `lucide-react` only, no emoji.**
+- **The assistant conversation lives in `App.tsx`, not `AssistantView`.** Item cards navigate away, which unmounts the view — owning `messages` locally silently wiped the chat on every card click. `resetNonce` still remounts the view, so a demo reset clears `chat` explicitly.
+- **Deep-linking into a view = `NavTarget` key + a prop the view consumes on mount** (`navigate` in `App.tsx`). Every type supports it; Todos/Reminders/People guard with an `opened` ref so closing the detail can't re-open it.
 
 ## i18n (`src/lib/i18n.ts`)
 
@@ -72,6 +74,11 @@ Runtime DB: `~/Library/Application Support/com.elliottjones.secondbrain/secondbr
 - **Deletion is permanent** and there's no UI confirmation — the prompt makes the model confirm first. Adding a dialog is a deliberate change (update README).
 - **Calendar tools are multi-calendar:** `search_events` merges local + remote and returns `calendar_id`; `create_event` takes a calendar *name*, else `defaultCalendarId()`; update/delete/`get_item` take an optional `calendar_id` and otherwise scan by UID.
 - **The model must emit local-offset ISO (`+08:00`), never `Z`** — `ai.ts` injects the current local time + timezone for this. A `Z` saves events at the wrong hour.
+- **Reply style is prompt-governed, not UI-governed.** The "How to answer" block in `SYSTEM_PROMPT` is what keeps replies to one or two sentences of speakable prose with no tables/lists/`**Time:**` labels — because the voice feature reads them aloud. `temperature` is 0.6 for the same reason (0.2 made the prose stiff). Tone regressions are fixed there, not in `AssistantView`.
+- **`show_items` must be told to run BEFORE the reply, as its own round.** An assistant message carrying `tool_calls` effectively never also carries user-facing `content`, so asking the model to show items "in the same turn as your answer" is unsatisfiable — it writes the prose and narrates the intent instead ("Let me show you the details."), and no cards appear. The agentic loop already expects round N = `show_items`, round N+1 = prose; keep the prompt and the tool description matching that.
+- **Prompt wording alone doesn't make `show_items` reliable** — writing prose and calling a tool compete for the same step, so the model skips it perhaps half the time. `recoverItemCards` is the backstop: when a turn ends with `sawItems && !showedItems`, it re-asks with *only* the `show_items` schema at `temperature: 0`. It requests **refs only and never regenerates the reply**, so it can't degrade prose, and it swallows its own errors — cards must never cost a good answer. Don't "simplify" it into a normal extra round.
+- **Cards come from `show_items`, nothing else.** The model explicitly lists the items it's discussing; `executeTool` takes an `emitItems` callback that only that tool uses, surfacing refs through `AskOptions.onItems`. It's a callback, not a return value, so refs still reach the UI if a later round throws. Refs are **identity only** (`ItemRef`) — `ItemCard.tsx` loads each row itself, so a card never shows what the model *said* about an item.
+- **Key event cards on `id + occurrenceStart`.** A recurring series returns one id with many `start`s; keying on id alone collapses every occurrence into one card.
 - **Adding a tool:** `TOOLS` entry + `executeTool` case + `statusFor` string.
 - Settings live in `localStorage` (`settings.ts`), not SQLite, so a demo reset doesn't wipe the API key or calendar account.
 
@@ -90,7 +97,7 @@ src/
   locales/     # en, zh-TW catalogs               @types/   # typed t() keys
   lib/  i18n · format · calendars · recurrence · ics · ai · voice · notifications · settings · demo
         caldav/  client · discovery · events · ical    # network client, not SQLite
-  components/  ui · Avatar · ItemMeta · EventForm
+  components/  ui · Avatar · ItemMeta · ItemCard · EventForm
   views/       Today · Calendar · Reminders · Todos · Notes · People · Assistant · Settings · Search
 src-tauri/
   src/lib.rs                 # plugin wiring + migrations (keep thin)

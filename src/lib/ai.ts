@@ -17,7 +17,7 @@ import i18next from "i18next";
 // wrapper: these strings go into the model's prompt, which stays English
 // regardless of the UI language. Localizing them would only confuse the model.
 import { format } from "date-fns";
-import type { EventRow, ItemType } from "../types";
+import type { EventRow, ItemRef, ItemType } from "../types";
 import {
   db, listLists, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes,
   upsertTodo, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
@@ -266,6 +266,44 @@ const TOOLS = [
           calendar_id: { type: "string", description: "For events: the calendar_id returned by search_events." },
         },
         required: ["type", "id"],
+      },
+    },
+  },
+
+  // ---- Presentation. Renders cards in the chat; changes no data. ----
+  {
+    type: "function",
+    function: {
+      name: "show_items",
+      description:
+        "Display the given items to the user as cards in the chat. CALL THIS BEFORE you write your reply — it is " +
+        "a separate step, and the cards are attached to the reply you write next. The cards show each item's own " +
+        "details (title, time, status), so your reply should NOT repeat those details — talk about the items " +
+        "naturally instead. List only the items you are actually talking about (at most 8); do not call it for " +
+        "items you merely looked at while searching.",
+      parameters: {
+        type: "object",
+        properties: {
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                type: { type: "string", enum: ["event", "reminder", "todo", "note", "person"] },
+                id: { type: "string", description: "The item's id, from a search tool." },
+                calendar_id: { type: "string", description: "For events: the calendar_id returned by search_events." },
+                occurrence_start: {
+                  type: "string",
+                  description:
+                    "For events: the `start` of the specific occurrence you mean. A recurring series returns the " +
+                    "same id for every occurrence, so pass this to show the right one.",
+                },
+              },
+              required: ["type", "id"],
+            },
+          },
+        },
+        required: ["items"],
       },
     },
   },
@@ -904,6 +942,58 @@ async function toolSearchPeople(args: Record<string, unknown>) {
   };
 }
 
+/** Cards shown per reply. Enough for "what's on this week", short of a wall. */
+const MAX_SHOWN_ITEMS = 8;
+
+/**
+ * Presentation tool: hand the UI a list of items to render as cards.
+ *
+ * Every ref is verified to exist before it's accepted, so a hallucinated id
+ * comes back as an error the model can correct rather than a blank card.
+ */
+async function toolShowItems(
+  args: Record<string, unknown>,
+  emit?: (items: ItemRef[]) => void,
+) {
+  const raw = Array.isArray(args.items) ? args.items : null;
+  if (!raw || raw.length === 0) return { error: "Provide a non-empty items array." };
+
+  const refs: ItemRef[] = [];
+  const missing: string[] = [];
+  for (const entry of raw.slice(0, MAX_SHOWN_ITEMS)) {
+    if (!entry || typeof entry !== "object") continue;
+    const { type, id, calendar_id, occurrence_start } = entry as Record<string, unknown>;
+    if (typeof type !== "string" || !(type in WRITE_TABLES) || typeof id !== "string" || !id) {
+      missing.push(`${String(type)} ${String(id)}`);
+      continue;
+    }
+    // Events may live in a connected calendar, where there is no SQLite row.
+    const exists = type === "event"
+      ? !!(await resolveEvent({ id, calendar_id }))
+      : !!(await getRowById(WRITE_TABLES[type as ItemType], id));
+    if (!exists) { missing.push(`${type} ${id}`); continue; }
+    refs.push({
+      type: type as ItemType,
+      id,
+      calendarId: typeof calendar_id === "string" ? calendar_id : undefined,
+      occurrenceStart: asIso(occurrence_start) ?? undefined,
+    });
+  }
+
+  if (refs.length === 0) {
+    return { error: `None of those items exist: ${missing.join(", ")}. Look the ids up with a search tool.` };
+  }
+  emit?.(refs);
+  return {
+    ok: true,
+    shown: refs.length,
+    // Reported rather than silently dropped, so the model can correct itself
+    // instead of describing an item the user never sees a card for.
+    not_found: missing.length ? missing : undefined,
+    omitted: raw.length > MAX_SHOWN_ITEMS ? raw.length - MAX_SHOWN_ITEMS : undefined,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tool executors (write: create / update). No delete tools by design; all
 // changes are reversible by the user in the UI.
@@ -1244,7 +1334,12 @@ async function toolDeleteList(args: Record<string, unknown>) {
   return { ok: true, deleted: { type: "list", id: l.id, name: l.name }, note: "Its tasks were moved to another list." };
 }
 
-async function executeTool(name: string, args: Record<string, unknown>): Promise<unknown> {
+async function executeTool(
+  name: string,
+  args: Record<string, unknown>,
+  // Only show_items uses this: it's how the chosen items reach the UI.
+  emitItems?: (items: ItemRef[]) => void,
+): Promise<unknown> {
   switch (name) {
     // read
     case "get_overview": return toolGetOverview();
@@ -1255,6 +1350,8 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case "search_notes": return toolSearchNotes(args);
     case "search_people": return toolSearchPeople(args);
     case "get_item": return toolGetItem(args);
+    // presentation
+    case "show_items": return toolShowItems(args, emitItems);
     // write
     case "create_todo": return toolCreateTodo(args);
     case "update_todo": return toolUpdateTodo(args);
@@ -1292,6 +1389,7 @@ function statusFor(name: string, args: Record<string, unknown>): string {
     case "search_notes": return args.query ? i18next.t("status.searchNotesFor", { query: String(args.query) }) : i18next.t("status.searchNotes");
     case "search_people": return args.query ? i18next.t("status.searchPeopleFor", { query: String(args.query) }) : i18next.t("status.searchPeople");
     case "get_item": return i18next.t("status.getItem");
+    case "show_items": return i18next.t("status.showItems");
     case "create_todo": return i18next.t("status.createTodo");
     case "update_todo": return i18next.t("status.updateTodo");
     case "create_event": return i18next.t("status.createEvent");
@@ -1326,7 +1424,9 @@ const SYSTEM_PROMPT =
   "- Linking tools: link_items / unlink_items connect any two items (e.g. attach a person to an event, " +
   "or a note to a to-do). People are contacts with emails/phones/addresses, a birthday, and user-defined " +
   "custom_fields (label/value, e.g. 'Eye color: Blue').\n" +
-  "- Delete tools: delete_todo, delete_event, delete_reminder, delete_note, delete_person, delete_list.\n\n" +
+  "- Delete tools: delete_todo, delete_event, delete_reminder, delete_note, delete_person, delete_list.\n" +
+  "- Presentation: show_items displays items to the user as cards. Call it BEFORE writing a reply that talks " +
+  "about specific items.\n\n" +
   "Calendars:\n" +
   "- The user may have several calendars: the built-in local one plus any Apple/iCloud calendars they have " +
   "connected. search_events covers every visible calendar at once, and you can view, edit and delete events in " +
@@ -1335,15 +1435,33 @@ const SYSTEM_PROMPT =
   "calendar\") — pass that name as the `calendar` argument to create_event. Don't ask which calendar for every " +
   "event; the default is the right answer unless they say otherwise.\n" +
   "- Events in connected calendars have no tags, links or attached people — those apply to the built-in " +
-  "calendar only. If a tool reports `unavailable_calendars`, say which calendars you couldn't reach instead of " +
-  "implying you saw the user's whole schedule.\n\n" +
+  "calendar only. If a tool reports `unavailable_calendars`, mention in passing that you couldn't reach that " +
+  "calendar (\"I couldn't get to your Work calendar, but…\") rather than implying you saw the whole schedule.\n\n" +
+  "How to answer:\n" +
+  "- Your replies are often read aloud by a text-to-speech voice, so write the way a person would SAY it: one " +
+  "or two short sentences of ordinary prose.\n" +
+  "- NEVER use tables, bullet points, numbered lists, headings, or bold field labels like \"**Time:**\". Do not " +
+  "recite an item's every field.\n" +
+  "- Lead with the answer. Don't open with a preamble like \"You have the following events\" or \"Here is what I " +
+  "found\" — just say it: \"You've got three things today — standup at nine thirty, then lunch with Sam.\"\n" +
+  "- Mention the count and whatever actually matters (what's soon, what clashes, what's overdue). The cards " +
+  "carry the details, so leave times, locations and ids out of the prose unless they're the point of the answer.\n" +
+  "- Showing items is a SEPARATE STEP THAT COMES FIRST. Whenever your reply will talk about specific items, " +
+  "call show_items with those items and write nothing else in that step; then write your reply, and the cards " +
+  "will appear beneath it. If you looked something up because the user asked about it, show it — never describe " +
+  "items without showing them.\n" +
+  "- The cards appear on their own, so never announce them. Do not write \"let me show you the details\", " +
+  "\"here they are\" or \"I'll pull those up\" — just answer, having already called show_items.\n" +
+  "- When the user asks a yes/no or judgement question (\"am I free Thursday?\"), answer THAT question rather " +
+  "than dumping the schedule you used to work it out.\n\n" +
   "Guidelines:\n" +
   "- Never assume or invent data; use the read tools to look things up first. To update, tag, link, or delete an " +
   "existing item, find its id with a search tool before calling the write/delete tool. To add one entry to a " +
   "person's array field (email/phone/custom field), fetch them with get_item first, then send the full merged list " +
   "to update_person.\n" +
   "- Prefer specific, filtered queries (by date range, list, tag, or keyword). If a tool reports `truncated: true`, " +
-  "narrow your filters rather than assuming you've seen everything.\n" +
+  "narrow your filters rather than assuming you've seen everything; if you still report a partial answer, say so " +
+  "in passing (\"there are more, but the next few are…\").\n" +
   "- Before creating or updating, make sure the request is clear. If key details are ambiguous (which item, what " +
   "date/time, which list), ask a brief clarifying question instead of guessing. For clearly-specified requests, just " +
   "do it.\n" +
@@ -1353,13 +1471,29 @@ const SYSTEM_PROMPT =
   "found and ask before deleting.\n" +
   "- Interpret relative dates/times (\"tomorrow at 3pm\", \"next Friday\") against the current date, and pass concrete " +
   "ISO 8601 values to the tools.\n" +
-  "- After making changes, briefly confirm exactly what you created or updated. Answer concisely and specifically.";
+  "- After making changes, confirm what you did in one short sentence (\"Added lunch with Sam tomorrow at one.\") " +
+  "and show the item.";
 
-async function callOpenAI(model: string, key: string, messages: OAIMessage[]) {
+async function callOpenAI(
+  model: string,
+  key: string,
+  messages: OAIMessage[],
+  // The card-recovery round narrows the toolset and cools the temperature; it's
+  // a pure tool call, where sampling variety is the problem rather than the point.
+  opts: { tools?: unknown; temperature?: number } = {},
+) {
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model, messages, tools: TOOLS, tool_choice: "auto", temperature: 0.2 }),
+    body: JSON.stringify({
+      model,
+      messages,
+      tools: opts.tools ?? TOOLS,
+      tool_choice: "auto",
+      // Warmer than the 0.2 this used when replies were data dumps: the prompt now
+      // asks for natural spoken-sounding prose, which 0.2 renders stiff and formulaic.
+      temperature: opts.temperature ?? 0.6,
+    }),
   });
   if (!res.ok) {
     let detail = "";
@@ -1370,8 +1504,70 @@ async function callOpenAI(model: string, key: string, messages: OAIMessage[]) {
   return res.json();
 }
 
+/** Just the show_items schema, for the recovery round below. */
+const SHOW_ITEMS_TOOL = TOOLS.filter((t) => t.function.name === "show_items");
+
+/**
+ * Did this tool result contain something the user might want to see a card for?
+ * Covers the read tools' `results`, get_item's `item`, and the create/update
+ * tools' `{ ok, id }`.
+ */
+function returnedItems(result: unknown): boolean {
+  if (!result || typeof result !== "object") return false;
+  const r = result as Record<string, unknown>;
+  if (Array.isArray(r.results)) return r.results.length > 0;
+  if (r.item) return true;
+  return r.ok === true && typeof r.id === "string";
+}
+
+/**
+ * Second chance at cards when the model wrote its reply without calling
+ * show_items — which it still does maybe half the time, however the prompt is
+ * worded, because writing prose and calling a tool compete for the same step.
+ *
+ * This asks *only* for the refs; the reply the user already has is never
+ * regenerated, so a recovery round can't degrade the prose. Failures are
+ * swallowed: cards are an enhancement, and a good answer must not be lost
+ * because a cosmetic follow-up call failed.
+ */
+async function recoverItemCards(
+  model: string,
+  key: string,
+  messages: OAIMessage[],
+  emit: (items: ItemRef[]) => void,
+): Promise<void> {
+  const ask: OAIMessage[] = [
+    ...messages,
+    {
+      role: "system",
+      content:
+        "Your last reply went to the user without calling show_items, so no cards were displayed. If that " +
+        "reply referred to specific items, call show_items now with exactly those items, using ids from the " +
+        "tool results above. If it referred to no specific item, reply with the single word NONE.",
+    },
+  ];
+  try {
+    const data = await callOpenAI(model, key, ask, { tools: SHOW_ITEMS_TOOL, temperature: 0 });
+    const msg = data?.choices?.[0]?.message as OAIMessage | undefined;
+    for (const call of msg?.tool_calls ?? []) {
+      if (call.function.name !== "show_items") continue;
+      let args: Record<string, unknown> = {};
+      try { args = JSON.parse(call.function.arguments || "{}"); } catch { continue; }
+      await toolShowItems(args, emit);
+    }
+  } catch {
+    /* no cards this turn; the answer still stands */
+  }
+}
+
 export interface AskOptions {
   onStatus?: (text: string) => void;
+  /**
+   * Items the model chose to show, as they're chosen. A callback rather than a
+   * return value so the refs still reach the UI if a later round throws.
+   * May fire more than once per turn; treat each batch as an addition.
+   */
+  onItems?: (items: ItemRef[]) => void;
 }
 
 /**
@@ -1399,6 +1595,10 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
     ...history.map((m) => ({ role: m.role, content: m.content } as OAIMessage)),
   ];
 
+  // Tracked across rounds to decide whether the reply is missing its cards.
+  let showedItems = false; // show_items ran and accepted at least one item
+  let sawItems = false;    // some tool surfaced an item worth showing
+
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const data = await callOpenAI(openaiModel, key, messages);
     const msg = data?.choices?.[0]?.message as OAIMessage | undefined;
@@ -1409,6 +1609,12 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
     const calls = msg.tool_calls ?? [];
     if (calls.length === 0) {
       if (!msg.content) throw new Error(i18next.t("errors.emptyResponse"));
+      // The model looked items up and then talked about them without showing
+      // them. Ask once for just the refs, leaving the reply text alone.
+      if (!showedItems && sawItems && opts.onItems) {
+        opts.onStatus?.(statusFor("show_items", {}));
+        await recoverItemCards(openaiModel, key, messages, opts.onItems);
+      }
       return msg.content;
     }
 
@@ -1418,8 +1624,14 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
       try { args = JSON.parse(call.function.arguments || "{}"); } catch { /* leave empty */ }
       opts.onStatus?.(statusFor(call.function.name, args));
       let result: unknown;
-      try { result = await executeTool(call.function.name, args); }
+      try { result = await executeTool(call.function.name, args, opts.onItems); }
       catch (e) { result = { error: e instanceof Error ? e.message : String(e) }; }
+      // A show_items that rejected every id doesn't count — leave recovery open.
+      if (call.function.name === "show_items") {
+        if ((result as { ok?: boolean })?.ok) showedItems = true;
+      } else if (returnedItems(result)) {
+        sawItems = true;
+      }
       messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
     }
   }

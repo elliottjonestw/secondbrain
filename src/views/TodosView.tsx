@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, X, Trash2, CalendarPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { TodoRow, ListRow } from "../types";
@@ -10,7 +10,7 @@ import { Button, Modal, PriorityFlag, priorityKey, CATEGORY_COLORS } from "../co
 import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/ItemMeta";
 import { fmtDateTime, isOverdue, toLocalInput, fromLocalInput } from "../lib/format";
 
-export default function TodosView({ onChange }: { onChange: () => void }) {
+export default function TodosView({ onChange, initialId }: { onChange: () => void; initialId?: string }) {
   const { t: tr } = useTranslation();
   const [todos, setTodos] = useState<TodoRow[]>([]);
   const [lists, setLists] = useState<ListRow[]>([]);
@@ -28,6 +28,20 @@ export default function TodosView({ onChange }: { onChange: () => void }) {
     setActiveList((cur) => (ls.some((l) => l.id === cur) ? cur : ls[0]?.id ?? ""));
   };
   useEffect(() => { void reload(); }, []);
+
+  // Open a specific to-do when navigated here with a target (e.g. from an
+  // assistant card), switching to its list so it's also visible behind the
+  // detail. Only fires once, so closing the detail doesn't re-open it.
+  const opened = useRef(false);
+  useEffect(() => {
+    if (opened.current || !initialId || todos.length === 0) return;
+    const match = todos.find((td) => td.id === initialId);
+    if (match) {
+      opened.current = true;
+      if (match.list_id) setActiveList(match.list_id);
+      setEditing(match);
+    }
+  }, [todos, initialId]);
 
   const bump = () => { void reload(); onChange(); };
 

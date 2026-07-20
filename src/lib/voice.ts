@@ -131,6 +131,11 @@ function stripMarkdown(md: string): string {
     .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
     .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
     .replace(/^#{1,6}\s+/gm, "")
+    // The prompt tells the model not to use lists, precisely because they read
+    // badly aloud. This is the fallback for when one slips through: drop the
+    // marker so it speaks as a sentence instead of "dash" / "one dot".
+    .replace(/^\s*[-+]\s+/gm, "")
+    .replace(/^\s*\d+\.\s+/gm, "")
     .replace(/[*_>#]/g, "")
     .replace(/\n{2,}/g, sentenceJoin)
     .replace(/[ \t]+/g, " ")
