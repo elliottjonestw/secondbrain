@@ -2,9 +2,18 @@
 // purpose: the demo-reset wipes the database but must NOT erase the user's API
 // key, and settings aren't part of the syncable calendar data model.
 
+/** Where the assistant's *text* model runs. Voice/STT is always OpenAI. */
+export type AssistantProvider = "openai" | "ollama";
+
 export interface AppSettings {
+  /** Which backend answers the text assistant. */
+  assistantProvider: AssistantProvider;
   openaiApiKey: string;
   openaiModel: string;
+  /** Base URL of a local Ollama server (OpenAI-compatible endpoint). */
+  ollamaBaseUrl: string;
+  /** Ollama model tag, e.g. "llama3.1". Must be a tools-capable model. */
+  ollamaModel: string;
   /** Speech-to-text model used for voice input. */
   sttModel: string;
   /** UI language: "system" to follow the OS, or a code from lib/i18n LANGUAGES. */
@@ -13,9 +22,15 @@ export interface AppSettings {
 
 const KEY = "secondbrain.settings";
 
+/** Default Ollama address. Only the port is realistically customised. */
+export const DEFAULT_OLLAMA_URL = "http://localhost:11434";
+
 const DEFAULTS: AppSettings = {
+  assistantProvider: "openai",
   openaiApiKey: "",
   openaiModel: "gpt-4o-mini",
+  ollamaBaseUrl: DEFAULT_OLLAMA_URL,
+  ollamaModel: "",
   sttModel: "whisper-1",
   language: "system",
 };
@@ -36,8 +51,21 @@ export function saveSettings(patch: Partial<AppSettings>): AppSettings {
   return next;
 }
 
-export function hasApiKey(): boolean {
+/**
+ * Is an OpenAI key present? This gates the OpenAI text assistant AND *all* voice
+ * transcription — Ollama can't transcribe, so voice input needs an OpenAI key
+ * regardless of which provider answers the text assistant.
+ */
+export function hasOpenAiKey(): boolean {
   return getSettings().openaiApiKey.trim().length > 0;
+}
+
+/** Is the text assistant usable with the currently selected provider? */
+export function isAssistantConfigured(): boolean {
+  const s = getSettings();
+  return s.assistantProvider === "ollama"
+    ? s.ollamaBaseUrl.trim().length > 0 && s.ollamaModel.trim().length > 0
+    : s.openaiApiKey.trim().length > 0;
 }
 
 // ---------------------------------------------------------------------------

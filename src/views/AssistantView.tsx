@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
 import { askAssistant, ChatMessage } from "../lib/ai";
-import { hasApiKey } from "../lib/settings";
+import { isAssistantConfigured, hasOpenAiKey } from "../lib/settings";
 import {
   startRecording, transcribe, speak, stopSpeaking, isSpeechSupported, isRecordingSupported, Recording,
 } from "../lib/voice";
@@ -39,7 +39,7 @@ export default function AssistantView({
   const [recording, setRecording] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [keyed, setKeyed] = useState(hasApiKey());
+  const [keyed, setKeyed] = useState(isAssistantConfigured());
   const recRef = useRef<Recording | null>(null);
   const startingRef = useRef(false);     // startRecording() is in flight
   const stopPendingRef = useRef(false);  // released before recording began
@@ -47,7 +47,7 @@ export default function AssistantView({
 
   const voiceOutput = isSpeechSupported();
 
-  useEffect(() => { setKeyed(hasApiKey()); }, []);
+  useEffect(() => { setKeyed(isAssistantConfigured()); }, []);
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, loading]);
@@ -151,6 +151,9 @@ export default function AssistantView({
     if (recRef.current || startingRef.current || loading) return;
     setError(null);
     if (!isRecordingSupported()) { setError(t("assistant.micUnavailable")); return; }
+    // Voice input transcribes via OpenAI (Ollama can't), so it needs an OpenAI
+    // key even when the text assistant is answering through Ollama.
+    if (!hasOpenAiKey()) { setError(t("assistant.voiceNeedsKey")); return; }
     stopSpeaking();
     setSpeaking(false);
     startingRef.current = true;

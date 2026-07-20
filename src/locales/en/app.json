@@ -149,11 +149,25 @@
     "hide": "Hide",
     "show": "Show",
     "assistant": {
-      "description": "Bring your own OpenAI API key to enable the Assistant. Your key is stored only on this device and is sent directly to OpenAI when you ask a question.",
+      "description": "Answer questions and make changes with an AI assistant. Use your own OpenAI API key, or run a model locally with Ollama. Either way, configuration stays on this device.",
+      "provider": "Provider",
+      "providerHint": "Choose where the assistant's text model runs. Voice input always uses OpenAI.",
+      "providerOpenai": "OpenAI",
+      "providerOllama": "Local (Ollama)",
       "apiKey": "OpenAI API key",
       "apiKeyHint": "Get a key at platform.openai.com. Usage is billed to your own OpenAI account.",
       "model": "Model",
-      "modelHint": "Any chat-completions model your key can access, e.g."
+      "modelHint": "Any chat-completions model your key can access, e.g.",
+      "baseUrl": "Ollama server URL",
+      "baseUrlHint": "Where your local Ollama server is listening. Run it with `ollama serve`.",
+      "refresh": "Refresh models",
+      "probing": "Checking for Ollama…",
+      "connected": "Connected — {{count}} model found",
+      "connected_other": "Connected — {{count}} models found",
+      "unreachable": "Can't reach Ollama at {{url}}. Make sure it's running (`ollama serve`).",
+      "pickModel": "Select a model…",
+      "ollamaModelHint": "A tools-capable model is required, e.g. llama3.1 or qwen2.5.",
+      "toolsNote": "The assistant relies on tool calling to read and edit your data. Pick a model that supports tools (llama3.1, qwen2.5, mistral-nemo…) — a model without tool support won't be able to answer."
     },
     "calendars": {
       "description": "Connect iCloud to see your Apple calendars alongside the built-in one. Events are read from and written to iCloud live — nothing is copied to this device, so Apple calendars need a connection to appear.",
@@ -299,7 +313,8 @@
   },
   "assistant": {
     "title": "AI Assistant",
-    "needKey": "Add your OpenAI API key in Settings to ask questions about your events, to-dos, reminders, and notes — by typing or by voice.",
+    "needKey": "Set up the assistant in Settings — add an OpenAI API key or connect a local Ollama model — to ask questions about your events, to-dos, reminders, and notes.",
+    "voiceNeedsKey": "Voice input needs an OpenAI API key (transcription runs on OpenAI). The text assistant works without one. Add a key in Settings.",
     "openSettings": "Open Settings",
     "emptyPrompt": "Ask me anything about your data — type below or tap the mic to talk. For example:",
     "suggestion1": "What's on my calendar today?",
@@ -328,9 +343,11 @@
   },
   "errors": {
     "noApiKey": "No OpenAI API key set. Add one in Settings.",
-    "emptyResponse": "Empty response from OpenAI.",
+    "notConfigured": "The assistant isn't set up yet. Choose a provider in Settings — an OpenAI key or a local Ollama model.",
+    "emptyResponse": "Empty response from the assistant.",
     "tooManySteps": "The assistant took too many steps without answering. Try rephrasing your question.",
-    "openai": "OpenAI error ({{status}}): {{detail}}",
+    "assistant": "Assistant error ({{status}}): {{detail}}",
+    "ollamaUnreachable": "Can't reach Ollama at {{url}}. Make sure it's running (`ollama serve`).",
     "transcription": "Transcription failed ({{status}}): {{detail}}"
   },
   "status": {

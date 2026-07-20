@@ -16,7 +16,7 @@ A local-first personal life-management desktop app: **Calendar, Reminders, To-Do
 | ICS import/export | `ical-generator` (export) + `ical.js` (import) |
 | Calendar sync | CalDAV (RFC 4791) over `tauri-plugin-http`; `ical.js` for VEVENT parse/serialize |
 | File I/O | `tauri-plugin-dialog` + `tauri-plugin-fs` |
-| Networking | `tauri-plugin-http` (bypasses webview CORS to reach OpenAI + iCloud) |
+| Networking | `tauri-plugin-http` (bypasses webview CORS to reach OpenAI, iCloud, and a local Ollama server) |
 | Voice | `getUserMedia`/`MediaRecorder` + OpenAI Whisper (STT); Web `speechSynthesis` (TTS) |
 
 The Rust side is intentionally thin — just plugin registration + versioned migrations (`src-tauri/src/lib.rs`, `src-tauri/migrations/`). **All business logic lives in TypeScript** (`src/db.ts` is the only module that touches the DB), so a plain-browser or Windows build later is a packaging change, not a rewrite.
@@ -119,9 +119,13 @@ Connect your iCloud account and your Apple calendars work alongside the built-in
 
 ## AI Assistant
 
-An optional assistant that answers questions about your events, to-dos, reminders, notes, and people — and can also **create, update, link, and delete** them for you. Bring your own OpenAI API key.
+An optional assistant that answers questions about your events, to-dos, reminders, notes, and people — and can also **create, update, link, and delete** them for you. Its text model runs on **either OpenAI (your own API key) or a local Ollama server** — your choice, set per-device.
 
-**Setup:** open **Settings** (sidebar, bottom) → paste your `sk-…` key → pick a model (default `gpt-4o-mini`) → Save. Then open **Assistant** and try:
+**Setup:** open **Settings → Assistant** (sidebar, bottom) and pick a **provider**:
+- **OpenAI** — paste your `sk-…` key → pick a model (default `gpt-4o-mini`) → Save.
+- **Local (Ollama)** — run `ollama serve`, set the server URL (default `http://localhost:11434`), and pick a model from the auto-discovered list. **A tools-capable model is required** (e.g. `llama3.1`, `qwen2.5`) — the assistant is built entirely on tool calling, so a model without function-calling support can't answer. No key, no billing, fully offline. The app talks to Ollama's **native `/api/chat`** (not its OpenAI-compatible shim) so it can raise `num_ctx` to `8192`: the system prompt plus tool schema is ~7k tokens, over Ollama's 4k default, and on the shim those tools get truncated off silently — the model then replies as a generic chatbot with no idea it has tools.
+
+Then open **Assistant** and try:
 - *"What's due next week in Work?"* / *"Which notes mention the Q3 report?"* (read)
 - *"Add a to-do to call the dentist tomorrow at 2pm"* / *"Mark 'Buy groceries' as done"* / *"Create a weekly team-lunch event on Fridays at noon"* (write)
 - *"Add a contact for Alex Rivera at Acme, email alex@acme.com"* / *"Set Alex's eye color to blue"* / *"Add Alex to Friday's lunch"* (people + linking)
@@ -176,7 +180,7 @@ Because writing a reply and calling a tool compete for the same step, the model 
 
 **Voice mode:** the Assistant has a mic button. Click it to start recording and click again to stop, **or hold the Space bar to talk and release to send** (as long as the text box isn't focused) — your speech is transcribed with **OpenAI Whisper** (`whisper-1` by default) and sent as a normal turn. **Talk to the assistant and it replies aloud** (your OS's built-in voice, Web Speech Synthesis); **type and it replies in text** — that's the whole rule, no toggle. Voice is just an I/O layer around the same tool-calling loop, so it can answer *and* create/update/delete items by voice. Choose the transcription model in **Settings → Voice**.
 
-- Voice **input** sends audio to OpenAI (billed per minute); spoken **replies** are generated locally by your OS (free, offline).
+- Voice **input** sends audio to OpenAI (billed per minute); spoken **replies** are generated locally by your OS (free, offline). Transcription is OpenAI-only, so **voice input needs an OpenAI key even when the text assistant runs on Ollama** — the mic says so rather than failing silently.
 - **Voice input requires a packaged build** (`npm run tauri build`), not `tauri dev`. macOS WKWebView only exposes `navigator.mediaDevices` when the running app is recognized as mic-capable, which needs the `NSMicrophoneUsageDescription` from the merged `src-tauri/Info.plist` — present only in a bundled `.app`. In the packaged app, the first voice attempt triggers the system mic prompt. In `tauri dev` the mic button shows a "not available in this environment" error.
 - Recording/transcription/TTS all use standard web APIs (`getUserMedia`/`MediaRecorder`/`speechSynthesis`), so this stays portable to the browser/Windows builds.
 
@@ -184,7 +188,7 @@ Because writing a reply and calling a tool compete for the same step, the model 
 - The assistant can **create, update, and delete**. Deletion is **permanent and irreversible**, so the system prompt tells the model to look up the exact item first and **confirm which item(s) it will delete** unless you've already named a specific one — and never to delete more than you asked for.
 - The system prompt also instructs the model to look up an item's id before updating it, to **ask a clarifying question when a request is ambiguous** rather than guess, and to briefly **confirm what it created, updated, or deleted** afterwards (in one sentence, with the item shown as a card).
 - Changes appear in the other views the next time you open them (each view reloads its data on navigation).
-- The key is stored locally and sent directly to OpenAI (via the Rust HTTP plugin, scoped to `api.openai.com`).
+- Configuration is stored locally. Requests go via the Rust HTTP plugin, scoped to `api.openai.com`, `*.icloud.com`, and `localhost`/`127.0.0.1` (for Ollama) — so an OpenAI key is sent directly to OpenAI and never leaves the device for a local model.
 
 Adding further capabilities later is just more entries in the `TOOLS` array and the `executeTool` switch — the agentic loop already handles multi-tool rounds.
 

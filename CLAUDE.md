@@ -108,7 +108,7 @@ src/
 src-tauri/
   src/lib.rs                 # plugin wiring + migrations (keep thin)
   migrations/00N_*.sql       # 001 init · 002 lists · 003 people · 004 custom fields · 005 FTS trigram
-  capabilities/default.json  # http scope: api.openai.com + *.icloud.com
+  capabilities/default.json  # http scope: api.openai.com + *.icloud.com + localhost (Ollama)
 ```
 
 ## Conventions & don'ts

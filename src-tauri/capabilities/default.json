@@ -27,7 +27,9 @@
       "allow": [
         { "url": "https://api.openai.com/*" },
         { "url": "https://caldav.icloud.com/*" },
-        { "url": "https://*.icloud.com/*" }
+        { "url": "https://*.icloud.com/*" },
+        { "url": "http://localhost:*/*" },
+        { "url": "http://127.0.0.1:*/*" }
       ]
     }
   ]
