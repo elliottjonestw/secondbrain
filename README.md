@@ -71,7 +71,8 @@ Migrations are versioned and idempotent (managed by `tauri-plugin-sql`); they ru
 - **Notes** — markdown with live preview, pin, FTS5 full-text search. The editor holds local state and debounces saves, so typing stays smooth.
 - **People** — a contacts book modeled on **vCard 4.0**: multiple emails/phones/addresses/websites (each with a type), structured name, nickname, organization, title, birthday, notes, favorite, and **user-defined custom fields** (e.g. "Eye color: Blue", drag to reorder). Custom-field **labels are global** — a field you add shows up on every person (each person keeps its own value); removing one removes it everywhere. Master-detail with the same debounced auto-save as Notes (no Save button). Click an email/phone/website to open it (`mailto:`/`tel:`/browser). Upcoming birthdays surface on the Today dashboard.
 - **Assistant** — an AI chat that answers questions about your data and can create, update, or delete items, by typing **or by voice** (see below).
-- **Settings** — a sidebar splits configuration into **General** (language), **Assistant** (OpenAI key + model), **Voice** (speech-to-text model), and **Calendars** (connect iCloud, pick visible calendars, set the default).
+- **Settings** — a sidebar splits configuration into **General** (language), **Assistant** (OpenAI key + model), **Voice** (speech-to-text model), **Calendars** (connect iCloud, pick visible calendars, set the default), and **Data** (back up and restore, see below).
+- **Backup & restore** — **Settings → Data** exports *everything the app holds for you* — every event, reminder, to-do, note, person, list, tag and link — to a single JSON file, and imports one back. Import **replaces all current data** (there's a confirmation), then reloads. The **OpenAI key and iCloud account are deliberately excluded** — those device-bound secrets never travel in the backup file; non-secret preferences (UI language, model names, calendar visibility/default) are included. See `src/lib/backup.ts`.
 - **Languages** — the whole UI is available in **English** and **Traditional Chinese (繁體中文)**. Dates, times, the first day of the week, and relative labels ("tomorrow") follow the selected language via `Intl`; switching applies instantly with no restart. Set it in **Settings → General** (defaults to following your OS).
 - **Integration** — shared tagging and generic `links` (any item ↔ any item) across all five types; a person can be attached to any event, to-do, reminder, or note (and shown/edited from either side). Global search across everything.
 
@@ -216,6 +217,7 @@ src/
     i18n.ts             # i18next setup, language detection, <html lang>
     recurrence.ts       # rrule expansion (local events)
     ics.ts              # ICS import/export
+    backup.ts           # full-data JSON backup/restore (all tables + non-secret settings)
     calendars.ts        # calendar registry + local/remote aggregation & write routing
     caldav/
       client.ts         # authenticated WebDAV requests + XML helpers

@@ -126,7 +126,8 @@
       "general": "一般",
       "assistant": "助理",
       "voice": "語音",
-      "calendars": "行事曆"
+      "calendars": "行事曆",
+      "data": "資料"
     },
     "storedLocally": "設定僅儲存在此裝置上。",
     "general": {
@@ -175,6 +176,23 @@
       "noneFound": "此帳戶中找不到 Apple 行程行事曆。",
       "defaultCalendar": "預設行事曆",
       "defaultHint": "當你未指定行事曆時，新行程會建立在這裡 —— 包含助理建立的行程。只有內建的「{{calendar}}」行事曆可離線使用。"
+    },
+    "data": {
+      "title": "資料",
+      "description": "將應用程式為你保存的所有內容備份成單一檔案，或從檔案還原。你的 OpenAI 金鑰與 iCloud 帳戶不會包含在內——它們只留在這部裝置上。",
+      "exportHeading": "匯出",
+      "exportHint": "將你所有的活動、提醒、待辦事項、筆記、聯絡人、清單、標籤與連結儲存為 JSON 檔案。",
+      "exportButton": "匯出資料",
+      "exporting": "匯出中…",
+      "exported": "已匯出。",
+      "exportTitle": "匯出 Second Brain 資料",
+      "importHeading": "匯入",
+      "importHint": "從備份檔案還原。這會取代應用程式中目前的所有內容——你的 OpenAI 金鑰與 iCloud 連線不受影響。",
+      "importButton": "匯入資料",
+      "importing": "匯入中…",
+      "importTitle": "匯入 Second Brain 資料",
+      "confirmImport": "匯入會以備份檔案的內容取代應用程式中的所有現有資料，且無法復原。要繼續嗎？",
+      "errorInvalid": "該檔案不是有效的 Second Brain 備份。"
     }
   },
   "todos": {

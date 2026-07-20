@@ -1,7 +1,7 @@
 import { ReactNode, useEffect, useState } from "react";
 import {
   Eye, EyeOff, Check, CalendarDays, ExternalLink, Loader2, AlertCircle,
-  Sparkles, Mic, Languages, LucideIcon,
+  Sparkles, Mic, Languages, Database, Download, Upload, LucideIcon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -16,17 +16,19 @@ import { hasVoiceFor } from "../lib/voice";
 import { discoverAccount } from "../lib/caldav/discovery";
 import { invalidateCache, listCalendars, setCalendarVisible, LOCAL_CALENDAR_NAME } from "../lib/calendars";
 import { LOCAL_CALENDAR_ID } from "../types";
+import { exportBackup, importBackup } from "../lib/backup";
 import { Button } from "../components/ui";
 
 const APPLE_PASSWORD_URL = "https://account.apple.com/account/manage";
 
-type Section = "general" | "assistant" | "voice" | "calendars";
+type Section = "general" | "assistant" | "voice" | "calendars" | "data";
 
 const SECTIONS: { id: Section; labelKey: `settings.sections.${Section}`; icon: LucideIcon }[] = [
   { id: "general", labelKey: "settings.sections.general", icon: Languages },
   { id: "assistant", labelKey: "settings.sections.assistant", icon: Sparkles },
   { id: "voice", labelKey: "settings.sections.voice", icon: Mic },
   { id: "calendars", labelKey: "settings.sections.calendars", icon: CalendarDays },
+  { id: "data", labelKey: "settings.sections.data", icon: Database },
 ];
 
 export default function SettingsView() {
@@ -84,6 +86,7 @@ export default function SettingsView() {
             <VoiceSettings draft={draft} patch={patch} onSave={save} saved={saved} />
           )}
           {section === "calendars" && <CalendarSettingsPane />}
+          {section === "data" && <DataSettings />}
         </div>
       </div>
     </div>
@@ -500,6 +503,98 @@ function CalendarSettingsPane() {
             <option key={cal.id} value={cal.id}>{cal.name}</option>
           ))}
         </select>
+      </section>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Data (backup / restore)
+// ---------------------------------------------------------------------------
+function DataSettings() {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState<"export" | "import" | null>(null);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+
+  async function doExport() {
+    setBusy("export");
+    setError("");
+    setStatus("");
+    try {
+      const path = await exportBackup();
+      if (path) setStatus(t("settings.data.exported"));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function doImport() {
+    setError("");
+    setStatus("");
+    // Destructive: replaces everything currently in the app.
+    if (!window.confirm(t("settings.data.confirmImport"))) return;
+    setBusy("import");
+    try {
+      const result = await importBackup();
+      if (result) {
+        // Reload so every view re-reads the DB and the restored language applies.
+        window.location.reload();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(null);
+    }
+  }
+
+  return (
+    <>
+      <PaneHeader title={t("settings.data.title")}>
+        {t("settings.data.description")}
+      </PaneHeader>
+
+      <section className="mb-6 rounded-xl border border-neutral-200 p-5 dark:border-neutral-700">
+        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+          {t("settings.data.exportHeading")}
+        </h2>
+        <p className="mb-4 text-xs leading-relaxed text-neutral-400">
+          {t("settings.data.exportHint")}
+        </p>
+        <Button variant="primary" onClick={() => void doExport()}>
+          {busy === "export" ? (
+            <span className="flex items-center gap-1.5">
+              <Loader2 size={15} className="animate-spin" /> {t("settings.data.exporting")}
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5"><Download size={15} /> {t("settings.data.exportButton")}</span>
+          )}
+        </Button>
+        {status && (
+          <div className="mt-3 flex items-center gap-1 text-sm text-green-600">
+            <Check size={16} /> {status}
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-neutral-200 p-5 dark:border-neutral-700">
+        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+          {t("settings.data.importHeading")}
+        </h2>
+        <p className="mb-4 text-xs leading-relaxed text-neutral-400">
+          {t("settings.data.importHint")}
+        </p>
+        <Button onClick={() => void doImport()}>
+          {busy === "import" ? (
+            <span className="flex items-center gap-1.5">
+              <Loader2 size={15} className="animate-spin" /> {t("settings.data.importing")}
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5"><Upload size={15} /> {t("settings.data.importButton")}</span>
+          )}
+        </Button>
+        {error && <div className="mt-3"><Notice tone="error">{error}</Notice></div>}
       </section>
     </>
   );

@@ -127,7 +127,8 @@
       "general": "General",
       "assistant": "Assistant",
       "voice": "Voice",
-      "calendars": "Calendars"
+      "calendars": "Calendars",
+      "data": "Data"
     },
     "storedLocally": "Configuration is stored locally on this device.",
     "general": {
@@ -177,6 +178,23 @@
       "noneFound": "No Apple event calendars were found on this account.",
       "defaultCalendar": "Default calendar",
       "defaultHint": "New events land here when you don't pick a calendar — including events the assistant creates. The built-in {{calendar}} calendar is the only one that works offline."
+    },
+    "data": {
+      "title": "Data",
+      "description": "Back up everything the app holds for you to a single file, or restore from one. Your OpenAI key and iCloud account are excluded — they stay on this device only.",
+      "exportHeading": "Export",
+      "exportHint": "Saves all your events, reminders, to-dos, notes, people, lists, tags and links to a JSON file.",
+      "exportButton": "Export data",
+      "exporting": "Exporting…",
+      "exported": "Exported.",
+      "exportTitle": "Export Second Brain data",
+      "importHeading": "Import",
+      "importHint": "Restore from a backup file. This replaces everything currently in the app — your OpenAI key and iCloud connection are left untouched.",
+      "importButton": "Import data",
+      "importing": "Importing…",
+      "importTitle": "Import Second Brain data",
+      "confirmImport": "Importing will replace ALL current data in the app with the contents of the backup file. This cannot be undone. Continue?",
+      "errorInvalid": "That file isn't a valid Second Brain backup."
     }
   },
   "todos": {

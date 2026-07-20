@@ -702,6 +702,73 @@ export async function getItemLabel(type: ItemType, id: string): Promise<string> 
   return rows[0]?.label || "(untitled)";
 }
 
+// ---------------------------------------------------------------------------
+// Full data export / import (backup + restore, see lib/backup.ts)
+//
+// A backup is every row of every user table, preserved verbatim (ids,
+// timestamps, sequence) so a restored DB is byte-identical to the original and
+// stays CalDAV/CardDAV-syncable. The two secret-bearing settings (OpenAI key,
+// CalDAV account) live in localStorage, not here, so they never travel in a
+// table dump — backup.ts decides which settings to include.
+// ---------------------------------------------------------------------------
+
+/** Every user-data table. `notes_fts` is a virtual FTS mirror kept in sync by
+ *  triggers, so it is never exported or imported directly. No FK cascades
+ *  exist, so insert order doesn't matter. */
+export const DATA_TABLES = [
+  "tags", "item_tags", "links", "events", "reminders", "lists", "todos",
+  "notes", "people", "person_custom_fields",
+] as const;
+
+export type DataTable = (typeof DATA_TABLES)[number];
+
+type Row = Record<string, unknown>;
+
+/** Read every user table verbatim, keyed by table name. */
+export async function exportTables(): Promise<Record<DataTable, Row[]>> {
+  const d = await db();
+  const out = {} as Record<DataTable, Row[]>;
+  for (const t of DATA_TABLES) {
+    out[t] = await d.select<Row[]>(`SELECT * FROM ${t}`);
+  }
+  return out;
+}
+
+/**
+ * Replace ALL user data with the supplied rows. Destructive: every existing
+ * row of every table is deleted first, then the given rows are inserted with
+ * their stored columns, so ids/timestamps/sequence survive a round-trip.
+ *
+ * Only columns that actually exist on each table are inserted — a stray or
+ * renamed column in the file is dropped rather than throwing, and the column
+ * whitelist also stops arbitrary JSON keys reaching the SQL string.
+ */
+export async function importTables(
+  tables: Partial<Record<DataTable, Row[]>>,
+): Promise<void> {
+  const d = await db();
+  for (const t of DATA_TABLES) await d.execute(`DELETE FROM ${t}`);
+  for (const t of DATA_TABLES) {
+    const rows = tables[t];
+    if (!rows?.length) continue;
+    const allowed = await columnsOf(t);
+    for (const row of rows) {
+      const cols = Object.keys(row).filter((c) => allowed.has(c));
+      if (!cols.length) continue;
+      await d.execute(
+        `INSERT INTO ${t} (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
+        cols.map((c) => row[c]),
+      );
+    }
+  }
+}
+
+/** The set of real column names on a table (via PRAGMA table_info). */
+async function columnsOf(table: DataTable): Promise<Set<string>> {
+  const info = await (await db()).select<{ name: string }[]>(`PRAGMA table_info(${table})`);
+  return new Set(info.map((c) => c.name));
+}
+
 /** Remove tags + links referencing an item that is being deleted. */
 async function removeItemRelations(type: ItemType, id: string): Promise<void> {
   const d = await db();
