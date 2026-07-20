@@ -16,7 +16,8 @@ import { useTranslation } from "react-i18next";
 import type { ItemRef, ItemType, NavTarget } from "../types";
 import { getTodo, getReminder, getNote, getPerson } from "../db";
 import { getEventByRef, findEventById } from "../lib/calendars";
-import { fmtDateTime, isOverdue } from "../lib/format";
+import { nextOccurrenceFrom } from "../lib/recurrence";
+import { fmtDateTime, isOverdue, startOfDay } from "../lib/format";
 
 export const ITEM_ICON: Record<ItemType, LucideIcon> = {
   event: Calendar, reminder: Bell, todo: ListChecks, note: StickyNote, person: Users,
@@ -101,7 +102,18 @@ async function load(ref: ItemRef, t: (k: any, o?: any) => string): Promise<Loade
     case "reminder": {
       const r = await getReminder(ref.id);
       if (!r) return null;
-      return { label: r.title, ...due(r.remind_at ?? r.due_at, !!r.completed) };
+      // Recurring reminders store the series' base time; show the current
+      // occurrence (from start of today) instead of the day it was created,
+      // and never flag a repeating reminder overdue — it recurs by design.
+      const base = r.remind_at ?? r.due_at;
+      const when = r.rrule ? nextOccurrenceFrom(base, r.rrule, startOfDay(new Date())) : (base ? new Date(base) : null);
+      const iso = when ? when.toISOString() : null;
+      return {
+        label: r.title,
+        sub: iso ? t("card.due", { when: fmtDateTime(iso) }) : "",
+        done: !!r.completed,
+        overdue: !r.completed && !r.rrule && isOverdue(iso),
+      };
     }
     case "todo": {
       const td = await getTodo(ref.id);

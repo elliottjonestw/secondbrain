@@ -76,6 +76,29 @@ export function expandEvent(
     .filter((o) => (o.end ?? o.start) >= windowStart && o.start <= windowEnd);
 }
 
+/**
+ * The occurrence of a recurring datetime on or after `from` (inclusive).
+ *
+ * Used to display recurring reminders at their current instance instead of the
+ * series' stored base — a daily 8am reminder otherwise shows the day it was
+ * created, wrongly flagged overdue. No rule → the base unchanged; a series that
+ * has fully ended before `from` → the base as a last resort (so the card is
+ * never dateless). Reminders are local, so plain rrule is correct here (unlike
+ * remote events, which need ical.js for TZID).
+ */
+export function nextOccurrenceFrom(baseIso: string | null, rrule: string | null, from: Date): Date | null {
+  if (!baseIso) return null;
+  const base = new Date(baseIso);
+  if (isNaN(base.getTime())) return null;
+  if (!rrule) return base;
+  try {
+    const rule = rrulestr(normalizeRule(rrule), { dtstart: base });
+    return rule.after(from, true) ?? base;
+  } catch {
+    return base;
+  }
+}
+
 /** Expand many events across a window and sort chronologically. */
 export function expandEvents(
   events: UnifiedEvent[],
