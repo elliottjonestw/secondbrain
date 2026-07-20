@@ -206,7 +206,12 @@
       "importing": "匯入中…",
       "importTitle": "匯入 Second Brain 資料",
       "confirmImport": "匯入會以備份檔案的內容取代應用程式中的所有現有資料，且無法復原。要繼續嗎？",
-      "errorInvalid": "該檔案不是有效的 Second Brain 備份。"
+      "errorInvalid": "該檔案不是有效的 Second Brain 備份。",
+      "resetHeading": "重設",
+      "resetHint": "永久刪除你所有的活動、提醒、待辦事項、筆記、聯絡人、清單、標籤與連結。你的 OpenAI 金鑰與 iCloud 連線不受影響。若日後可能需要這些資料，請先匯出備份。",
+      "resetButton": "重設所有資料",
+      "resetting": "重設中…",
+      "confirmReset": "這會永久刪除應用程式中的所有資料——每一項活動、提醒、待辦事項、筆記、聯絡人、清單與標籤，且無法復原。要繼續嗎？"
     }
   },
   "todos": {

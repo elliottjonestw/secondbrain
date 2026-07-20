@@ -2,7 +2,7 @@ import { ReactNode, useEffect, useState } from "react";
 import {
   Eye, EyeOff, Check, CalendarDays, ExternalLink, Loader2, AlertCircle,
   Sparkles, Mic, Languages, Database, Download, Upload, LucideIcon,
-  Cloud, Server, RefreshCw,
+  Cloud, Server, RefreshCw, Trash2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -20,6 +20,7 @@ import { discoverAccount } from "../lib/caldav/discovery";
 import { invalidateCache, listCalendars, setCalendarVisible, LOCAL_CALENDAR_NAME } from "../lib/calendars";
 import { LOCAL_CALENDAR_ID } from "../types";
 import { exportBackup, importBackup } from "../lib/backup";
+import { clearAllData } from "../lib/demo";
 import { Button } from "../components/ui";
 
 const APPLE_PASSWORD_URL = "https://account.apple.com/account/manage";
@@ -654,7 +655,7 @@ function CalendarSettingsPane() {
 // ---------------------------------------------------------------------------
 function DataSettings() {
   const { t } = useTranslation();
-  const [busy, setBusy] = useState<"export" | "import" | null>(null);
+  const [busy, setBusy] = useState<"export" | "import" | "reset" | null>(null);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
 
@@ -690,6 +691,23 @@ function DataSettings() {
     }
   }
 
+  async function doReset() {
+    setError("");
+    setStatus("");
+    // Permanent: wipes every user table. No undo.
+    if (!window.confirm(t("settings.data.confirmReset"))) return;
+    setBusy("reset");
+    try {
+      await clearAllData();
+      // Reload so every view re-reads the now-empty DB and the assistant chat,
+      // reminder poller and deep-link targets all reset to a clean state.
+      window.location.reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(null);
+    }
+  }
+
   return (
     <>
       <PaneHeader title={t("settings.data.title")}>
@@ -719,7 +737,7 @@ function DataSettings() {
         )}
       </section>
 
-      <section className="rounded-xl border border-neutral-200 p-5 dark:border-neutral-700">
+      <section className="mb-6 rounded-xl border border-neutral-200 p-5 dark:border-neutral-700">
         <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
           {t("settings.data.importHeading")}
         </h2>
@@ -735,8 +753,27 @@ function DataSettings() {
             <span className="flex items-center gap-1.5"><Upload size={15} /> {t("settings.data.importButton")}</span>
           )}
         </Button>
-        {error && <div className="mt-3"><Notice tone="error">{error}</Notice></div>}
       </section>
+
+      <section className="rounded-xl border border-red-200 p-5 dark:border-red-900/60">
+        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-red-600 dark:text-red-400">
+          {t("settings.data.resetHeading")}
+        </h2>
+        <p className="mb-4 text-xs leading-relaxed text-neutral-400">
+          {t("settings.data.resetHint")}
+        </p>
+        <Button variant="danger" onClick={() => void doReset()}>
+          {busy === "reset" ? (
+            <span className="flex items-center gap-1.5">
+              <Loader2 size={15} className="animate-spin" /> {t("settings.data.resetting")}
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5"><Trash2 size={15} /> {t("settings.data.resetButton")}</span>
+          )}
+        </Button>
+      </section>
+
+      {error && <div className="mt-3"><Notice tone="error">{error}</Notice></div>}
     </>
   );
 }
