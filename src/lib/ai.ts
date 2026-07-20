@@ -83,6 +83,37 @@ function asPriority(v: unknown): number {
   return i >= 0 ? i : 0;
 }
 
+/**
+ * Convert a stored timestamp to local-offset ISO for the model.
+ *
+ * The DB stores UTC, so handing the model a raw column (or `.toISOString()`)
+ * meant it read `2026-07-20T01:30:00Z` and told the user "01:30 AM" for an
+ * event that is actually at 09:30 in their timezone. The system prompt already
+ * requires the model to *send* local-offset ISO; this makes reads symmetric.
+ *
+ * Date-only values (a vCard birthday) are passed through untouched.
+ */
+function toLocalIso(value: unknown): any {
+  if (typeof value !== "string" || !value) return value ?? null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value; // date-only, no zone
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? value : format(d, "yyyy-MM-dd'T'HH:mm:ssXXX");
+}
+
+/** Datetime columns on the domain rows; birthday is date-only and excluded. */
+const DATETIME_FIELDS = [
+  "dtstart", "dtend", "due_at", "remind_at", "completed_at", "created_at", "updated_at",
+] as const;
+
+/** Copy a row with every datetime column converted to local-offset ISO. */
+function rowWithLocalTimes<T extends Record<string, any>>(row: T): T {
+  const out: Record<string, any> = { ...row };
+  for (const f of DATETIME_FIELDS) {
+    if (f in out && out[f] != null) out[f] = toLocalIso(out[f]);
+  }
+  return out as T;
+}
+
 const WRITE_TABLES = { event: "events", reminder: "reminders", todo: "todos", note: "notes", person: "people" } as const;
 
 async function getRowById(table: string, id: unknown): Promise<any | null> {
@@ -589,7 +620,7 @@ async function toolGetOverview() {
   const one = async (sql: string) => (await d.select<{ n: number }[]>(sql))[0]?.n ?? 0;
   const [lists, tags] = await Promise.all([listLists(), listTags()]);
   return {
-    now: new Date().toISOString(),
+    now: toLocalIso(new Date().toISOString()),
     now_readable: format(new Date(), "EEEE MMMM d, yyyy, h:mm a"),
     counts: {
       events: await one("SELECT COUNT(*) n FROM events"),
@@ -648,7 +679,7 @@ async function toolSearchTodos(args: Record<string, unknown>) {
     truncated: filtered.length > limit,
     results: filtered.slice(0, limit).map((t) => ({
       id: t.id, title: t.title, list: t.list_name, completed: !!t.completed,
-      due_at: t.due_at, priority: PRIORITY[t.priority] ?? t.priority,
+      due_at: toLocalIso(t.due_at), priority: PRIORITY[t.priority] ?? t.priority,
       is_subtask: !!t.parent_todo_id, notes: t.notes || undefined,
     })),
   };
@@ -711,7 +742,7 @@ async function toolSearchEvents(args: Record<string, unknown>) {
 
   const limit = clampLimit(args.limit);
   return {
-    range: { start: start.toISOString(), end: end.toISOString() },
+    range: { start: toLocalIso(start.toISOString()), end: toLocalIso(end.toISOString()) },
     total: occs.length,
     truncated: occs.length > limit,
     // Surfaced so the user can be told which calendars didn't answer rather
@@ -719,7 +750,7 @@ async function toolSearchEvents(args: Record<string, unknown>) {
     unavailable_calendars: remote.errors.length ? remote.errors : undefined,
     results: occs.slice(0, limit).map((o) => ({
       id: o.event.id, summary: o.event.summary,
-      start: o.start.toISOString(), end: o.end ? o.end.toISOString() : null,
+      start: toLocalIso(o.start.toISOString()), end: o.end ? toLocalIso(o.end.toISOString()) : null,
       all_day: !!o.event.all_day, recurring: o.isRecurringInstance,
       location: o.event.location || undefined,
       calendar_id: o.event.calendarId,
@@ -772,7 +803,7 @@ async function toolSearchReminders(args: Record<string, unknown>) {
     truncated: filtered.length > limit,
     results: filtered.slice(0, limit).map((r) => ({
       id: r.id, title: r.title, completed: !!r.completed,
-      due_at: r.due_at, remind_at: r.remind_at, repeats: r.rrule || undefined,
+      due_at: toLocalIso(r.due_at), remind_at: toLocalIso(r.remind_at), repeats: r.rrule || undefined,
       priority: PRIORITY[r.priority] ?? r.priority, notes: r.notes || undefined,
     })),
   };
@@ -798,7 +829,7 @@ async function toolSearchNotes(args: Record<string, unknown>) {
     results: rows.slice(0, limit).map((n) => ({
       id: n.id, title: n.title || "Untitled", pinned: !!n.pinned,
       snippet: (n.body ?? "").replace(/\s+/g, " ").slice(0, 400),
-      updated_at: n.updated_at,
+      updated_at: toLocalIso(n.updated_at),
     })),
   };
 }
@@ -820,7 +851,7 @@ async function toolGetItem(args: Record<string, unknown>) {
     if (!remote) return { error: `No event found with id ${id}.` };
     return {
       type,
-      item: remote,
+      item: rowWithLocalTimes(remote as any),
       calendar: getCalendar(remote.calendarId)?.name,
       tags: [],
       linked: [],
@@ -839,7 +870,7 @@ async function toolGetItem(args: Record<string, unknown>) {
     return { type: other.t, id: other.i, label: await getItemLabel(other.t, other.i) };
   }));
 
-  return { type, item, tags, linked };
+  return { type, item: rowWithLocalTimes(item), tags, linked };
 }
 
 /** Parse a JSON array column back to values, or undefined if empty. */
