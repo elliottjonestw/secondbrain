@@ -64,7 +64,7 @@ Migrations are versioned and idempotent (managed by `tauri-plugin-sql`); they ru
 - **Reminders** — Apple-Reminders-style with a filter sidebar (**All / Scheduled / Flagged / Completed**, each with live counts). Due date + optional alert time, recurrence, priority, link to a to-do. Native OS notifications fire when due (polled once a minute while the app is open).
 - **To-Do** — multiple lists (defaults: **Personal**, **Work**), inline list creation, subtasks, priority, due dates, drag-to-reorder, and "Convert to event". Incomplete tasks always sort above completed ones.
 - **Notes** — markdown with live preview, pin, FTS5 full-text search. The editor holds local state and debounces saves, so typing stays smooth.
-- **People** — a contacts book modeled on **vCard 4.0**: multiple emails/phones/addresses/websites (each with a type), structured name, nickname, organization, title, birthday, notes, favorite, and **user-defined custom fields** (add any label/value, e.g. "Eye color: Blue", drag to reorder). Master-detail with the same debounced auto-save as Notes (no Save button). Click an email/phone/website to open it (`mailto:`/`tel:`/browser). Upcoming birthdays surface on the Today dashboard.
+- **People** — a contacts book modeled on **vCard 4.0**: multiple emails/phones/addresses/websites (each with a type), structured name, nickname, organization, title, birthday, notes, favorite, and **user-defined custom fields** (e.g. "Eye color: Blue", drag to reorder). Custom-field **labels are global** — a field you add shows up on every person (each person keeps its own value); removing one removes it everywhere. Master-detail with the same debounced auto-save as Notes (no Save button). Click an email/phone/website to open it (`mailto:`/`tel:`/browser). Upcoming birthdays surface on the Today dashboard.
 - **Assistant** — an AI chat that answers questions about your data and can create, update, or delete items, by typing **or by voice** (see below).
 - **Settings** — enter your OpenAI API key + model.
 - **Integration** — shared tagging and generic `links` (any item ↔ any item) across all five types; a person can be attached to any event, to-do, reminder, or note (and shown/edited from either side). Global search across everything.
@@ -99,7 +99,7 @@ An optional assistant that answers questions about your events, to-dos, reminder
 | `create_event` / `update_event` | create or edit a calendar event (incl. recurrence, all-day, location) |
 | `create_reminder` / `update_reminder` | create or edit a reminder (incl. alert time, recurrence, complete) |
 | `create_note` / `update_note` | create or edit a markdown note |
-| `create_person` / `update_person` | create or edit a contact (incl. emails/phones/addresses, birthday, and user-defined `custom_fields`) |
+| `create_person` / `update_person` | create or edit a contact (incl. emails/phones/addresses, birthday, and user-defined `custom_fields`; custom labels register globally) |
 | `create_list` | add a new to-do list |
 | `add_tag` | tag any item (incl. a person) |
 | `link_items` / `unlink_items` | connect/disconnect any two items (e.g. attach a person to an event) |
@@ -165,6 +165,7 @@ src-tauri/
     001_init.sql            # initial schema
     002_default_lists.sql   # seed Personal/Work, drop Inbox
     003_people.sql          # people (contacts, vCard 4.0-modeled)
+    004_person_custom_fields.sql  # global custom-field label registry
   capabilities/default.json  # plugin permissions (sql, notification, dialog,
                              #   fs scope, http scope for api.openai.com)
 CLAUDE.md              # architecture, conventions & gotchas for contributors

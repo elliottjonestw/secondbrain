@@ -14,6 +14,7 @@ import type {
   TagRow,
   LinkRow,
   PersonRow,
+  PersonCustomField,
   ItemType,
 } from "./types";
 
@@ -440,6 +441,63 @@ export async function upsertPersonWithId(id: string, input: PersonInput): Promis
 export async function deletePerson(id: string): Promise<void> {
   await (await db()).execute("DELETE FROM people WHERE id=?", [id]);
   await removeItemRelations("person", id);
+}
+
+// --- Global custom-field labels (shared across all people) -------------------
+// The label set is global — a field you add shows on every person. Values stay
+// per-person in people.custom_fields, keyed by label.
+export interface CustomFieldDef { id: string; label: string; position: number }
+
+export async function listCustomFields(): Promise<CustomFieldDef[]> {
+  return (await db()).select<CustomFieldDef[]>(
+    "SELECT * FROM person_custom_fields ORDER BY position ASC, label COLLATE NOCASE ASC",
+  );
+}
+
+/** Add a global custom-field label if it doesn't already exist (case-insensitive). */
+export async function ensureCustomField(label: string): Promise<CustomFieldDef> {
+  const d = await db();
+  const trimmed = label.trim();
+  const existing = await d.select<CustomFieldDef[]>(
+    "SELECT * FROM person_custom_fields WHERE label = ? COLLATE NOCASE", [trimmed],
+  );
+  if (existing[0]) return existing[0];
+  const max = await d.select<{ m: number | null }[]>("SELECT MAX(position) m FROM person_custom_fields");
+  const position = (max[0]?.m ?? -1) + 1;
+  const id = newId();
+  await d.execute("INSERT INTO person_custom_fields (id, label, position) VALUES (?,?,?)", [id, trimmed, position]);
+  return { id, label: trimmed, position };
+}
+
+/** Delete a global custom field and strip its values from every person. */
+export async function deleteCustomFieldDef(id: string): Promise<void> {
+  const d = await db();
+  const rows = await d.select<CustomFieldDef[]>("SELECT * FROM person_custom_fields WHERE id = ?", [id]);
+  const def = rows[0];
+  if (!def) return;
+  await d.execute("DELETE FROM person_custom_fields WHERE id = ?", [id]);
+  const people = await d.select<{ id: string; custom_fields: string | null }[]>(
+    "SELECT id, custom_fields FROM people WHERE custom_fields IS NOT NULL",
+  );
+  for (const p of people) {
+    let arr: PersonCustomField[];
+    try { arr = JSON.parse(p.custom_fields!); } catch { continue; }
+    if (!Array.isArray(arr)) continue;
+    const next = arr.filter((c) => c.label !== def.label);
+    if (next.length !== arr.length) {
+      await d.execute(
+        "UPDATE people SET custom_fields = ?, sequence = sequence + 1, updated_at = ? WHERE id = ?",
+        [next.length ? JSON.stringify(next) : null, nowIso(), p.id],
+      );
+    }
+  }
+}
+
+export async function reorderCustomFields(ids: string[]): Promise<void> {
+  const d = await db();
+  for (let i = 0; i < ids.length; i++) {
+    await d.execute("UPDATE person_custom_fields SET position = ? WHERE id = ?", [i, ids[i]]);
+  }
 }
 
 // ---------------------------------------------------------------------------

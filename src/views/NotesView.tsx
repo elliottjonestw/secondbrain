@@ -99,7 +99,9 @@ function NoteEditor({
   const [title, setTitle] = useState(note.title ?? "");
   const [body, setBody] = useState(note.body ?? "");
   const [pinned, setPinned] = useState(note.pinned === 1);
-  const [preview, setPreview] = useState(false);
+  // Existing notes (with content) open in preview; a freshly-created empty note
+  // opens straight into edit mode so you can start typing.
+  const [preview, setPreview] = useState(() => !!(note.title?.trim() || note.body?.trim()));
   const saveTimer = useRef<number | null>(null);
   const pending = useRef<{ title: string; body: string; pinned: boolean } | null>(null);
 

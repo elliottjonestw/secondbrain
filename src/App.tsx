@@ -150,7 +150,6 @@ export default function App() {
             <SettingsIcon size={18} /> Settings
           </button>
         </div>
-        <div className="p-3 text-xs text-neutral-400">Local · offline · SQLite</div>
       </nav>
 
       {/* Main */}

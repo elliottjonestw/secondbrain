@@ -19,6 +19,7 @@ import {
   upsertTodo, upsertEvent, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
   deleteTodo, deleteEvent, deleteReminder, deleteNote, deleteList,
   listPeople, searchPeople, upsertPerson, deletePerson, createLink, deleteLink,
+  ensureCustomField,
 } from "../db";
 import { expandEvents } from "./recurrence";
 import { getSettings } from "./settings";
@@ -958,8 +959,18 @@ function jsonArrOrNull(v: unknown): string | null {
   return items.length ? JSON.stringify(items) : null;
 }
 
+/** Custom-field labels are global — make sure any the model uses exist as defs. */
+async function registerCustomFieldLabels(v: unknown): Promise<void> {
+  if (!Array.isArray(v)) return;
+  for (const item of v) {
+    const label = item && typeof item === "object" ? (item as { label?: unknown }).label : undefined;
+    if (typeof label === "string" && label.trim()) await ensureCustomField(label.trim());
+  }
+}
+
 async function toolCreatePerson(args: Record<string, unknown>) {
   if (typeof args.full_name !== "string" || !args.full_name.trim()) return { error: "full_name is required." };
+  await registerCustomFieldLabels(args.custom_fields);
   const id = await upsertPerson({
     full_name: args.full_name.trim(),
     given_name: strOrNull(args.given_name),
@@ -986,6 +997,7 @@ async function toolCreatePerson(args: Record<string, unknown>) {
 async function toolUpdatePerson(args: Record<string, unknown>) {
   const p = await getRowById("people", args.id);
   if (!p) return { error: `No person found with id ${args.id}.` };
+  if ("custom_fields" in args) await registerCustomFieldLabels(args.custom_fields);
   const keepStr = (k: string, cur: string | null) => (k in args ? strOrNull(args[k]) : cur);
   const keepArr = (k: string, cur: string | null) => (k in args ? jsonArrOrNull(args[k]) : cur);
   await upsertPerson({

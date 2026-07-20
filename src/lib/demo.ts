@@ -6,14 +6,14 @@
 import {
   db, nowIso,
   upsertList, upsertEvent, upsertTodo, upsertReminder, upsertNote, upsertPerson,
-  tagItem, createLink,
+  ensureCustomField, tagItem, createLink,
 } from "../db";
 
 /** Remove every row from every user table (order respects nothing thanks to
  * no FK cascade, so we just clear them all). */
 export async function clearAllData(): Promise<void> {
   const d = await db();
-  for (const table of ["item_tags", "links", "tags", "events", "reminders", "todos", "notes", "people", "lists"]) {
+  for (const table of ["item_tags", "links", "tags", "events", "reminders", "todos", "notes", "people", "person_custom_fields", "lists"]) {
     await d.execute(`DELETE FROM ${table}`);
   }
 }
@@ -173,6 +173,8 @@ export async function resetAndSeedDemo(): Promise<void> {
     custom_fields: JSON.stringify([{ label: "Coffee order", value: "Oat flat white" }]),
     favorite: 1,
   });
+  // Custom-field labels are global (shared across all people).
+  await ensureCustomField("Coffee order");
   const sarah = await upsertPerson({
     ...emptyName, full_name: "Sarah Chen", given_name: "Sarah", family_name: "Chen",
     nickname: null, organization: null, title: null,

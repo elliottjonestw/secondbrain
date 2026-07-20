@@ -12,6 +12,8 @@ A local-first personal life-management desktop app — **Calendar, Reminders, To
 
 **People** are contacts modeled on **vCard 4.0 (RFC 6350)**: id = vCard UID (like events = iCal UID); multi-value fields (emails/phones/addresses/urls) + user-defined `custom_fields` are JSON columns on the `people` row (no child tables); a person attaches to any item via the existing `links` table and is tagged via `item_tags` (both accept `item_type='person'` — no schema change to them). See `003_people.sql`. `.vcf` import/export is future work but the schema maps straight to it — don't hand-roll a vCard parser when it lands (use a library, same as ICS).
 
+**Custom-field labels are global.** The set of custom-field *labels* lives in the `person_custom_fields` table (`004_*.sql`) and is shared across all people — the People editor renders one row per registered label. Only the *value* is per-person (stored in that person's `custom_fields` JSON, keyed by label). So `ensureCustomField`/`deleteCustomFieldDef`/`reorderCustomFields` mutate the shared registry (deleting a label strips its value from every person), while editing a value just goes through the normal debounced `upsertPerson`. When code (UI or the AI's `create_person`/`update_person`) writes a custom_field with a new label, register it as a def (`ensureCustomField`) so it shows up everywhere.
+
 ## Commands
 
 ```bash
@@ -93,6 +95,7 @@ src/
 src-tauri/
   src/lib.rs       # plugin wiring + migration registration (keep thin)
   migrations/00N_*.sql       # versioned, checksummed — add, never edit
+                             #   (001 init, 002 lists, 003 people, 004 custom fields)
   capabilities/default.json  # plugin permissions (add scope for new plugins)
 ```
 

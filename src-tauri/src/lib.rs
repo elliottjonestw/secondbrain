@@ -5,6 +5,7 @@ use tauri_plugin_sql::{Migration, MigrationKind};
 const MIGRATION_V1: &str = include_str!("../migrations/001_init.sql");
 const MIGRATION_V2: &str = include_str!("../migrations/002_default_lists.sql");
 const MIGRATION_V3: &str = include_str!("../migrations/003_people.sql");
+const MIGRATION_V4: &str = include_str!("../migrations/004_person_custom_fields.sql");
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -25,6 +26,12 @@ pub fn run() {
             version: 3,
             description: "people (contacts, vCard-modeled)",
             sql: MIGRATION_V3,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 4,
+            description: "global person custom-field label registry",
+            sql: MIGRATION_V4,
             kind: MigrationKind::Up,
         },
     ];

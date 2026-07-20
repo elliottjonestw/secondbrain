@@ -8,6 +8,8 @@ import type {
 } from "../types";
 import {
   listPeople, searchPeople, upsertPerson, deletePerson, allLinkTargets,
+  listCustomFields, ensureCustomField, deleteCustomFieldDef, reorderCustomFields,
+  CustomFieldDef,
 } from "../db";
 import { Button } from "../components/ui";
 import { Avatar } from "../components/Avatar";
@@ -206,7 +208,7 @@ function PersonEditor({
       phones: arrOrNull(draft.phones.filter((e) => e.value.trim())),
       addresses: arrOrNull(draft.addresses.filter(hasAddress)),
       urls: arrOrNull(draft.urls.filter((u) => u.value.trim())),
-      custom_fields: arrOrNull(draft.custom_fields.filter((c) => c.label.trim())),
+      custom_fields: arrOrNull(draft.custom_fields.filter((c) => c.label.trim() && c.value.trim())),
     });
     onChanged();
   }
@@ -325,9 +327,9 @@ function PersonEditor({
           <AddressRows rows={form.addresses} onChange={(rows) => patch({ addresses: rows })} />
         </Section>
 
-        {/* Custom fields */}
+        {/* Custom fields — labels are global (shared across all people). */}
         <Section title="Custom fields">
-          <CustomFieldRows rows={form.custom_fields} onChange={(rows) => patch({ custom_fields: rows })} />
+          <CustomFields values={form.custom_fields} onChange={(rows) => patch({ custom_fields: rows })} />
         </Section>
 
         {/* Notes */}
@@ -352,8 +354,11 @@ function PersonEditor({
 }
 
 // --- reusable field bits ------------------------------------------------------
-const inputCls =
-  "w-full rounded border border-neutral-200 px-2 py-1.5 text-sm outline-none focus:border-blue-400 dark:border-neutral-600 dark:bg-neutral-700";
+// `inputBase` has no width, so it composes with flex-1 / w-40 without a
+// conflicting w-full winning in the cascade. `inputCls` is the full-width form.
+const inputBase =
+  "rounded border border-neutral-200 px-2 py-1.5 text-sm outline-none focus:border-blue-400 dark:border-neutral-600 dark:bg-neutral-700";
+const inputCls = `w-full ${inputBase}`;
 const selectCls =
   "rounded border border-neutral-200 px-2 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-700";
 
@@ -398,7 +403,7 @@ function TypedValueRows({
           <select value={r.type} onChange={(e) => update(i, { type: e.target.value })} className={selectCls}>
             {typeOptions.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
-          <input value={r.value} onChange={(e) => update(i, { value: e.target.value })} placeholder={placeholder} className={`flex-1 ${inputCls}`} />
+          <input value={r.value} onChange={(e) => update(i, { value: e.target.value })} placeholder={placeholder} className={`flex-1 ${inputBase}`} />
           <button
             onClick={() => r.value.trim() && onOpen(r.value.trim())}
             disabled={!r.value.trim()}
@@ -448,28 +453,66 @@ function AddressRows({ rows, onChange }: { rows: PersonAddress[]; onChange: (row
   );
 }
 
-/** User-defined label/value rows with drag-to-reorder (HTML5 DnD, like Todos). */
-function CustomFieldRows({ rows, onChange }: { rows: PersonCustomField[]; onChange: (rows: PersonCustomField[]) => void }) {
+/**
+ * Custom fields for a person. The label set is GLOBAL — labels live in the
+ * `person_custom_fields` registry and every person shows the same rows; only the
+ * VALUE is per-person (stored in this person's custom_fields, keyed by label).
+ * Adding/removing/reordering a field affects all people; editing a value does
+ * not. Drag-to-reorder uses HTML5 DnD like the Todos list.
+ */
+function CustomFields({ values, onChange }: { values: PersonCustomField[]; onChange: (rows: PersonCustomField[]) => void }) {
+  const [defs, setDefs] = useState<CustomFieldDef[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [newLabel, setNewLabel] = useState("");
   const [dragIdx, setDragIdx] = useState<number | null>(null);
-  const update = (i: number, p: Partial<PersonCustomField>) =>
-    onChange(rows.map((r, idx) => (idx === i ? { ...r, ...p } : r)));
-  const remove = (i: number) => onChange(rows.filter((_, idx) => idx !== i));
-  const add = () => onChange([...rows, { label: "", value: "" }]);
 
-  function onDrop(target: number) {
+  const reloadDefs = () => listCustomFields().then(setDefs);
+
+  // On mount, promote any labels this person already has to global fields (so
+  // pre-existing / AI-created values still appear), then load the shared list.
+  useEffect(() => {
+    (async () => {
+      for (const v of values) if (v.label.trim()) await ensureCustomField(v.label.trim());
+      await reloadDefs();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const valueFor = (label: string) => values.find((v) => v.label === label)?.value ?? "";
+  const setValue = (label: string, value: string) =>
+    onChange([...values.filter((v) => v.label !== label), { label, value }]);
+
+  async function addField() {
+    const label = newLabel.trim();
+    setAdding(false);
+    setNewLabel("");
+    if (!label) return;
+    await ensureCustomField(label);
+    await reloadDefs();
+  }
+
+  async function removeField(def: CustomFieldDef) {
+    if (!confirm(`Remove the "${def.label}" field from all people? Existing values for it are deleted.`)) return;
+    await deleteCustomFieldDef(def.id);
+    onChange(values.filter((v) => v.label !== def.label));
+    await reloadDefs();
+  }
+
+  async function onDrop(target: number) {
     if (dragIdx === null || dragIdx === target) { setDragIdx(null); return; }
-    const next = rows.slice();
-    const [moved] = next.splice(dragIdx, 1);
-    next.splice(target, 0, moved);
+    const ids = defs.map((d) => d.id);
+    const [moved] = ids.splice(dragIdx, 1);
+    ids.splice(target, 0, moved);
     setDragIdx(null);
-    onChange(next);
+    await reorderCustomFields(ids);
+    await reloadDefs();
   }
 
   return (
     <div className="space-y-1.5">
-      {rows.map((c, i) => (
+      {defs.map((def, i) => (
         <div
-          key={i}
+          key={def.id}
           draggable
           onDragStart={() => setDragIdx(i)}
           onDragOver={(e) => e.preventDefault()}
@@ -477,13 +520,27 @@ function CustomFieldRows({ rows, onChange }: { rows: PersonCustomField[]; onChan
           className="flex items-center gap-2"
         >
           <GripVertical size={15} className="shrink-0 cursor-grab text-neutral-300" />
-          <input value={c.label} onChange={(e) => update(i, { label: e.target.value })} placeholder="Label (e.g. Eye color)" className={`w-40 ${inputCls}`} />
-          <input value={c.value} onChange={(e) => update(i, { value: e.target.value })} placeholder="Value (e.g. Blue)" className={`flex-1 ${inputCls}`} />
-          <button onClick={() => remove(i)} className="rounded p-1.5 text-neutral-400 hover:text-red-500" aria-label="Remove field"><X size={14} /></button>
+          <span className="w-40 shrink-0 truncate text-sm text-neutral-600 dark:text-neutral-300" title={def.label}>{def.label}</span>
+          <input value={valueFor(def.label)} onChange={(e) => setValue(def.label, e.target.value)} placeholder="Value" className={`flex-1 ${inputBase}`} />
+          <button onClick={() => removeField(def)} className="rounded p-1.5 text-neutral-400 hover:text-red-500" aria-label={`Remove ${def.label} field`}><X size={14} /></button>
         </div>
       ))}
-      {rows.length === 0 && <p className="text-xs text-neutral-400">Add your own fields — a label and a value. They export as vCard X- properties.</p>}
-      <Button variant="ghost" className="px-1" onClick={add}><span className="flex items-center gap-1"><Plus size={14} /> Add field</span></Button>
+      {defs.length === 0 && !adding && (
+        <p className="text-xs text-neutral-400">No custom fields yet. Fields you add here appear on every person.</p>
+      )}
+      {adding ? (
+        <input
+          autoFocus
+          value={newLabel}
+          onChange={(e) => setNewLabel(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") void addField(); if (e.key === "Escape") { setAdding(false); setNewLabel(""); } }}
+          onBlur={() => void addField()}
+          placeholder="New field name (e.g. Eye color)"
+          className={`w-full ${inputBase}`}
+        />
+      ) : (
+        <Button variant="ghost" className="px-1" onClick={() => setAdding(true)}><span className="flex items-center gap-1"><Plus size={14} /> Add field</span></Button>
+      )}
     </div>
   );
 }
