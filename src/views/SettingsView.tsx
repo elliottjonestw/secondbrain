@@ -7,11 +7,18 @@ export default function SettingsView() {
   const initial = getSettings();
   const [apiKey, setApiKey] = useState(initial.openaiApiKey);
   const [model, setModel] = useState(initial.openaiModel);
+  const [sttModel, setSttModel] = useState(initial.sttModel);
+  const [voiceReplies, setVoiceReplies] = useState(initial.voiceReplies);
   const [reveal, setReveal] = useState(false);
   const [saved, setSaved] = useState(false);
 
   function save() {
-    saveSettings({ openaiApiKey: apiKey.trim(), openaiModel: model.trim() || "gpt-4o-mini" });
+    saveSettings({
+      openaiApiKey: apiKey.trim(),
+      openaiModel: model.trim() || "gpt-4o-mini",
+      sttModel: sttModel.trim() || "whisper-1",
+      voiceReplies,
+    });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   }
@@ -60,6 +67,32 @@ export default function SettingsView() {
         <p className="mb-4 text-xs text-neutral-400">
           e.g. <code>gpt-4o-mini</code>, <code>gpt-4o</code>. Any chat-completions model your key can access.
         </p>
+
+        <div className="mb-4 border-t border-neutral-200 pt-4 dark:border-neutral-700">
+          <h3 className="mb-2 text-sm font-semibold">Voice</h3>
+
+          <label className="mb-3 flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={voiceReplies}
+              onChange={(e) => setVoiceReplies(e.target.checked)}
+              className="h-4 w-4 accent-blue-600"
+            />
+            Speak the assistant's replies aloud (uses your system voice)
+          </label>
+
+          <label className="mb-1 block text-sm font-medium">Speech-to-text model</label>
+          <input
+            value={sttModel}
+            onChange={(e) => setSttModel(e.target.value)}
+            placeholder="whisper-1"
+            spellCheck={false}
+            className="w-full rounded-lg border border-neutral-200 px-3 py-2 font-mono text-sm outline-none focus:border-blue-400 dark:border-neutral-600 dark:bg-neutral-800"
+          />
+          <p className="mt-1 text-xs text-neutral-400">
+            Used to transcribe voice input, e.g. <code>whisper-1</code> or <code>gpt-4o-transcribe</code>. Voice input sends audio to OpenAI; spoken replies are generated locally by your OS.
+          </p>
+        </div>
 
         <div className="flex items-center gap-3">
           <Button variant="primary" onClick={save}>Save</Button>

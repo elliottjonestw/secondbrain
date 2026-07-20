@@ -15,6 +15,7 @@ A local-first personal life-management desktop app: **Calendar, Reminders, To-Do
 | ICS import/export | `ical-generator` (export) + `ical.js` (import) |
 | File I/O | `tauri-plugin-dialog` + `tauri-plugin-fs` |
 | AI networking | `tauri-plugin-http` (bypasses webview CORS to reach OpenAI) |
+| Voice | `getUserMedia`/`MediaRecorder` + OpenAI Whisper (STT); Web `speechSynthesis` (TTS) |
 
 The Rust side is intentionally thin — just plugin registration + versioned migrations (`src-tauri/src/lib.rs`, `src-tauri/migrations/`). **All business logic lives in TypeScript** (`src/db.ts` is the only module that touches the DB), so a plain-browser or Windows build later is a packaging change, not a rewrite.
 
@@ -39,6 +40,15 @@ npm run build          # type-check + build the frontend bundle
 npm run tauri build    # produce a distributable macOS .app / .dmg
 ```
 
+### Packaged build (required for voice / microphone)
+
+`tauri dev` runs a bare binary with no merged `Info.plist`, so macOS WKWebView won't expose microphone access there — **voice input only works in a packaged build.** After finishing changes, build and launch the bundled app:
+
+```bash
+npm run tauri build
+open "src-tauri/target/release/bundle/macos/Second Brain.app"
+```
+
 ## Where your data lives
 
 A single SQLite file, `secondbrain.db`, in Tauri's app-data directory:
@@ -54,7 +64,7 @@ Migrations are versioned and idempotent (managed by `tauri-plugin-sql`); they ru
 - **Reminders** — Apple-Reminders-style with a filter sidebar (**All / Scheduled / Flagged / Completed**, each with live counts). Due date + optional alert time, recurrence, priority, link to a to-do. Native OS notifications fire when due (polled once a minute while the app is open).
 - **To-Do** — multiple lists (defaults: **Personal**, **Work**), inline list creation, subtasks, priority, due dates, drag-to-reorder, and "Convert to event". Incomplete tasks always sort above completed ones.
 - **Notes** — markdown with live preview, pin, FTS5 full-text search. The editor holds local state and debounces saves, so typing stays smooth.
-- **Assistant** — an AI chat that answers questions about your data and can create/update items (see below).
+- **Assistant** — an AI chat that answers questions about your data and can create/update items, by typing **or by voice** (see below).
 - **Settings** — enter your OpenAI API key + model.
 - **Integration** — shared tagging and generic `links` (any item ↔ any item) across all four types; global search across everything.
 
@@ -90,6 +100,12 @@ An optional assistant that answers questions about your events, to-dos, reminder
 
 **Built to scale:** every read tool is filtered and paginated — bounded `limit` (default 25, max 100) — and returns a `total` count and `truncated` flag so the model knows when there's more and narrows its filters instead of assuming it saw everything. Nothing loads a whole table blindly: searches push filters into SQL, notes use the FTS index, and `search_events` only fully expands *recurring* events while pre-filtering non-recurring ones by the requested window. Live tool activity ("Checking the calendar…", "Creating a to-do…") is shown while the assistant works.
 
+**Voice mode:** the Assistant has a mic button (push-to-talk). Click it to record, click again to stop — your speech is transcribed with **OpenAI Whisper** (`whisper-1` by default) and sent as a normal turn, and the reply is read back aloud using your **operating system's built-in voice** (Web Speech Synthesis). Voice is just an I/O layer around the same tool-calling loop, so it can answer *and* create/update items by voice. Toggle spoken replies and choose the transcription model in **Settings → Voice**.
+
+- Voice **input** sends audio to OpenAI (billed per minute); spoken **replies** are generated locally by your OS (free, offline).
+- **Voice input requires a packaged build** (`npm run tauri build`), not `tauri dev`. macOS WKWebView only exposes `navigator.mediaDevices` when the running app is recognized as mic-capable, which needs the `NSMicrophoneUsageDescription` from the merged `src-tauri/Info.plist` — present only in a bundled `.app`. In the packaged app, the first voice attempt triggers the system mic prompt. In `tauri dev` the mic button shows a "not available in this environment" error.
+- Recording/transcription/TTS all use standard web APIs (`getUserMedia`/`MediaRecorder`/`speechSynthesis`), so this stays portable to the browser/Windows builds.
+
 **Write behavior & safety:**
 - **No delete** — there are no delete tools by design; every change the assistant makes is reversible by you in the app. Deletions are yours to do manually.
 - The system prompt instructs the model to look up an item's id before updating it, to **ask a clarifying question when a request is ambiguous** rather than guess, and to briefly **confirm what it created or updated** afterwards.
@@ -122,8 +138,9 @@ src/
     ics.ts              # ICS import/export
     notifications.ts    # due-item notification poller
     format.ts           # date helpers
-    settings.ts         # app settings (OpenAI key/model) in localStorage
+    settings.ts         # app settings (OpenAI key/model, voice) in localStorage
     ai.ts               # AI assistant: read + write tools + agentic loop
+    voice.ts            # mic recording, Whisper transcription, system TTS
     demo.ts             # reset + seed demo data
   components/
     ui.tsx              # Modal, Button, priority helpers
@@ -133,6 +150,7 @@ src/
                         #   Assistant, Settings, Search
 src-tauri/
   src/lib.rs            # plugin wiring + migration registration (thin)
+  Info.plist           # macOS NSMicrophoneUsageDescription (voice input)
   migrations/
     001_init.sql            # initial schema
     002_default_lists.sql   # seed Personal/Work, drop Inbox
@@ -148,6 +166,7 @@ See [CLAUDE.md](CLAUDE.md) for architecture principles, conventions, and the got
 ## Notes / current limitations
 
 - The AI assistant can read and create/update data (no delete) and requires your own OpenAI API key. It acts without a per-change confirmation dialog — it relies on the model to confirm ambiguous requests in chat first — so review changes it reports. Replies are non-streaming (the whole answer appears once ready).
+- Voice input is **push-to-talk** (click to start/stop) — no hands-free/continuous mode or silence auto-stop yet. It **only works in a packaged build** (`tauri dev` can't access the mic — see the Setup section), needs microphone permission, and sends audio to OpenAI for transcription. Spoken-reply voice quality depends on the OS's installed voices.
 - Desktop notifications are **poll-based** (checked every 60s while the app is open) — the plugin has no cross-platform "schedule for later" API. Alerts won't fire while the app is closed.
 - Drag-to-reschedule is day-granularity in month view and disabled for recurring series (dragging a single instance is ambiguous; edit the series, or use "Skip this day").
 - No timezone handling beyond the machine's local zone (fine for single-user local use; revisit before CalDAV sync).

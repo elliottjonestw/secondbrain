@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { Send, Sparkles, Trash2, Settings as SettingsIcon } from "lucide-react";
+import { Send, Sparkles, Trash2, Settings as SettingsIcon, Mic, Square, Volume2, VolumeX } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { askAssistant, ChatMessage } from "../lib/ai";
-import { hasApiKey } from "../lib/settings";
+import { hasApiKey, getSettings } from "../lib/settings";
+import {
+  startRecording, transcribe, speak, stopSpeaking, isSpeechSupported, isRecordingSupported, Recording,
+} from "../lib/voice";
 import { Button } from "../components/ui";
 
 const SUGGESTIONS = [
@@ -16,20 +19,30 @@ const SUGGESTIONS = [
 export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(false);   // assistant thinking / transcribing
   const [status, setStatus] = useState("Thinking…");
+  const [recording, setRecording] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [keyed, setKeyed] = useState(hasApiKey());
+  const recRef = useRef<Recording | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const voiceOutput = isSpeechSupported();
 
   useEffect(() => { setKeyed(hasApiKey()); }, []);
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, loading]);
+  // Stop any speech when leaving the page.
+  useEffect(() => () => stopSpeaking(), []);
 
-  async function send(text: string) {
+  const busy = loading || recording;
+
+  /** Core turn: append the user text, run the assistant, optionally speak the reply. */
+  async function deliver(text: string, spoken: boolean) {
     const q = text.trim();
-    if (!q || loading) return;
+    if (!q) return;
     setError(null);
     const next: ChatMessage[] = [...messages, { role: "user", content: q }];
     setMessages(next);
@@ -39,12 +52,74 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
     try {
       const reply = await askAssistant(next, { onStatus: setStatus });
       setMessages([...next, { role: "assistant", content: reply }]);
+      if (spoken && voiceOutput && getSettings().voiceReplies) {
+        setSpeaking(true);
+        speak(reply);
+        // Poll speechSynthesis to clear the speaking indicator when done.
+        const timer = window.setInterval(() => {
+          if (!window.speechSynthesis.speaking) { setSpeaking(false); window.clearInterval(timer); }
+        }, 300);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      // keep the user's message visible; drop the failed assistant turn
     } finally {
       setLoading(false);
     }
+  }
+
+  function submitTyped() {
+    if (busy || !input.trim()) return;
+    void deliver(input, false);
+  }
+
+  /** Mic button: click to start recording, click again to stop → transcribe → send. */
+  async function toggleMic() {
+    if (recording) {
+      const rec = recRef.current;
+      recRef.current = null;
+      setRecording(false);
+      if (!rec) return;
+      setLoading(true);
+      setStatus("Transcribing…");
+      try {
+        const blob = await rec.stop();
+        const text = await transcribe(blob);
+        setLoading(false);
+        if (!text) { setError("Didn't catch that — try again."); return; }
+        await deliver(text, true); // spoken reply for voice turns
+      } catch (e) {
+        setLoading(false);
+        setError(e instanceof Error ? e.message : String(e));
+      }
+      return;
+    }
+    // start
+    if (loading) return;
+    setError(null);
+    if (!isRecordingSupported()) {
+      setError(
+        "Voice input isn't available in this environment — the webview doesn't expose microphone access " +
+        "(navigator.mediaDevices / MediaRecorder is missing). Try a packaged build, or check the platform's media permissions.",
+      );
+      return;
+    }
+    stopSpeaking();
+    setSpeaking(false);
+    try {
+      recRef.current = await startRecording();
+      setRecording(true);
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? `Couldn't access the microphone: ${e.message}`
+          : "Couldn't access the microphone. Check the app's microphone permission.",
+      );
+    }
+  }
+
+  function stopVoice() {
+    stopSpeaking();
+    setSpeaking(false);
   }
 
   if (!keyed) {
@@ -55,7 +130,7 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
           <h1 className="text-xl font-bold">AI Assistant</h1>
           <p className="mt-1 max-w-sm text-sm text-neutral-500">
             Add your OpenAI API key in Settings to ask questions about your events, to-dos,
-            reminders, and notes.
+            reminders, and notes — by typing or by voice.
           </p>
         </div>
         <Button variant="primary" onClick={() => goTo("settings")}>
@@ -72,9 +147,14 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
           <Sparkles size={18} className="text-blue-500" /> Assistant
         </h1>
         <div className="flex items-center gap-3">
+          {speaking && (
+            <Button variant="ghost" onClick={stopVoice}>
+              <span className="flex items-center gap-1.5"><VolumeX size={14} /> Stop</span>
+            </Button>
+          )}
           <span className="text-xs text-neutral-400">Asks and edits · works on your data</span>
           {messages.length > 0 && (
-            <Button variant="ghost" onClick={() => { setMessages([]); setError(null); }}>
+            <Button variant="ghost" onClick={() => { setMessages([]); setError(null); stopVoice(); }}>
               <span className="flex items-center gap-1.5"><Trash2 size={14} /> Clear</span>
             </Button>
           )}
@@ -85,12 +165,14 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
         <div className="mx-auto max-w-2xl space-y-4">
           {messages.length === 0 && (
             <div className="pt-8 text-center">
-              <p className="mb-4 text-sm text-neutral-400">Ask me anything about your data. For example:</p>
+              <p className="mb-4 text-sm text-neutral-400">
+                Ask me anything about your data — type below or tap the mic to talk. For example:
+              </p>
               <div className="mx-auto flex max-w-md flex-col gap-2">
                 {SUGGESTIONS.map((s) => (
                   <button
                     key={s}
-                    onClick={() => send(s)}
+                    onClick={() => deliver(s, false)}
                     className="rounded-lg border border-neutral-200 px-3 py-2 text-left text-sm hover:border-blue-400 hover:bg-blue-50 dark:border-neutral-700 dark:hover:bg-blue-900/20"
                   >
                     {s}
@@ -137,26 +219,49 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
       </div>
 
       <div className="border-t border-neutral-200 p-4 dark:border-neutral-700">
+        {recording && (
+          <div className="mx-auto mb-2 flex max-w-2xl items-center gap-2 text-sm text-red-500">
+            <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-red-500" />
+            Listening… tap the mic to stop
+          </div>
+        )}
         <div className="mx-auto flex max-w-2xl items-end gap-2">
+          <button
+            onClick={() => void toggleMic()}
+            disabled={loading}
+            className={`rounded-xl p-2.5 text-white disabled:opacity-40 ${
+              recording ? "bg-red-600 hover:bg-red-700" : "bg-neutral-500 hover:bg-neutral-600"
+            }`}
+            aria-label={recording ? "Stop recording" : "Start voice input"}
+            title={recording ? "Stop recording" : "Talk to the assistant"}
+          >
+            {recording ? <Square size={18} /> : <Mic size={18} />}
+          </button>
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(input); }
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitTyped(); }
             }}
             rows={1}
-            placeholder="Ask about your calendar, tasks, notes…"
-            className="max-h-40 flex-1 resize-none rounded-xl border border-neutral-200 px-4 py-2.5 text-sm outline-none focus:border-blue-400 dark:border-neutral-600 dark:bg-neutral-800"
+            disabled={recording}
+            placeholder={recording ? "Listening…" : "Ask about your calendar, tasks, notes…"}
+            className="max-h-40 flex-1 resize-none rounded-xl border border-neutral-200 px-4 py-2.5 text-sm outline-none focus:border-blue-400 disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800"
           />
           <button
-            onClick={() => void send(input)}
-            disabled={loading || !input.trim()}
+            onClick={submitTyped}
+            disabled={busy || !input.trim()}
             className="rounded-xl bg-blue-600 p-2.5 text-white hover:bg-blue-700 disabled:opacity-40"
             aria-label="Send"
           >
             <Send size={18} />
           </button>
         </div>
+        {voiceOutput && (
+          <div className="mx-auto mt-2 flex max-w-2xl items-center gap-1 text-xs text-neutral-400">
+            <Volume2 size={12} /> Voice replies {getSettings().voiceReplies ? "on" : "off"} — change in Settings
+          </div>
+        )}
       </div>
     </div>
   );
