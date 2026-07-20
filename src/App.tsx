@@ -11,7 +11,7 @@ import SearchView from "./views/SearchView";
 import AssistantView, { UiMessage } from "./views/AssistantView";
 import SettingsView from "./views/SettingsView";
 import type { NavTarget } from "./types";
-import { startReminderPoller } from "./lib/notifications";
+import { startReminderPoller, resetNotificationState } from "./lib/notifications";
 import { db } from "./db";
 import { resetAndSeedDemo } from "./lib/demo";
 import { Modal, Button } from "./components/ui";
@@ -123,6 +123,9 @@ export default function App() {
       // The chat outlives view remounts now, so the reset has to clear it —
       // it would otherwise reference items that no longer exist.
       setChat([]);
+      // Same reasoning for the reminder poller's "already fired" memory: the
+      // ids it remembers now refer to deleted/replaced rows.
+      resetNotificationState();
       clearTargets();
       setResetNonce((n) => n + 1); // remount views so they pick up the new data
     } finally {

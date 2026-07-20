@@ -343,7 +343,7 @@ function TimeGrid({
                 )}
               </div>
               {/* hour cells */}
-              <div className="relative" style={{ height: 24 * HOUR_PX }}>
+              <div className="relative overflow-hidden" style={{ height: 24 * HOUR_PX }}>
                 {hours.map((h) => (
                   <div
                     key={h}

@@ -141,6 +141,8 @@ function upcomingBirthdays(people: PersonRow[], within: number): UpcomingBirthda
     out.push({
       person,
       days,
+      // Year is a placeholder — fmtMonthDay renders month/day only. 2000 (not
+      // 1970) so a Feb 29 birthday still resolves to a real date.
       dateLabel: fmtMonthDay(new Date(2000, month - 1, day)),
       awayLabel: fmtRelativeDays(days),
     });

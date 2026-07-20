@@ -17,6 +17,19 @@ const CHECK_INTERVAL_MS = 60_000;
 // Ids we've already notified this session, so we don't nag every minute.
 const notified = new Set<string>();
 
+/**
+ * Clear the "already notified" memory.
+ *
+ * The demo reset wipes every reminder/todo row and reseeds fresh ones, so any
+ * id the poller remembers firing this session no longer refers to the same
+ * item (and may not refer to any item). Without this, a reseeded reminder
+ * sharing an id with one that already fired would silently never ring again
+ * for the rest of the session.
+ */
+export function resetNotificationState(): void {
+  notified.clear();
+}
+
 export async function ensureNotificationPermission(): Promise<boolean> {
   let granted = await isPermissionGranted();
   if (!granted) {

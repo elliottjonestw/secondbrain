@@ -125,7 +125,10 @@ export async function discoverAccount(
   account: CalDavAccount,
   previous?: CalDavCalendar[],
 ): Promise<CalDavAccount> {
-  const entry = account.provider === "icloud" ? ICLOUD_CALDAV_URL : ICLOUD_CALDAV_URL;
+  // iCloud is the only supported provider today, so its well-known endpoint
+  // is always the entry point. When other CalDAV providers land, this becomes
+  // a real branch (e.g. Fastmail/Generic take the user-typed URL directly).
+  const entry = ICLOUD_CALDAV_URL;
   const principalUrl = await findPrincipal(account, entry);
   const calendarHomeUrl = await findCalendarHome(account, principalUrl);
   const found = await listCollections(account, calendarHomeUrl);

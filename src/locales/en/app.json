@@ -224,7 +224,8 @@
     "empty": "No reminders here.",
     "dueLabel": "Due",
     "alertAt": "Alert at",
-    "linkedTodo": "Linked to-do"
+    "linkedTodo": "Linked to-do",
+    "noLinkedTodo": "None"
   },
   "event": {
     "repeat": "Repeat",
@@ -267,6 +268,7 @@
     "newNote": "New note",
     "searchPlaceholder": "Search notes…",
     "noneFound": "No notes found.",
+    "noContent": "No content",
     "titlePlaceholder": "Title",
     "bodyPlaceholder": "Write in markdown…",
     "confirmDelete": "Delete note?",
@@ -290,6 +292,7 @@
     "notHeard": "Didn't catch that — try again.",
     "micUnavailable": "Voice input isn't available in this environment — the webview doesn't expose microphone access. Try a packaged build, or check the platform's media permissions.",
     "micDenied": "Couldn't access the microphone. Check the app's microphone permission.",
+    "micError": "Couldn't access the microphone: {{message}}",
     "stopRecording": "Stop recording",
     "startVoice": "Start voice input",
     "talk": "Talk to the assistant",
@@ -343,6 +346,7 @@
     "deleteNote": "Deleting a note…",
     "deletePerson": "Deleting a contact…",
     "deleteList": "Deleting a list…",
-    "working": "Working…"
+    "working": "Working…",
+    "thinking": "Thinking…"
   }
 }

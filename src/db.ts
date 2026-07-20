@@ -377,7 +377,9 @@ function ftsMatchExpr(query: string): string | null {
   return terms.map((t) => `"${t}"`).join(" AND ");
 }
 
-function queryTerms(query: string): string[] {
+/** Split a free-text query into search terms. Shared with ai.ts's search tools
+ *  so every search in the app agrees on what a "term" is. */
+export function queryTerms(query: string): string[] {
   return query.split(/\s+/).map((t) => t.replace(/"/g, "")).filter(Boolean);
 }
 
@@ -451,12 +453,19 @@ export async function getPerson(id: string): Promise<PersonRow | undefined> {
 export async function searchPeople(query: string): Promise<PersonRow[]> {
   const q = query.trim();
   if (!q) return listPeople();
-  const like = `%${q}%`;
+
+  // AND the terms, like searchNotes. Matching the query as one literal
+  // substring meant "Sam Acme" found nobody whose name is Sam and whose
+  // organization is Acme — the fields are separate columns, so the phrase
+  // can never appear whole in any one of them.
+  const terms = queryTerms(q);
+  if (terms.length === 0) return listPeople();
+  const FIELDS = ["full_name", "nickname", "organization", "emails", "phones"];
+  const clause = terms.map(() => `(${FIELDS.map((f) => `${f} LIKE ?`).join(" OR ")})`).join(" AND ");
+  const params = terms.flatMap((t) => FIELDS.map(() => `%${t}%`));
   const rows = await (await db()).select<PersonRow[]>(
-    `SELECT * FROM people
-     WHERE full_name LIKE ? OR nickname LIKE ? OR organization LIKE ?
-        OR emails LIKE ? OR phones LIKE ?`,
-    [like, like, like, like, like],
+    `SELECT * FROM people WHERE ${clause}`,
+    params,
   );
   return sortPeople(rows);
 }

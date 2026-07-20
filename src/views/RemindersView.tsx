@@ -211,7 +211,7 @@ function ReminderDetail({ reminder, onClose, onSaved }: { reminder: ReminderRow;
         <label className="block text-sm">
           <span className="mb-1 block text-xs text-neutral-500">{t("reminders.linkedTodo")}</span>
           <select value={linkedTodo} onChange={(e) => setLinkedTodo(e.target.value)} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700">
-            <option value="">{t("priority.0")}</option>
+            <option value="">{t("reminders.noLinkedTodo")}</option>
             {todos.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
           </select>
         </label>

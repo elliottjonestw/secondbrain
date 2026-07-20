@@ -60,7 +60,7 @@ export default function NotesView({ onChange, initialId }: { onChange: () => voi
                 {n.title || t("common.untitled")}
               </div>
               <div className="truncate text-xs text-neutral-400">
-                {n.body?.slice(0, 60) || "No content"}
+                {(n.body ?? "").replace(/\s+/g, " ").trim().slice(0, 60) || t("notes.noContent")}
               </div>
             </button>
           ))}

@@ -222,7 +222,8 @@
     "empty": "這裡沒有提醒事項。",
     "dueLabel": "到期",
     "alertAt": "提醒時間",
-    "linkedTodo": "連結的待辦事項"
+    "linkedTodo": "連結的待辦事項",
+    "noLinkedTodo": "無"
   },
   "event": {
     "repeat": "重複",
@@ -265,6 +266,7 @@
     "newNote": "新增備忘錄",
     "searchPlaceholder": "搜尋備忘錄…",
     "noneFound": "找不到備忘錄。",
+    "noContent": "沒有內容",
     "titlePlaceholder": "標題",
     "bodyPlaceholder": "以 Markdown 撰寫…",
     "confirmDelete": "要刪除這則備忘錄嗎？",
@@ -288,6 +290,7 @@
     "notHeard": "沒有聽清楚 —— 請再試一次。",
     "micUnavailable": "此環境無法使用語音輸入 —— webview 未提供麥克風存取。請改用打包後的應用程式，或檢查系統的媒體權限。",
     "micDenied": "無法存取麥克風。請檢查應用程式的麥克風權限。",
+    "micError": "無法存取麥克風：{{message}}",
     "stopRecording": "停止錄音",
     "startVoice": "開始語音輸入",
     "talk": "與助理對話",
@@ -341,6 +344,7 @@
     "deleteNote": "刪除備忘錄中…",
     "deletePerson": "刪除聯絡人中…",
     "deleteList": "刪除清單中…",
-    "working": "處理中…"
+    "working": "處理中…",
+    "thinking": "思考中…"
   }
 }

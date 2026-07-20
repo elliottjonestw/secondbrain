@@ -16,10 +16,10 @@ import i18next from "i18next";
 // Deliberately date-fns' unlocalized `format`, not lib/format's locale-aware
 // wrapper: these strings go into the model's prompt, which stays English
 // regardless of the UI language. Localizing them would only confuse the model.
-import { format } from "date-fns";
+import { format, startOfDay } from "date-fns";
 import type { EventRow, ItemRef, ItemType } from "../types";
 import {
-  db, listLists, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes,
+  db, listLists, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
   upsertTodo, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
   deleteTodo, deleteReminder, deleteNote, deleteList,
   listPeople, searchPeople, upsertPerson, deletePerson, createLink, deleteLink,
@@ -37,6 +37,13 @@ import { getSettings } from "./settings";
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  /**
+   * For assistant turns: the items that were shown as cards. Stripped from the
+   * content sent to the model, but summarised into a reference note (see
+   * `shownItemsNote`) so a follow-up like "delete it" resolves to a concrete id
+   * instead of forcing the model to guess or re-search.
+   */
+  items?: ItemRef[];
 }
 
 // Internal OpenAI wire-format message (includes tool plumbing the UI never sees).
@@ -130,6 +137,57 @@ async function resolveListId(name: unknown): Promise<string | null> {
   return lists.find((l) => l.name.toLowerCase() === name.trim().toLowerCase())?.id ?? null;
 }
 
+/**
+ * Match rows against a free-text query, widening the net if a strict match
+ * finds nothing.
+ *
+ * Two failures motivated this. Matching the whole query as one substring meant
+ * "lunch with Alex meeting" found nothing, because the user's phrasing is never
+ * the stored title word-for-word — so terms are matched individually and ANDed.
+ * But ANDing alone still misses that example ("meeting" appears nowhere in
+ * "Lunch with Alex"), so when nothing matches every term we fall back to
+ * anything matching at least one, best-first.
+ *
+ * `partial` is reported to the model so it confirms which item was meant
+ * instead of acting on a loose match — this feeds delete confirmations.
+ * The sort is stable, so equally-scored rows keep their incoming order
+ * (chronological, for events).
+ */
+function matchQuery<T>(
+  rows: T[],
+  query: string,
+  fields: (row: T) => (string | null | undefined)[],
+): { rows: T[]; partial: boolean } {
+  const terms = queryTerms(query.trim().toLowerCase());
+  if (terms.length === 0) return { rows, partial: false };
+
+  const scored = rows.map((row) => {
+    const hay = fields(row).filter(Boolean).join(" ").toLowerCase();
+    return { row, hits: terms.filter((t) => hay.includes(t)).length };
+  });
+
+  const strict = scored.filter((s) => s.hits === terms.length);
+  if (strict.length > 0) return { rows: strict.map((s) => s.row), partial: false };
+
+  const loose = scored.filter((s) => s.hits > 0).sort((a, b) => b.hits - a.hits);
+  return { rows: loose.map((s) => s.row), partial: loose.length > 0 };
+}
+
+/** Told to the model when a search had to fall back to loose matching. */
+const PARTIAL_MATCH_NOTE =
+  "No item matched every word of the query; these matched some of it, closest first. " +
+  "Confirm which one the user means before acting on it.";
+
+/** SQL prefilter matching ANY term, so the JS ranking above has candidates to
+ *  work with without loading the whole table. */
+function anyTermClause(terms: string[], columns: string[]): { clause: string; params: string[] } {
+  const one = `(${columns.map((c) => `${c} LIKE ?`).join(" OR ")})`;
+  return {
+    clause: `(${terms.map(() => one).join(" OR ")})`,
+    params: terms.flatMap((t) => columns.map(() => `%${t}%`)),
+  };
+}
+
 /** item_ids that carry a given tag name, for a given item type. */
 async function idsForTag(type: string, tagName: string): Promise<Set<string>> {
   const d = await db();
@@ -161,7 +219,12 @@ const TOOLS = [
       parameters: {
         type: "object",
         properties: {
-          query: { type: "string", description: "Case-insensitive text to match in the title or notes." },
+          query: {
+            type: "string",
+            description:
+              "Distinctive keywords to match in the title or notes — not the user's whole phrase. Every word must " +
+              "match, so extra words the user added shrink the results.",
+          },
           list: { type: "string", description: "List name to filter by (e.g. 'Work')." },
           status: { type: "string", enum: ["all", "active", "completed"], description: "Default 'active'." },
           min_priority: { type: "integer", description: "0 none, 1 low, 2 medium, 3 high." },
@@ -178,13 +241,19 @@ const TOOLS = [
     function: {
       name: "search_events",
       description:
-        "Get calendar events within a date range, across every visible calendar (the built-in one and any connected Apple/CalDAV calendars). Recurring events are expanded into concrete occurrences. If start/end are omitted, defaults to the next 30 days. Connected calendars are always searched by date window — there is no keyword search over their whole history, so widen start/end rather than expecting an unbounded search.",
+        "Get calendar events within a date range, across every visible calendar (the built-in one and any connected Apple/CalDAV calendars). Recurring events are expanded into concrete occurrences. If start/end are omitted, defaults to today (from midnight, so earlier events today are included) through the next 30 days. To find something in the PAST, pass an explicit earlier `start` — the default window does not look back beyond today. Connected calendars are always searched by date window — there is no keyword search over their whole history, so widen start/end rather than expecting an unbounded search.",
       parameters: {
         type: "object",
         properties: {
           start: { type: "string", description: "ISO date/datetime for the window start." },
           end: { type: "string", description: "ISO date/datetime for the window end." },
-          query: { type: "string", description: "Case-insensitive text to match in the summary/description/location." },
+          query: {
+            type: "string",
+            description:
+              "Distinctive keywords to match in the summary/description/location — not the user's whole phrase. " +
+              "Prefer \"Alex\" over \"lunch with Alex meeting\": every word must match, so extra words the user " +
+              "added (\"meeting\", \"appointment\") shrink the results.",
+          },
           calendar: { type: "string", description: "Limit to one calendar by name (see list_calendars)." },
           tag: { type: "string", description: "Tag name (without #). Only events in the built-in calendar carry tags." },
           limit: { type: "integer", description: `Max occurrences (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}).` },
@@ -209,7 +278,12 @@ const TOOLS = [
       parameters: {
         type: "object",
         properties: {
-          query: { type: "string", description: "Case-insensitive text to match in the title or notes." },
+          query: {
+            type: "string",
+            description:
+              "Distinctive keywords to match in the title or notes — not the user's whole phrase. Every word must " +
+              "match, so extra words the user added shrink the results.",
+          },
           status: { type: "string", enum: ["all", "active", "completed"], description: "Default 'active'." },
           flagged: { type: "boolean", description: "Only priority > 0 when true." },
           due_before: { type: "string", description: "ISO date/datetime." },
@@ -229,7 +303,12 @@ const TOOLS = [
       parameters: {
         type: "object",
         properties: {
-          query: { type: "string", description: "Keywords for full-text search." },
+          query: {
+            type: "string",
+            description:
+              "Distinctive keywords for full-text search — not the user's whole phrase. All terms must match, " +
+              "so \"Beijing budget\" works where \"the budget note about Beijing\" finds nothing.",
+          },
           pinned: { type: "boolean", description: "Only pinned notes when true." },
           limit: { type: "integer", description: `Max results (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}).` },
         },
@@ -683,10 +762,13 @@ async function toolSearchTodos(args: Record<string, unknown>) {
   if (status === "active") where.push("t.completed = 0");
   else if (status === "completed") where.push("t.completed = 1");
 
-  if (typeof args.query === "string" && args.query.trim()) {
-    where.push("(t.title LIKE ? OR t.notes LIKE ?)");
-    const like = `%${args.query.trim()}%`;
-    params.push(like, like);
+  // Prefilter on ANY term so SQL still does the narrowing; matchQuery below
+  // decides between a strict all-term match and a ranked partial one.
+  const queryTermList = typeof args.query === "string" ? queryTerms(args.query.trim()) : [];
+  if (queryTermList.length > 0) {
+    const { clause, params: p } = anyTermClause(queryTermList, ["t.title", "t.notes"]);
+    where.push(clause);
+    params.push(...p);
   }
   if (typeof args.list === "string" && args.list.trim()) {
     where.push("l.name = ?");
@@ -710,11 +792,16 @@ async function toolSearchTodos(args: Record<string, unknown>) {
      ${clause} ORDER BY t.completed ASC, t.due_at IS NULL, t.due_at ASC`,
     params,
   );
-  const filtered = tagIds ? rows.filter((r) => tagIds!.has(r.id)) : rows;
+  const tagged = tagIds ? rows.filter((r) => tagIds!.has(r.id)) : rows;
+  const m = queryTermList.length > 0
+    ? matchQuery(tagged, args.query as string, (t) => [t.title, t.notes])
+    : { rows: tagged, partial: false };
+  const filtered = m.rows;
   const limit = clampLimit(args.limit);
   return {
     total: filtered.length,
     truncated: filtered.length > limit,
+    partial_match: m.partial ? PARTIAL_MATCH_NOTE : undefined,
     results: filtered.slice(0, limit).map((t) => ({
       id: t.id, title: t.title, list: t.list_name, completed: !!t.completed,
       due_at: toLocalIso(t.due_at), priority: PRIORITY[t.priority] ?? t.priority,
@@ -739,7 +826,10 @@ function toolListCalendars() {
 }
 
 async function toolSearchEvents(args: Record<string, unknown>) {
-  const start = parseDate(args.start) ?? new Date();
+  // Default window starts at midnight, not `new Date()`. Defaulting to "now"
+  // hid everything earlier the same day, so asking about a 12:30 lunch at 2pm
+  // returned nothing and the assistant reported it didn't exist.
+  const start = parseDate(args.start) ?? startOfDay(new Date());
   const end = parseDate(args.end, true) ?? new Date(Date.now() + 30 * 864e5);
 
   // Scale-conscious pre-filter for the local calendar: always load recurring
@@ -766,12 +856,13 @@ async function toolSearchEvents(args: Record<string, unknown>) {
     }
     occs = occs.filter((o) => o.event.calendarId === cal.id);
   }
+  let partial = false;
   if (typeof args.query === "string" && args.query.trim()) {
-    const q = args.query.trim().toLowerCase();
-    occs = occs.filter((o) =>
-      [o.event.summary, o.event.description, o.event.location]
-        .some((f) => (f ?? "").toLowerCase().includes(q)),
-    );
+    const m = matchQuery(occs, args.query, (o) => [
+      o.event.summary, o.event.description, o.event.location, o.event.categories,
+    ]);
+    occs = m.rows;
+    partial = m.partial;
   }
   if (typeof args.tag === "string" && args.tag.trim()) {
     const tagIds = await idsForTag("event", args.tag.trim());
@@ -783,6 +874,7 @@ async function toolSearchEvents(args: Record<string, unknown>) {
     range: { start: toLocalIso(start.toISOString()), end: toLocalIso(end.toISOString()) },
     total: occs.length,
     truncated: occs.length > limit,
+    partial_match: partial ? PARTIAL_MATCH_NOTE : undefined,
     // Surfaced so the user can be told which calendars didn't answer rather
     // than being shown a confidently incomplete schedule.
     unavailable_calendars: remote.errors.length ? remote.errors : undefined,
@@ -815,10 +907,11 @@ async function toolSearchReminders(args: Record<string, unknown>) {
   if (status === "active") where.push("completed = 0");
   else if (status === "completed") where.push("completed = 1");
 
-  if (typeof args.query === "string" && args.query.trim()) {
-    where.push("(title LIKE ? OR notes LIKE ?)");
-    const like = `%${args.query.trim()}%`;
-    params.push(like, like);
+  const queryTermList = typeof args.query === "string" ? queryTerms(args.query.trim()) : [];
+  if (queryTermList.length > 0) {
+    const { clause, params: p } = anyTermClause(queryTermList, ["title", "notes"]);
+    where.push(clause);
+    params.push(...p);
   }
   if (args.flagged === true) where.push("priority > 0");
   const dueBefore = parseDate(args.due_before, true);
@@ -834,11 +927,16 @@ async function toolSearchReminders(args: Record<string, unknown>) {
     `SELECT * FROM reminders ${clause} ORDER BY completed ASC, COALESCE(remind_at, due_at) IS NULL, COALESCE(remind_at, due_at) ASC`,
     params,
   );
-  const filtered = tagIds ? rows.filter((r) => tagIds!.has(r.id)) : rows;
+  const tagged = tagIds ? rows.filter((r) => tagIds!.has(r.id)) : rows;
+  const m = queryTermList.length > 0
+    ? matchQuery(tagged, args.query as string, (r) => [r.title, r.notes])
+    : { rows: tagged, partial: false };
+  const filtered = m.rows;
   const limit = clampLimit(args.limit);
   return {
     total: filtered.length,
     truncated: filtered.length > limit,
+    partial_match: m.partial ? PARTIAL_MATCH_NOTE : undefined,
     results: filtered.slice(0, limit).map((r) => ({
       id: r.id, title: r.title, completed: !!r.completed,
       due_at: toLocalIso(r.due_at), remind_at: toLocalIso(r.remind_at), repeats: r.rrule || undefined,
@@ -920,6 +1018,19 @@ function parseCol<T>(json: string | null): T[] | undefined {
 async function toolSearchPeople(args: Record<string, unknown>) {
   const q = typeof args.query === "string" ? args.query.trim() : "";
   let rows = q ? await searchPeople(q) : await listPeople();
+
+  // searchPeople ANDs the terms. If that found nobody, retry loosely so a
+  // query carrying an extra word ("Sam from accounting") still turns them up.
+  // Only on the miss path, and the contacts table is small enough to scan.
+  let partial = false;
+  if (q && rows.length === 0 && queryTerms(q).length > 1) {
+    const m = matchQuery(await listPeople(), q, (p) => [
+      p.full_name, p.nickname, p.organization, p.title, p.emails, p.phones,
+    ]);
+    rows = m.rows;
+    partial = m.partial;
+  }
+
   if (typeof args.tag === "string" && args.tag.trim()) {
     const tagIds = await idsForTag("person", args.tag.trim());
     rows = rows.filter((r) => tagIds.has(r.id));
@@ -928,6 +1039,7 @@ async function toolSearchPeople(args: Record<string, unknown>) {
   return {
     total: rows.length,
     truncated: rows.length > limit,
+    partial_match: partial ? PARTIAL_MATCH_NOTE : undefined,
     results: rows.slice(0, limit).map((p) => ({
       id: p.id,
       full_name: p.full_name,
@@ -1074,12 +1186,29 @@ async function toolUpdateEvent(args: Record<string, unknown>) {
   if (!ev) return { error: `No event found with id ${args.id}.` };
 
   // Partial merge: "field" in args distinguishes "clear it" from "leave it".
+  // Datetimes differ from the other fields: a present-but-unparseable value is
+  // a model error, not a "leave it alone" — otherwise the model would think
+  // it moved an event that didn't move (matching toolCreateEvent's behavior).
   const patch: Partial<EventDraft> = {};
   if ("summary" in args) patch.summary = String(args.summary);
   if ("description" in args) patch.description = args.description as string | null;
   if ("location" in args) patch.location = args.location as string | null;
-  if ("start" in args) patch.dtstart = asIso(args.start) ?? ev.dtstart;
-  if ("end" in args) patch.dtend = asIso(args.end);
+  if ("start" in args) {
+    const iso = asIso(args.start);
+    if (!iso) return { error: "A valid ISO start is required." };
+    patch.dtstart = iso;
+  }
+  if ("end" in args) {
+    // `null` is the documented way to clear the end; a present-but-unparseable
+    // string is a model error (mirrors the start handling).
+    if (args.end === null) {
+      patch.dtend = null;
+    } else {
+      const iso = asIso(args.end);
+      if (!iso) return { error: "A valid ISO end is required (pass null to clear)." };
+      patch.dtend = iso;
+    }
+  }
   if ("all_day" in args) patch.all_day = args.all_day ? 1 : 0;
   if ("rrule" in args) patch.rrule = args.rrule ? String(args.rrule) : null;
   if ("category" in args) patch.categories = args.category ? JSON.stringify([args.category]) : null;
@@ -1549,6 +1678,10 @@ async function recoverItemCards(
   try {
     const data = await callOpenAI(model, key, ask, { tools: SHOW_ITEMS_TOOL, temperature: 0 });
     const msg = data?.choices?.[0]?.message as OAIMessage | undefined;
+    // The prompt asks the model to reply "NONE" when the answer referred to no
+    // specific item — which arrives as plain content with no tool_calls, so the
+    // loop below simply has nothing to iterate. Either outcome is fine: cards
+    // only appear when the model actually calls show_items.
     for (const call of msg?.tool_calls ?? []) {
       if (call.function.name !== "show_items") continue;
       let args: Record<string, unknown> = {};
@@ -1571,6 +1704,32 @@ export interface AskOptions {
 }
 
 /**
+ * Summarise the cards shown for one assistant turn into a note the model reads
+ * on the next turn, so references like "it" / "that one" / "the lunch" resolve
+ * to a concrete id without a fresh search.
+ *
+ * Labels are a best-effort *local* lookup — no network, since this runs on
+ * every turn. A remote event resolves to "(untitled)" but still carries its
+ * id/calendar_id/occurrence_start, which is what the model needs to act; the
+ * user-facing title is also right there in the assistant's own prior text.
+ */
+async function shownItemsNote(items: ItemRef[]): Promise<string> {
+  const lines = await Promise.all(items.map(async (it) => {
+    let label = "";
+    try { label = await getItemLabel(it.type, it.id); } catch { /* best-effort */ }
+    const parts = [`${it.type} "${label || "?"}"`, `id=${it.id}`];
+    if (it.calendarId) parts.push(`calendar_id=${it.calendarId}`);
+    if (it.occurrenceStart) parts.push(`occurrence_start=${it.occurrenceStart}`);
+    return `- ${parts.join(", ")}`;
+  }));
+  return (
+    "[Cards shown to the user for the previous reply. If the user now refers to one without naming it " +
+    "(\"it\", \"that\", \"the lunch one\"), resolve the reference to these ids rather than searching again. " +
+    "The usual confirm-before-deleting rule still applies.]\n" + lines.join("\n")
+  );
+}
+
+/**
  * Ask the assistant a question. Runs an agentic loop: the model may call
  * read-only tools (possibly several rounds) before producing a final answer.
  */
@@ -1590,10 +1749,16 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
     `offset (like ${localIso}). Do NOT use UTC or a trailing \"Z\" — that would save the event at the ` +
     `wrong hour.`;
 
-  const messages: OAIMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT + dateContext },
-    ...history.map((m) => ({ role: m.role, content: m.content } as OAIMessage)),
-  ];
+  // Only role/content go to the model — never the UiMessage `items`. But an
+  // assistant turn that showed cards gets a system note after it recording
+  // which items those were, so the next user message can refer to them.
+  const messages: OAIMessage[] = [{ role: "system", content: SYSTEM_PROMPT + dateContext }];
+  for (const m of history) {
+    messages.push({ role: m.role, content: m.content });
+    if (m.role === "assistant" && m.items && m.items.length > 0) {
+      messages.push({ role: "system", content: await shownItemsNote(m.items) });
+    }
+  }
 
   // Tracked across rounds to decide whether the reply is missing its cards.
   let showedItems = false; // show_items ran and accepted at least one item

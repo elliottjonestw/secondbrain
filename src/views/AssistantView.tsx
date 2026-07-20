@@ -35,7 +35,7 @@ export default function AssistantView({
   const { t } = useTranslation();
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);   // assistant thinking / transcribing
-  const [status, setStatus] = useState("Thinking…");
+  const [status, setStatus] = useState("");
   const [recording, setRecording] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +63,7 @@ export default function AssistantView({
     setMessages(next);
     setInput("");
     setLoading(true);
-    setStatus("Thinking…");
+    setStatus(t("status.thinking"));
     // show_items can fire more than once in a turn (and once more from the
     // card-recovery round), so collect, de-dupe, and attach the whole set to
     // the reply once it arrives. Same key the cards render with.
@@ -140,7 +140,7 @@ export default function AssistantView({
     } catch (e) {
       setError(
         e instanceof Error
-          ? `Couldn't access the microphone: ${e.message}`
+          ? t("assistant.micError", { message: e.message })
           : t("assistant.micDenied"),
       );
     }
