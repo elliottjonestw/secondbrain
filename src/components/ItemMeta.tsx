@@ -3,16 +3,17 @@
 // item_tags and links tables — the whole point of the cross-linking design.
 
 import { useEffect, useState } from "react";
-import { X, Link2, Plus } from "lucide-react";
-import type { ItemType, TagRow, LinkRow } from "../types";
+import { X, Link2, Plus, UserPlus } from "lucide-react";
+import type { ItemType, TagRow, LinkRow, PersonRow } from "../types";
 import {
   tagsForItem, tagItem, untagItem,
-  linksForItem, createLink, deleteLink, getItemLabel,
+  linksForItem, createLink, deleteLink, getItemLabel, listPeople,
 } from "../db";
 import { Button } from "./ui";
+import { Avatar } from "./Avatar";
 
 const TYPE_LABEL: Record<ItemType, string> = {
-  event: "Event", reminder: "Reminder", todo: "Todo", note: "Note",
+  event: "Event", reminder: "Reminder", todo: "Todo", note: "Note", person: "Person",
 };
 
 export function TagEditor({ type, id }: { type: ItemType; id: string }) {
@@ -125,6 +126,78 @@ export function LinksPanel({
         </select>
       ) : (
         <Button variant="ghost" className="mt-1 px-1" onClick={() => setPicking(true)}><span className="flex items-center gap-1"><Plus size={14} /> Link item</span></Button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * First-class "People" affordance for any item's editor. It's UX sugar over the
+ * same generic `links` table the LinksPanel uses — just scoped to person links —
+ * so attaching a person here shows up as a link everywhere (and vice-versa).
+ */
+export function PeoplePanel({ type, id }: { type: ItemType; id: string }) {
+  const [everyone, setEveryone] = useState<PersonRow[]>([]);
+  const [linked, setLinked] = useState<{ linkId: string; person: PersonRow }[]>([]);
+  const [picking, setPicking] = useState(false);
+
+  const reload = async () => {
+    const all = await listPeople();
+    setEveryone(all);
+    const links = await linksForItem(type, id);
+    const byId = new Map(all.map((p) => [p.id, p]));
+    const rows = links
+      .map((l) => {
+        const other = l.source_type === type && l.source_id === id
+          ? { t: l.target_type, i: l.target_id }
+          : { t: l.source_type, i: l.source_id };
+        const person = other.t === "person" ? byId.get(other.i) : undefined;
+        return person ? { linkId: l.id, person } : null;
+      })
+      .filter((r): r is { linkId: string; person: PersonRow } => r !== null);
+    setLinked(rows);
+  };
+  useEffect(() => { void reload(); }, [type, id]);
+
+  const available = everyone.filter((p) => !linked.some((l) => l.person.id === p.id));
+
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-medium text-neutral-500">People</label>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {linked.map(({ linkId, person }) => (
+          <span key={linkId} className="inline-flex items-center gap-1.5 rounded-full bg-neutral-100 py-0.5 pl-0.5 pr-2 text-xs dark:bg-neutral-700">
+            <Avatar name={person.full_name || "New contact"} photo={person.photo} size={20} />
+            {person.full_name || "New contact"}
+            <button
+              onClick={async () => { await deleteLink(linkId); void reload(); }}
+              className="text-neutral-400 hover:text-red-500"
+              aria-label={`Remove ${person.full_name}`}
+            ><X size={12} /></button>
+          </span>
+        ))}
+        {linked.length === 0 && <p className="text-xs text-neutral-400">No people attached.</p>}
+      </div>
+
+      {picking ? (
+        <select
+          autoFocus
+          className="mt-2 w-full rounded border border-neutral-200 px-2 py-1 text-xs dark:border-neutral-600 dark:bg-neutral-700"
+          onChange={async (e) => {
+            const personId = e.target.value;
+            if (personId) { await createLink(type, id, "person", personId); }
+            setPicking(false);
+            void reload();
+          }}
+          defaultValue=""
+        >
+          <option value="" disabled>Choose a person…</option>
+          {available.map((p) => (
+            <option key={p.id} value={p.id}>{p.full_name || "New contact"}</option>
+          ))}
+        </select>
+      ) : (
+        <Button variant="ghost" className="mt-1 px-1" onClick={() => setPicking(true)}><span className="flex items-center gap-1"><UserPlus size={14} /> Add person</span></Button>
       )}
     </div>
   );

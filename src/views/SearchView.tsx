@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import { Calendar, Bell, ListChecks, StickyNote, LucideIcon } from "lucide-react";
+import { Calendar, Bell, ListChecks, StickyNote, Users, LucideIcon } from "lucide-react";
 import type { ItemType } from "../types";
-import { db, searchNotes } from "../db";
+import { db, searchNotes, searchPeople } from "../db";
 import { fmtDateTime } from "../lib/format";
 
 interface Hit { type: ItemType; id: string; label: string; sub: string; }
 
-const ICON: Record<ItemType, LucideIcon> = { event: Calendar, reminder: Bell, todo: ListChecks, note: StickyNote };
+const ICON: Record<ItemType, LucideIcon> = { event: Calendar, reminder: Bell, todo: ListChecks, note: StickyNote, person: Users };
 
 export default function SearchView({ query, goTo }: { query: string; goTo: (v: string) => void }) {
   const [hits, setHits] = useState<Hit[]>([]);
@@ -21,17 +21,19 @@ export default function SearchView({ query, goTo }: { query: string; goTo: (v: s
       const reminders = await d.select<any[]>("SELECT id, title, due_at FROM reminders WHERE title LIKE ? OR notes LIKE ?", [like, like]);
       const todos = await d.select<any[]>("SELECT id, title, due_at FROM todos WHERE title LIKE ? OR notes LIKE ?", [like, like]);
       const notes = await searchNotes(q);
+      const people = await searchPeople(q);
 
       setHits([
         ...events.map((e) => ({ type: "event" as ItemType, id: e.id, label: e.summary, sub: fmtDateTime(e.dtstart) })),
         ...reminders.map((r) => ({ type: "reminder" as ItemType, id: r.id, label: r.title, sub: r.due_at ? `Due ${fmtDateTime(r.due_at)}` : "" })),
         ...todos.map((t) => ({ type: "todo" as ItemType, id: t.id, label: t.title, sub: t.due_at ? `Due ${fmtDateTime(t.due_at)}` : "" })),
         ...notes.map((n) => ({ type: "note" as ItemType, id: n.id, label: n.title || "Untitled", sub: (n.body ?? "").slice(0, 60) })),
+        ...people.map((p) => ({ type: "person" as ItemType, id: p.id, label: p.full_name || "New contact", sub: p.organization || p.nickname || "" })),
       ]);
     })();
   }, [query]);
 
-  const viewFor: Record<ItemType, string> = { event: "calendar", reminder: "reminders", todo: "todos", note: "notes" };
+  const viewFor: Record<ItemType, string> = { event: "calendar", reminder: "reminders", todo: "todos", note: "notes", person: "people" };
 
   return (
     <div className="mx-auto h-full max-w-2xl overflow-y-auto p-6">

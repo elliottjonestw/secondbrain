@@ -6,7 +6,7 @@ import {
   upsertList, deleteList, reorderTodos, upsertEvent, allLinkTargets,
 } from "../db";
 import { Button, Modal, PriorityFlag, PRIORITY_LABELS, CATEGORY_COLORS } from "../components/ui";
-import { TagEditor, LinksPanel, LinkTarget } from "../components/ItemMeta";
+import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/ItemMeta";
 import { fmtDateTime, isOverdue, toLocalInput, fromLocalInput } from "../lib/format";
 
 export default function TodosView({ onChange }: { onChange: () => void }) {
@@ -325,6 +325,7 @@ function TodoDetail({
 
         <hr className="border-neutral-200 dark:border-neutral-700" />
         <TagEditor type="todo" id={todo.id} />
+        <PeoplePanel type="todo" id={todo.id} />
         <LinksPanel type="todo" id={todo.id} targets={targets} />
       </div>
     </Modal>

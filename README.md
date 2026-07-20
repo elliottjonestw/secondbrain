@@ -1,6 +1,6 @@
 # 🧠 Second Brain
 
-A local-first personal life-management desktop app: **Calendar, Reminders, To-Do, and Notes** in one integrated tool, with an optional **AI assistant** that can answer questions about your data *and* create, update, or delete items on your behalf. Built with Tauri v2 + React + TypeScript + SQLite. Fully offline (the only network call is to OpenAI, and only if you opt in) — no account, no cloud sync.
+A local-first personal life-management desktop app: **Calendar, Reminders, To-Do, Notes, and People** in one integrated tool, with an optional **AI assistant** that can answer questions about your data *and* create, update, or delete items on your behalf. Built with Tauri v2 + React + TypeScript + SQLite. Fully offline (the only network call is to OpenAI, and only if you opt in) — no account, no cloud sync.
 
 ## Stack
 
@@ -64,19 +64,21 @@ Migrations are versioned and idempotent (managed by `tauri-plugin-sql`); they ru
 - **Reminders** — Apple-Reminders-style with a filter sidebar (**All / Scheduled / Flagged / Completed**, each with live counts). Due date + optional alert time, recurrence, priority, link to a to-do. Native OS notifications fire when due (polled once a minute while the app is open).
 - **To-Do** — multiple lists (defaults: **Personal**, **Work**), inline list creation, subtasks, priority, due dates, drag-to-reorder, and "Convert to event". Incomplete tasks always sort above completed ones.
 - **Notes** — markdown with live preview, pin, FTS5 full-text search. The editor holds local state and debounces saves, so typing stays smooth.
+- **People** — a contacts book modeled on **vCard 4.0**: multiple emails/phones/addresses/websites (each with a type), structured name, nickname, organization, title, birthday, notes, favorite, and **user-defined custom fields** (add any label/value, e.g. "Eye color: Blue", drag to reorder). Master-detail with the same debounced auto-save as Notes (no Save button). Click an email/phone/website to open it (`mailto:`/`tel:`/browser). Upcoming birthdays surface on the Today dashboard.
 - **Assistant** — an AI chat that answers questions about your data and can create, update, or delete items, by typing **or by voice** (see below).
 - **Settings** — enter your OpenAI API key + model.
-- **Integration** — shared tagging and generic `links` (any item ↔ any item) across all four types; global search across everything.
+- **Integration** — shared tagging and generic `links` (any item ↔ any item) across all five types; a person can be attached to any event, to-do, reminder, or note (and shown/edited from either side). Global search across everything.
 
 The UI uses a consistent modern icon set (`lucide-react`) throughout — no emoji.
 
 ## AI Assistant
 
-An optional assistant that answers questions about your events, to-dos, reminders, and notes — and can also **create and update** them for you. Bring your own OpenAI API key.
+An optional assistant that answers questions about your events, to-dos, reminders, notes, and people — and can also **create, update, link, and delete** them for you. Bring your own OpenAI API key.
 
 **Setup:** open **Settings** (sidebar, bottom) → paste your `sk-…` key → pick a model (default `gpt-4o-mini`) → Save. Then open **Assistant** and try:
 - *"What's due next week in Work?"* / *"Which notes mention the Q3 report?"* (read)
 - *"Add a to-do to call the dentist tomorrow at 2pm"* / *"Mark 'Buy groceries' as done"* / *"Create a weekly team-lunch event on Fridays at noon"* (write)
+- *"Add a contact for Alex Rivera at Acme, email alex@acme.com"* / *"Set Alex's eye color to blue"* / *"Add Alex to Friday's lunch"* (people + linking)
 - *"Delete the dentist to-do"* / *"Remove the team-lunch event"* (delete — it'll confirm the exact item first)
 
 **How it works — tool calling, not context stuffing:** rather than sending your entire dataset with every request (which doesn't scale), the model is given a set of **tools** and pulls/changes only what it needs via an agentic loop (`src/lib/ai.ts`):
@@ -88,7 +90,8 @@ An optional assistant that answers questions about your events, to-dos, reminder
 | `search_events` | events in a date range (recurring events expanded to occurrences) + query/tag |
 | `search_reminders` | filter by query, status, flagged, date range, tag |
 | `search_notes` | FTS5 keyword search (or recent), pinned filter |
-| `get_item` | full detail of one item + its tags and linked items |
+| `search_people` | contacts by name/nickname/org/email/phone, tag filter |
+| `get_item` | full detail of one item (incl. `person`) + its tags and linked items |
 
 | Write tool | Purpose |
 |------|---------|
@@ -96,9 +99,11 @@ An optional assistant that answers questions about your events, to-dos, reminder
 | `create_event` / `update_event` | create or edit a calendar event (incl. recurrence, all-day, location) |
 | `create_reminder` / `update_reminder` | create or edit a reminder (incl. alert time, recurrence, complete) |
 | `create_note` / `update_note` | create or edit a markdown note |
+| `create_person` / `update_person` | create or edit a contact (incl. emails/phones/addresses, birthday, and user-defined `custom_fields`) |
 | `create_list` | add a new to-do list |
-| `add_tag` | tag any item |
-| `delete_todo` / `delete_event` / `delete_reminder` / `delete_note` | permanently delete an item |
+| `add_tag` | tag any item (incl. a person) |
+| `link_items` / `unlink_items` | connect/disconnect any two items (e.g. attach a person to an event) |
+| `delete_todo` / `delete_event` / `delete_reminder` / `delete_note` / `delete_person` | permanently delete an item |
 | `delete_list` | delete a list (its tasks move to another list; can't delete the last list) |
 
 **Built to scale:** every read tool is filtered and paginated — bounded `limit` (default 25, max 100) — and returns a `total` count and `truncated` flag so the model knows when there's more and narrows its filters instead of assuming it saw everything. Nothing loads a whole table blindly: searches push filters into SQL, notes use the FTS index, and `search_events` only fully expands *recurring* events while pre-filtering non-recurring ones by the requested window. Live tool activity ("Checking the calendar…", "Creating a to-do…") is shown while the assistant works.
@@ -119,16 +124,17 @@ Adding further capabilities later is just more entries in the `TOOLS` array and 
 
 ## Demo data (easter egg)
 
-Hold **Shift + 8 + 9** together anywhere in the app to open a "Load demo data?" prompt. Confirming **permanently deletes all current data** and seeds a realistic, cross-linked sample dataset (events, recurring events, to-dos with subtasks, reminders, notes, tags, and links) — handy for exploring the app. Your API key is **not** affected (it lives in `localStorage`). See `src/lib/demo.ts`.
+Hold **Shift + 8 + 9** together anywhere in the app to open a "Load demo data?" prompt. Confirming **permanently deletes all current data** and seeds a realistic, cross-linked sample dataset (events, recurring events, to-dos with subtasks, reminders, notes, people with birthdays/custom fields, tags, and links — including people attached to events and tasks) — handy for exploring the app. Your API key is **not** affected (it lives in `localStorage`). See `src/lib/demo.ts`.
 
 ## Standards / future sync
 
-The schema is deliberately CalDAV-ready even though sync isn't built yet:
+The schema is deliberately CalDAV/CardDAV-ready even though sync isn't built yet:
 
-- UUID primary keys double as iCalendar `UID`s.
+- UUID primary keys double as iCalendar `UID`s (events) and vCard `UID`s (people).
 - Events store RFC 5545 fields directly (`summary`, `dtstart`, `rrule`, `exdates`, `status`, `categories`, …).
-- Every syncable row has `created_at`, `updated_at`, and a `sequence` that increments on edit (mirrors iCalendar `SEQUENCE`).
-- **Export to `.ics`** (Today → Export) proves the schema is standards-compliant — drag the file straight into Apple Calendar. Import reads events back, preserving UIDs.
+- **People are modeled on vCard 4.0 (RFC 6350)** — `full_name`→`FN`, structured name→`N`, `emails`/`phones`/`addresses`/`urls`→`EMAIL`/`TEL`/`ADR`/`URL`, `birthday`→`BDAY`, `organization`/`title`→`ORG`/`TITLE`, tags→`CATEGORIES`, and user-defined `custom_fields`→`X-` extension properties. Multi-value fields are stored as JSON on the row (like `exdates`/`categories`), so a future `.vcf` import/export is a straight field mapping.
+- Every syncable row has `created_at`, `updated_at`, and a `sequence` that increments on edit (mirrors iCalendar `SEQUENCE` / vCard `REV`).
+- **Export to `.ics`** (Today → Export) proves the schema is standards-compliant — drag the file straight into Apple Calendar. Import reads events back, preserving UIDs. (vCard `.vcf` import/export is future work; the schema already maps to it.)
 
 ## Project layout
 
@@ -147,9 +153,10 @@ src/
     demo.ts             # reset + seed demo data
   components/
     ui.tsx              # Modal, Button, priority helpers
-    ItemMeta.tsx        # shared Tags + Links panels
+    Avatar.tsx          # contact avatar (photo or initials)
+    ItemMeta.tsx        # shared Tags + Links + People panels
     EventForm.tsx       # event create/edit
-  views/                # Today, Calendar, Reminders, Todos, Notes,
+  views/                # Today, Calendar, Reminders, Todos, Notes, People,
                         #   Assistant, Settings, Search
 src-tauri/
   src/lib.rs            # plugin wiring + migration registration (thin)
@@ -157,6 +164,7 @@ src-tauri/
   migrations/
     001_init.sql            # initial schema
     002_default_lists.sql   # seed Personal/Work, drop Inbox
+    003_people.sql          # people (contacts, vCard 4.0-modeled)
   capabilities/default.json  # plugin permissions (sql, notification, dialog,
                              #   fs scope, http scope for api.openai.com)
 CLAUDE.md              # architecture, conventions & gotchas for contributors

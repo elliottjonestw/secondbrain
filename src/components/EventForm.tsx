@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { EventRow } from "../types";
 import { upsertEvent, deleteEvent, addExdate, allLinkTargets } from "../db";
 import { Button, Modal, CATEGORY_COLORS } from "./ui";
-import { TagEditor, LinksPanel, LinkTarget } from "./ItemMeta";
+import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "./ItemMeta";
 import { toLocalInput, toDateInput, fromLocalInput } from "../lib/format";
 import { describeRrule } from "../lib/recurrence";
 
@@ -183,6 +183,7 @@ export default function EventForm({
           <>
             <hr className="border-neutral-200 dark:border-neutral-700" />
             <TagEditor type="event" id={event.id} />
+            <PeoplePanel type="event" id={event.id} />
             <LinksPanel type="event" id={event.id} targets={targets} />
           </>
         )}

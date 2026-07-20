@@ -5,7 +5,7 @@
 
 import {
   db, nowIso,
-  upsertList, upsertEvent, upsertTodo, upsertReminder, upsertNote,
+  upsertList, upsertEvent, upsertTodo, upsertReminder, upsertNote, upsertPerson,
   tagItem, createLink,
 } from "../db";
 
@@ -13,9 +13,16 @@ import {
  * no FK cascade, so we just clear them all). */
 export async function clearAllData(): Promise<void> {
   const d = await db();
-  for (const table of ["item_tags", "links", "tags", "events", "reminders", "todos", "notes", "lists"]) {
+  for (const table of ["item_tags", "links", "tags", "events", "reminders", "todos", "notes", "people", "lists"]) {
     await d.execute(`DELETE FROM ${table}`);
   }
+}
+
+/** Build a vCard-style birthday (yyyy-mm-dd) from a day offset + year. */
+function bday(dayOffset: number, year: number): string {
+  const d = at(dayOffset, 0, 0);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${year}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 // --- date helpers (local time) ---
@@ -44,7 +51,7 @@ export async function resetAndSeedDemo(): Promise<void> {
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR", exdates: null,
     status: "CONFIRMED", categories: JSON.stringify(["Work"]), color: "#ef4444",
   });
-  await upsertEvent({
+  const lunch = await upsertEvent({
     summary: "Lunch with Alex", description: null, location: "Cafe Rio",
     dtstart: iso(0, 12, 30), dtend: iso(0, 13, 30), all_day: 0,
     rrule: null, exdates: null, status: "CONFIRMED",
@@ -68,7 +75,7 @@ export async function resetAndSeedDemo(): Promise<void> {
     rrule: "FREQ=WEEKLY;BYDAY=MO,WE,FR", exdates: null, status: "CONFIRMED",
     categories: JSON.stringify(["Health"]), color: "#f59e0b",
   });
-  await upsertEvent({
+  const sarahBday = await upsertEvent({
     summary: "Sarah's birthday", description: null, location: null,
     dtstart: iso(5, 0, 0), dtend: null, all_day: 1,
     rrule: "FREQ=YEARLY", exdates: null, status: "CONFIRMED",
@@ -97,7 +104,7 @@ export async function resetAndSeedDemo(): Promise<void> {
   await upsertTodo({ title: "Chicken", notes: null, list_id: personal, due_at: null, priority: 0, completed: 0, completed_at: null, parent_todo_id: groceries, position: 1 });
   await upsertTodo({ title: "Coffee", notes: null, list_id: personal, due_at: null, priority: 0, completed: 1, completed_at: nowIso(), parent_todo_id: groceries, position: 2 });
 
-  await upsertTodo({ title: "Call mom", notes: null, list_id: personal, due_at: null, priority: 2, completed: 0, completed_at: null, parent_todo_id: null, position: 1 });
+  const callMom = await upsertTodo({ title: "Call mom", notes: null, list_id: personal, due_at: null, priority: 2, completed: 0, completed_at: null, parent_todo_id: null, position: 1 });
   await upsertTodo({ title: "Renew passport", notes: "Expires next month.", list_id: personal, due_at: iso(14, 12, 0), priority: 2, completed: 0, completed_at: null, parent_todo_id: null, position: 2 });
 
   await upsertTodo({ title: "Ship v1.0 of side project", notes: null, list_id: projects, due_at: iso(7, 18, 0), priority: 3, completed: 0, completed_at: null, parent_todo_id: null, position: 0 });
@@ -149,6 +156,40 @@ export async function resetAndSeedDemo(): Promise<void> {
     pinned: 0,
   });
 
+  // ---- People (contacts, vCard-modeled) ----
+  const emptyName = {
+    given_name: null as string | null, family_name: null as string | null,
+    additional_names: null, honorific_prefix: null, honorific_suffix: null,
+    addresses: null as string | null, urls: null as string | null,
+    title: null as string | null, photo: null as string | null,
+  };
+  const alex = await upsertPerson({
+    ...emptyName, full_name: "Alex Rivera", given_name: "Alex", family_name: "Rivera",
+    nickname: "Al", organization: "Acme Corp", title: "Product Designer",
+    birthday: bday(21, 1992),
+    emails: JSON.stringify([{ type: "work", value: "alex@acme.com" }]),
+    phones: JSON.stringify([{ type: "cell", value: "+1 555 010 2020" }]),
+    notes: "Met at the design conference.",
+    custom_fields: JSON.stringify([{ label: "Coffee order", value: "Oat flat white" }]),
+    favorite: 1,
+  });
+  const sarah = await upsertPerson({
+    ...emptyName, full_name: "Sarah Chen", given_name: "Sarah", family_name: "Chen",
+    nickname: null, organization: null, title: null,
+    birthday: bday(5, 1990),
+    emails: JSON.stringify([{ type: "home", value: "sarah.chen@example.com" }]),
+    phones: JSON.stringify([{ type: "cell", value: "+1 555 010 3131" }]),
+    notes: null, custom_fields: null, favorite: 0,
+  });
+  const mom = await upsertPerson({
+    ...emptyName, full_name: "Linda (Mom)", given_name: "Linda", family_name: null,
+    nickname: "Mom", organization: null, title: null,
+    birthday: bday(40, 1961),
+    emails: null,
+    phones: JSON.stringify([{ type: "home", value: "+1 555 010 4242" }]),
+    notes: null, custom_fields: null, favorite: 1,
+  });
+
   // ---- Tags (shared across types) ----
   await tagItem("urgent", "todo", report);
   await tagItem("work", "todo", report);
@@ -158,8 +199,13 @@ export async function resetAndSeedDemo(): Promise<void> {
   await tagItem("personal", "todo", groceries);
   await tagItem("ideas", "note", ideas);
 
-  // ---- Links (any item <-> any item) ----
+  await tagItem("work", "person", alex);
+
+  // ---- Links (any item <-> any item, including people) ----
   await createLink("note", standupNotes, "event", standup);   // meeting notes on the standup
   await createLink("note", ideas, "todo", report);            // idea note references the report task
   await createLink("event", oneOnOne, "todo", report);        // discuss the report in the 1:1
+  await createLink("person", alex, "event", lunch);           // Alex is at lunch
+  await createLink("person", sarah, "event", sarahBday);      // Sarah's birthday
+  await createLink("person", mom, "todo", callMom);           // call mom
 }

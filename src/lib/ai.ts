@@ -18,6 +18,7 @@ import {
   db, listLists, listTags, linksForItem, tagsForItem, getItemLabel,
   upsertTodo, upsertEvent, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
   deleteTodo, deleteEvent, deleteReminder, deleteNote, deleteList,
+  listPeople, searchPeople, upsertPerson, deletePerson, createLink, deleteLink,
 } from "../db";
 import { expandEvents } from "./recurrence";
 import { getSettings } from "./settings";
@@ -71,7 +72,7 @@ function asPriority(v: unknown): number {
   return i >= 0 ? i : 0;
 }
 
-const WRITE_TABLES = { event: "events", reminder: "reminders", todo: "todos", note: "notes" } as const;
+const WRITE_TABLES = { event: "events", reminder: "reminders", todo: "todos", note: "notes", person: "people" } as const;
 
 async function getRowById(table: string, id: unknown): Promise<any | null> {
   if (typeof id !== "string" || !id) return null;
@@ -186,13 +187,29 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "search_people",
+      description:
+        "Search the user's contacts (people). Matches name, nickname, organization, and email/phone text. Returns compact records including ids.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Case-insensitive text to match on name/nickname/org/email/phone." },
+          tag: { type: "string", description: "Tag name (without #)." },
+          limit: { type: "integer", description: `Max results (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}).` },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "get_item",
       description:
         "Fetch the full detail of a single item by type and id, including its tags and any linked items. Use ids returned by the search tools.",
       parameters: {
         type: "object",
         properties: {
-          type: { type: "string", enum: ["event", "reminder", "todo", "note"] },
+          type: { type: "string", enum: ["event", "reminder", "todo", "note", "person"] },
           id: { type: "string" },
         },
         required: ["type", "id"],
@@ -374,16 +391,108 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "create_person",
+      description:
+        "Create a new contact (person). Multi-value fields are arrays. custom_fields are user-defined label/value pairs (e.g. {label:'Eye color', value:'Blue'}). Confirm ambiguous details first.",
+      parameters: {
+        type: "object",
+        properties: {
+          full_name: { type: "string", description: "Display name (required)." },
+          given_name: { type: "string" },
+          family_name: { type: "string" },
+          nickname: { type: "string" },
+          organization: { type: "string" },
+          title: { type: "string", description: "Job title." },
+          birthday: { type: "string", description: "ISO date, e.g. 1990-05-14." },
+          notes: { type: "string" },
+          emails: { type: "array", items: { type: "object", properties: { type: { type: "string" }, value: { type: "string" } }, required: ["value"] } },
+          phones: { type: "array", items: { type: "object", properties: { type: { type: "string" }, value: { type: "string" } }, required: ["value"] } },
+          urls: { type: "array", items: { type: "object", properties: { type: { type: "string" }, value: { type: "string" } }, required: ["value"] } },
+          addresses: { type: "array", items: { type: "object", properties: { type: { type: "string" }, street: { type: "string" }, city: { type: "string" }, region: { type: "string" }, postal_code: { type: "string" }, country: { type: "string" } } } },
+          custom_fields: { type: "array", items: { type: "object", properties: { label: { type: "string" }, value: { type: "string" } }, required: ["label", "value"] }, description: "User-defined data points." },
+          favorite: { type: "boolean" },
+        },
+        required: ["full_name"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_person",
+      description:
+        "Update fields of an existing contact by id. Only include fields you want to change. Array fields (emails/phones/urls/addresses/custom_fields) REPLACE the existing list — to add one item, fetch the person with get_item first, then send the full merged list.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          full_name: { type: "string" },
+          given_name: { type: "string" },
+          family_name: { type: "string" },
+          nickname: { type: "string" },
+          organization: { type: "string" },
+          title: { type: "string" },
+          birthday: { type: "string", description: "ISO date, or null to clear." },
+          notes: { type: "string" },
+          emails: { type: "array", items: { type: "object", properties: { type: { type: "string" }, value: { type: "string" } }, required: ["value"] } },
+          phones: { type: "array", items: { type: "object", properties: { type: { type: "string" }, value: { type: "string" } }, required: ["value"] } },
+          urls: { type: "array", items: { type: "object", properties: { type: { type: "string" }, value: { type: "string" } }, required: ["value"] } },
+          addresses: { type: "array", items: { type: "object", properties: { type: { type: "string" }, street: { type: "string" }, city: { type: "string" }, region: { type: "string" }, postal_code: { type: "string" }, country: { type: "string" } } } },
+          custom_fields: { type: "array", items: { type: "object", properties: { label: { type: "string" }, value: { type: "string" } }, required: ["label", "value"] } },
+          favorite: { type: "boolean" },
+        },
+        required: ["id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "add_tag",
       description: "Attach a tag to an item (creating the tag if needed).",
       parameters: {
         type: "object",
         properties: {
-          type: { type: "string", enum: ["event", "reminder", "todo", "note"] },
+          type: { type: "string", enum: ["event", "reminder", "todo", "note", "person"] },
           id: { type: "string" },
           tag: { type: "string", description: "Tag name without the leading #." },
         },
         required: ["type", "id", "tag"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "link_items",
+      description:
+        "Connect any two items with a cross-link (e.g. attach a person to an event, or a note to a to-do). Works both directions. Look up both ids first.",
+      parameters: {
+        type: "object",
+        properties: {
+          source_type: { type: "string", enum: ["event", "reminder", "todo", "note", "person"] },
+          source_id: { type: "string" },
+          target_type: { type: "string", enum: ["event", "reminder", "todo", "note", "person"] },
+          target_id: { type: "string" },
+        },
+        required: ["source_type", "source_id", "target_type", "target_id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "unlink_items",
+      description: "Remove a cross-link between two items (either direction). Only removes the link, not the items.",
+      parameters: {
+        type: "object",
+        properties: {
+          source_type: { type: "string", enum: ["event", "reminder", "todo", "note", "person"] },
+          source_id: { type: "string" },
+          target_type: { type: "string", enum: ["event", "reminder", "todo", "note", "person"] },
+          target_id: { type: "string" },
+        },
+        required: ["source_type", "source_id", "target_type", "target_id"],
       },
     },
   },
@@ -424,6 +533,14 @@ const TOOLS = [
   {
     type: "function",
     function: {
+      name: "delete_person",
+      description: "Permanently delete a contact (person) by id. Also removes their tags and links. Irreversible — confirm with the user first.",
+      parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "delete_list",
       description: "Delete a to-do list by id; its tasks are moved to another list (not deleted). Cannot delete the only remaining list. Confirm with the user first.",
       parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
@@ -448,6 +565,7 @@ async function toolGetOverview() {
       reminders: await one("SELECT COUNT(*) n FROM reminders"),
       reminders_active: await one("SELECT COUNT(*) n FROM reminders WHERE completed = 0"),
       notes: await one("SELECT COUNT(*) n FROM notes"),
+      people: await one("SELECT COUNT(*) n FROM people"),
     },
     lists: lists.map((l) => l.name),
     tags: tags.map((t) => t.name),
@@ -622,8 +740,8 @@ async function toolSearchNotes(args: Record<string, unknown>) {
 async function toolGetItem(args: Record<string, unknown>) {
   const type = args.type as string;
   const id = args.id as string;
-  const table = { event: "events", reminder: "reminders", todo: "todos", note: "notes" }[type];
-  if (!table || !id) return { error: "Provide a valid type (event|reminder|todo|note) and id." };
+  const table = { event: "events", reminder: "reminders", todo: "todos", note: "notes", person: "people" }[type];
+  if (!table || !id) return { error: "Provide a valid type (event|reminder|todo|note|person) and id." };
 
   const d = await db();
   const rows = await d.select<any[]>(`SELECT * FROM ${table} WHERE id = ?`, [id]);
@@ -640,6 +758,37 @@ async function toolGetItem(args: Record<string, unknown>) {
   }));
 
   return { type, item, tags, linked };
+}
+
+/** Parse a JSON array column back to values, or undefined if empty. */
+function parseCol<T>(json: string | null): T[] | undefined {
+  if (!json) return undefined;
+  try { const v = JSON.parse(json); return Array.isArray(v) && v.length ? v : undefined; } catch { return undefined; }
+}
+
+async function toolSearchPeople(args: Record<string, unknown>) {
+  const q = typeof args.query === "string" ? args.query.trim() : "";
+  let rows = q ? await searchPeople(q) : await listPeople();
+  if (typeof args.tag === "string" && args.tag.trim()) {
+    const tagIds = await idsForTag("person", args.tag.trim());
+    rows = rows.filter((r) => tagIds.has(r.id));
+  }
+  const limit = clampLimit(args.limit);
+  return {
+    total: rows.length,
+    truncated: rows.length > limit,
+    results: rows.slice(0, limit).map((p) => ({
+      id: p.id,
+      full_name: p.full_name,
+      nickname: p.nickname || undefined,
+      organization: p.organization || undefined,
+      title: p.title || undefined,
+      birthday: p.birthday || undefined,
+      emails: parseCol(p.emails),
+      phones: parseCol(p.phones),
+      favorite: !!p.favorite,
+    })),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -797,6 +946,113 @@ async function toolAddTag(args: Record<string, unknown>) {
   return { ok: true };
 }
 
+// ---- People + generic linking ----
+/** Trim a string arg to non-empty, else null (used for "clear" semantics). */
+function strOrNull(v: unknown): string | null {
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+/** Serialize an array arg (of objects) to a JSON column, or null if empty. */
+function jsonArrOrNull(v: unknown): string | null {
+  if (!Array.isArray(v)) return null;
+  const items = v.filter((x) => x && typeof x === "object");
+  return items.length ? JSON.stringify(items) : null;
+}
+
+async function toolCreatePerson(args: Record<string, unknown>) {
+  if (typeof args.full_name !== "string" || !args.full_name.trim()) return { error: "full_name is required." };
+  const id = await upsertPerson({
+    full_name: args.full_name.trim(),
+    given_name: strOrNull(args.given_name),
+    family_name: strOrNull(args.family_name),
+    additional_names: null,
+    honorific_prefix: null,
+    honorific_suffix: null,
+    nickname: strOrNull(args.nickname),
+    organization: strOrNull(args.organization),
+    title: strOrNull(args.title),
+    birthday: strOrNull(args.birthday),
+    notes: strOrNull(args.notes),
+    photo: null,
+    emails: jsonArrOrNull(args.emails),
+    phones: jsonArrOrNull(args.phones),
+    addresses: jsonArrOrNull(args.addresses),
+    urls: jsonArrOrNull(args.urls),
+    custom_fields: jsonArrOrNull(args.custom_fields),
+    favorite: args.favorite === true ? 1 : 0,
+  });
+  return { ok: true, id };
+}
+
+async function toolUpdatePerson(args: Record<string, unknown>) {
+  const p = await getRowById("people", args.id);
+  if (!p) return { error: `No person found with id ${args.id}.` };
+  const keepStr = (k: string, cur: string | null) => (k in args ? strOrNull(args[k]) : cur);
+  const keepArr = (k: string, cur: string | null) => (k in args ? jsonArrOrNull(args[k]) : cur);
+  await upsertPerson({
+    id: p.id,
+    full_name: "full_name" in args ? (String(args.full_name).trim() || p.full_name) : p.full_name,
+    given_name: keepStr("given_name", p.given_name),
+    family_name: keepStr("family_name", p.family_name),
+    additional_names: p.additional_names,
+    honorific_prefix: p.honorific_prefix,
+    honorific_suffix: p.honorific_suffix,
+    nickname: keepStr("nickname", p.nickname),
+    organization: keepStr("organization", p.organization),
+    title: keepStr("title", p.title),
+    birthday: keepStr("birthday", p.birthday),
+    notes: keepStr("notes", p.notes),
+    photo: p.photo,
+    emails: keepArr("emails", p.emails),
+    phones: keepArr("phones", p.phones),
+    addresses: keepArr("addresses", p.addresses),
+    urls: keepArr("urls", p.urls),
+    custom_fields: keepArr("custom_fields", p.custom_fields),
+    favorite: "favorite" in args ? (args.favorite ? 1 : 0) : p.favorite,
+  });
+  return { ok: true, id: p.id };
+}
+
+const LINK_TYPES = ["event", "reminder", "todo", "note", "person"];
+
+/** Validate a link request and confirm both endpoints exist. */
+async function resolveLinkPair(args: Record<string, unknown>) {
+  const st = args.source_type as string;
+  const si = args.source_id as string;
+  const tt = args.target_type as string;
+  const ti = args.target_id as string;
+  if (!LINK_TYPES.includes(st) || !LINK_TYPES.includes(tt) || typeof si !== "string" || typeof ti !== "string") {
+    return { error: "Provide source_type, source_id, target_type, target_id (types: event|reminder|todo|note|person)." as const };
+  }
+  const s = await getRowById(WRITE_TABLES[st as ItemType], si);
+  if (!s) return { error: `No ${st} found with id ${si}.` as const };
+  const t = await getRowById(WRITE_TABLES[tt as ItemType], ti);
+  if (!t) return { error: `No ${tt} found with id ${ti}.` as const };
+  return { st: st as ItemType, si, tt: tt as ItemType, ti };
+}
+
+async function toolLinkItems(args: Record<string, unknown>) {
+  const r = await resolveLinkPair(args);
+  if ("error" in r) return { error: r.error };
+  const existing = await linksForItem(r.st, r.si);
+  const dup = existing.some((l) =>
+    (l.target_type === r.tt && l.target_id === r.ti) || (l.source_type === r.tt && l.source_id === r.ti));
+  if (dup) return { ok: true, note: "Those items were already linked." };
+  await createLink(r.st, r.si, r.tt, r.ti);
+  return { ok: true };
+}
+
+async function toolUnlinkItems(args: Record<string, unknown>) {
+  const r = await resolveLinkPair(args);
+  if ("error" in r) return { error: r.error };
+  const links = await linksForItem(r.st, r.si);
+  const match = links.find((l) =>
+    (l.source_type === r.st && l.source_id === r.si && l.target_type === r.tt && l.target_id === r.ti) ||
+    (l.source_type === r.tt && l.source_id === r.ti && l.target_type === r.st && l.target_id === r.si));
+  if (!match) return { error: "Those items are not linked." };
+  await deleteLink(match.id);
+  return { ok: true };
+}
+
 // ---- Delete executors (destructive; reuse the same db helpers as the UI) ----
 async function toolDeleteTodo(args: Record<string, unknown>) {
   const t = await getRowById("todos", args.id);
@@ -822,6 +1078,12 @@ async function toolDeleteNote(args: Record<string, unknown>) {
   await deleteNote(n.id);
   return { ok: true, deleted: { type: "note", id: n.id, title: n.title } };
 }
+async function toolDeletePerson(args: Record<string, unknown>) {
+  const p = await getRowById("people", args.id);
+  if (!p) return { error: `No person found with id ${args.id}.` };
+  await deletePerson(p.id);
+  return { ok: true, deleted: { type: "person", id: p.id, full_name: p.full_name } };
+}
 async function toolDeleteList(args: Record<string, unknown>) {
   const l = await getRowById("lists", args.id);
   if (!l) return { error: `No list found with id ${args.id}.` };
@@ -839,6 +1101,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case "search_events": return toolSearchEvents(args);
     case "search_reminders": return toolSearchReminders(args);
     case "search_notes": return toolSearchNotes(args);
+    case "search_people": return toolSearchPeople(args);
     case "get_item": return toolGetItem(args);
     // write
     case "create_todo": return toolCreateTodo(args);
@@ -850,12 +1113,17 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case "create_note": return toolCreateNote(args);
     case "update_note": return toolUpdateNote(args);
     case "create_list": return toolCreateList(args);
+    case "create_person": return toolCreatePerson(args);
+    case "update_person": return toolUpdatePerson(args);
     case "add_tag": return toolAddTag(args);
+    case "link_items": return toolLinkItems(args);
+    case "unlink_items": return toolUnlinkItems(args);
     // delete
     case "delete_todo": return toolDeleteTodo(args);
     case "delete_event": return toolDeleteEvent(args);
     case "delete_reminder": return toolDeleteReminder(args);
     case "delete_note": return toolDeleteNote(args);
+    case "delete_person": return toolDeletePerson(args);
     case "delete_list": return toolDeleteList(args);
     default: return { error: `Unknown tool: ${name}` };
   }
@@ -869,6 +1137,7 @@ function statusFor(name: string, args: Record<string, unknown>): string {
     case "search_events": return "Checking the calendar…";
     case "search_reminders": return "Searching reminders…";
     case "search_notes": return args.query ? `Searching notes for "${args.query}"…` : "Looking through notes…";
+    case "search_people": return args.query ? `Searching people for "${args.query}"…` : "Looking through contacts…";
     case "get_item": return "Fetching details…";
     case "create_todo": return "Creating a to-do…";
     case "update_todo": return "Updating a to-do…";
@@ -879,11 +1148,16 @@ function statusFor(name: string, args: Record<string, unknown>): string {
     case "create_note": return "Creating a note…";
     case "update_note": return "Updating a note…";
     case "create_list": return "Creating a list…";
+    case "create_person": return "Adding a contact…";
+    case "update_person": return "Updating a contact…";
     case "add_tag": return "Adding a tag…";
+    case "link_items": return "Linking items…";
+    case "unlink_items": return "Unlinking items…";
     case "delete_todo": return "Deleting a to-do…";
     case "delete_event": return "Deleting an event…";
     case "delete_reminder": return "Deleting a reminder…";
     case "delete_note": return "Deleting a note…";
+    case "delete_person": return "Deleting a contact…";
     case "delete_list": return "Deleting a list…";
     default: return "Working…";
   }
@@ -891,15 +1165,20 @@ function statusFor(name: string, args: Record<string, unknown>): string {
 
 const SYSTEM_PROMPT =
   "You are a helpful personal assistant embedded in a local life-management app called Second Brain. " +
-  "You help the user with THEIR data — calendar events, reminders, to-dos, notes, lists, and tags.\n\n" +
+  "You help the user with THEIR data — calendar events, reminders, to-dos, notes, people (contacts), lists, and tags.\n\n" +
   "You can READ, WRITE, and DELETE data:\n" +
-  "- Read/lookup tools: get_overview, search_todos, search_events, search_reminders, search_notes, get_item.\n" +
+  "- Read/lookup tools: get_overview, search_todos, search_events, search_reminders, search_notes, search_people, get_item.\n" +
   "- Create/update tools: create_todo, update_todo, create_event, update_event, create_reminder, " +
-  "update_reminder, create_note, update_note, create_list, add_tag.\n" +
-  "- Delete tools: delete_todo, delete_event, delete_reminder, delete_note, delete_list.\n\n" +
+  "update_reminder, create_note, update_note, create_list, create_person, update_person, add_tag.\n" +
+  "- Linking tools: link_items / unlink_items connect any two items (e.g. attach a person to an event, " +
+  "or a note to a to-do). People are contacts with emails/phones/addresses, a birthday, and user-defined " +
+  "custom_fields (label/value, e.g. 'Eye color: Blue').\n" +
+  "- Delete tools: delete_todo, delete_event, delete_reminder, delete_note, delete_person, delete_list.\n\n" +
   "Guidelines:\n" +
-  "- Never assume or invent data; use the read tools to look things up first. To update, tag, or delete an existing " +
-  "item, find its id with a search tool before calling the write/delete tool.\n" +
+  "- Never assume or invent data; use the read tools to look things up first. To update, tag, link, or delete an " +
+  "existing item, find its id with a search tool before calling the write/delete tool. To add one entry to a " +
+  "person's array field (email/phone/custom field), fetch them with get_item first, then send the full merged list " +
+  "to update_person.\n" +
   "- Prefer specific, filtered queries (by date range, list, tag, or keyword). If a tool reports `truncated: true`, " +
   "narrow your filters rather than assuming you've seen everything.\n" +
   "- Before creating or updating, make sure the request is clear. If key details are ambiguous (which item, what " +

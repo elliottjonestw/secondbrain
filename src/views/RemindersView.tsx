@@ -5,7 +5,7 @@ import {
   listReminders, upsertReminder, toggleReminder, deleteReminder, listTodos, allLinkTargets,
 } from "../db";
 import { Button, Modal, PriorityFlag, PRIORITY_LABELS } from "../components/ui";
-import { TagEditor, LinksPanel, LinkTarget } from "../components/ItemMeta";
+import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/ItemMeta";
 import { fmtDateTime, isOverdue, toLocalInput, fromLocalInput } from "../lib/format";
 import { describeRrule } from "../lib/recurrence";
 import { ensureNotificationPermission } from "../lib/notifications";
@@ -211,6 +211,7 @@ function ReminderDetail({ reminder, onClose, onSaved }: { reminder: ReminderRow;
 
         <hr className="border-neutral-200 dark:border-neutral-700" />
         <TagEditor type="reminder" id={reminder.id} />
+        <PeoplePanel type="reminder" id={reminder.id} />
         <LinksPanel type="reminder" id={reminder.id} targets={targets} />
       </div>
     </Modal>

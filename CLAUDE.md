@@ -8,7 +8,9 @@ Guidance for working in this repo. Read this before making changes.
 
 ## What this is
 
-A local-first personal life-management desktop app — **Calendar, Reminders, To-Do, Notes** in one integrated tool, plus an optional AI assistant. Single user, offline, no accounts, no cloud sync. Tauri v2 (Rust shell) + React 19 + TypeScript + Vite + Tailwind + SQLite.
+A local-first personal life-management desktop app — **Calendar, Reminders, To-Do, Notes, People** in one integrated tool, plus an optional AI assistant. Single user, offline, no accounts, no cloud sync. Tauri v2 (Rust shell) + React 19 + TypeScript + Vite + Tailwind + SQLite.
+
+**People** are contacts modeled on **vCard 4.0 (RFC 6350)**: id = vCard UID (like events = iCal UID); multi-value fields (emails/phones/addresses/urls) + user-defined `custom_fields` are JSON columns on the `people` row (no child tables); a person attaches to any item via the existing `links` table and is tagged via `item_tags` (both accept `item_type='person'` — no schema change to them). See `003_people.sql`. `.vcf` import/export is future work but the schema maps straight to it — don't hand-roll a vCard parser when it lands (use a library, same as ICS).
 
 ## Commands
 
@@ -57,6 +59,7 @@ Runtime DB (macOS): `~/Library/Application Support/com.elliottjones.secondbrain/
 - **Write tools (create/update)** do a partial merge (`"field" in args` distinguishes "clear to null" from "leave unchanged") and call the same `db.ts` upsert helpers so `sequence`/timestamps stay correct.
 - **Delete tools** (`delete_todo/event/reminder/note/list`) reuse the `db.ts` delete helpers. Deletion is **permanent** — the system prompt makes the model confirm the exact item(s) before deleting. There is still no in-UI confirmation dialog; if you add one, that's a deliberate change (update the README). `delete_list` rehomes tasks and refuses to delete the last list.
 - **To add a capability:** add an entry to the `TOOLS` array (OpenAI function schema) and a `case` in `executeTool`, plus a status string in `statusFor`. The loop handles multi-tool rounds automatically. Keep new tools scoped and, for reads, paginated.
+- **People + linking tools:** `search_people`/`create_person`/`update_person`/`delete_person`, `get_item` supports `type:"person"`, `add_tag` accepts `person`, and generic `link_items`/`unlink_items` connect any two items via `links` (e.g. attach a person to an event). `update_person`'s array fields (emails/phones/etc.) **replace** the whole list — the prompt tells the model to `get_item` then send the merged list to add a single entry.
 - The model gets the current **date + timezone** in the system prompt every request — keep that. Settings (API key, model, voice) live in `localStorage` (`src/lib/settings.ts`), **not** the SQLite DB, so a demo reset doesn't wipe them.
 - There is **no per-write confirmation dialog** today; the prompt tells the model to confirm ambiguous requests in chat. If adding confirmation UX, that's a deliberate change — update the README.
 
@@ -83,9 +86,10 @@ src/
     settings.ts    # app settings in localStorage (OpenAI key/model)
     ai.ts          # assistant: tool schemas + executors + agentic loop
     demo.ts        # reset + seed demo data (Shift+8+9 easter egg)
-  components/      # ui.tsx (Modal/Button), ItemMeta (Tags/Links), EventForm
-  views/           # Today, Calendar, Reminders, Todos, Notes, Assistant,
-                   #   Settings, Search
+  components/      # ui.tsx (Modal/Button), Avatar, ItemMeta (Tags/Links/People
+                   #   panels), EventForm
+  views/           # Today, Calendar, Reminders, Todos, Notes, People,
+                   #   Assistant, Settings, Search
 src-tauri/
   src/lib.rs       # plugin wiring + migration registration (keep thin)
   migrations/00N_*.sql       # versioned, checksummed — add, never edit

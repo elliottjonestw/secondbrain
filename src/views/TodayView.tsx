@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { Upload, Download, Bell, Pin } from "lucide-react";
-import type { EventOccurrence, TodoRow, ReminderRow, NoteRow } from "../types";
-import { listEvents, listTodos, listReminders, listNotes, toggleTodo, toggleReminder } from "../db";
+import { Upload, Download, Bell, Pin, Cake } from "lucide-react";
+import type { EventOccurrence, TodoRow, ReminderRow, NoteRow, PersonRow } from "../types";
+import { listEvents, listTodos, listReminders, listNotes, listPeople, toggleTodo, toggleReminder } from "../db";
 import { expandEvents } from "../lib/recurrence";
-import { startOfDay, endOfDay, fmtTime, fmtDateTime, isOverdue, isToday } from "../lib/format";
+import { startOfDay, endOfDay, format, fmtTime, fmtDateTime, isOverdue, isToday } from "../lib/format";
 import { exportCalendar, importCalendar } from "../lib/ics";
 import { Button, PriorityFlag } from "../components/ui";
 
@@ -12,6 +12,7 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
   const [todos, setTodos] = useState<TodoRow[]>([]);
   const [reminders, setReminders] = useState<ReminderRow[]>([]);
   const [notes, setNotes] = useState<NoteRow[]>([]);
+  const [people, setPeople] = useState<PersonRow[]>([]);
   const [msg, setMsg] = useState("");
 
   const reload = async () => {
@@ -20,6 +21,7 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
     setTodos(await listTodos());
     setReminders(await listReminders());
     setNotes(await listNotes());
+    setPeople(await listPeople());
   };
   useEffect(() => { void reload(); }, []);
   const bump = () => { void reload(); onChange(); };
@@ -33,6 +35,7 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
   );
   const pinnedNotes = notes.filter((n) => n.pinned).slice(0, 5);
   const recentNotes = notes.filter((n) => !n.pinned).slice(0, 5);
+  const birthdays = upcomingBirthdays(people, 30);
 
   async function doExport() {
     const path = await exportCalendar();
@@ -106,9 +109,49 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
             </div>
           ))}
         </Card>
+
+        <Card title="Upcoming birthdays" onHeaderClick={() => goTo("people")}>
+          {birthdays.length === 0 ? <Empty>No birthdays in the next 30 days.</Empty> : birthdays.map((b) => (
+            <div key={b.person.id} className="flex items-center gap-2 py-1">
+              <Cake size={14} className="shrink-0 text-pink-500" />
+              <span className="flex-1 truncate">{b.person.full_name || "New contact"}</span>
+              <span className="shrink-0 text-xs text-neutral-400">{b.dateLabel}</span>
+              <span className={`shrink-0 text-xs ${b.days === 0 ? "font-medium text-pink-500" : "text-neutral-400"}`}>{b.awayLabel}</span>
+            </div>
+          ))}
+        </Card>
       </div>
     </div>
   );
+}
+
+interface UpcomingBirthday { person: PersonRow; days: number; dateLabel: string; awayLabel: string }
+
+/** People whose birthday (month/day, any year) falls within the next `within`
+ * days, soonest first. Compares on month/day only, ignoring the stored year. */
+function upcomingBirthdays(people: PersonRow[], within: number): UpcomingBirthday[] {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const out: UpcomingBirthday[] = [];
+  for (const person of people) {
+    if (!person.birthday) continue;
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(person.birthday.trim());
+    if (!m) continue;
+    const month = Number(m[2]);
+    const day = Number(m[3]);
+    if (month < 1 || month > 12 || day < 1 || day > 31) continue;
+    let next = new Date(today.getFullYear(), month - 1, day);
+    if (next < today) next = new Date(today.getFullYear() + 1, month - 1, day);
+    const days = Math.round((next.getTime() - today.getTime()) / 86400000);
+    if (days > within) continue;
+    out.push({
+      person,
+      days,
+      dateLabel: format(new Date(2000, month - 1, day), "MMM d"),
+      awayLabel: days === 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`,
+    });
+  }
+  return out.sort((a, b) => a.days - b.days);
 }
 
 function Card({ title, children, onHeaderClick }: { title: string; children: React.ReactNode; onHeaderClick?: () => void }) {

@@ -13,6 +13,7 @@ import type {
   ListRow,
   TagRow,
   LinkRow,
+  PersonRow,
   ItemType,
 } from "./types";
 
@@ -338,7 +339,111 @@ export async function searchNotes(query: string): Promise<NoteRow[]> {
 }
 
 // ---------------------------------------------------------------------------
-// Tags (shared across all four item types)
+// People (contacts, vCard-modeled). Attach to any item via `links`, tag via
+// `item_tags` — both already accept item_type 'person', no schema change.
+// ---------------------------------------------------------------------------
+export async function listPeople(): Promise<PersonRow[]> {
+  return (await db()).select<PersonRow[]>(
+    "SELECT * FROM people ORDER BY favorite DESC, full_name COLLATE NOCASE ASC",
+  );
+}
+
+export async function getPerson(id: string): Promise<PersonRow | undefined> {
+  const rows = await (await db()).select<PersonRow[]>("SELECT * FROM people WHERE id = ?", [id]);
+  return rows[0];
+}
+
+/** LIKE search over name/nickname/org and the raw JSON emails/phones text. */
+export async function searchPeople(query: string): Promise<PersonRow[]> {
+  const q = query.trim();
+  if (!q) return listPeople();
+  const like = `%${q}%`;
+  return (await db()).select<PersonRow[]>(
+    `SELECT * FROM people
+     WHERE full_name LIKE ? OR nickname LIKE ? OR organization LIKE ?
+        OR emails LIKE ? OR phones LIKE ?
+     ORDER BY favorite DESC, full_name COLLATE NOCASE ASC`,
+    [like, like, like, like, like],
+  );
+}
+
+export type PersonInput = Omit<
+  PersonRow,
+  "id" | "sequence" | "created_at" | "updated_at"
+> & { id?: string };
+
+export async function upsertPerson(input: PersonInput): Promise<string> {
+  const d = await db();
+  const now = nowIso();
+  if (input.id) {
+    await d.execute(
+      `UPDATE people SET full_name=?, given_name=?, family_name=?, additional_names=?,
+         honorific_prefix=?, honorific_suffix=?, nickname=?, emails=?, phones=?,
+         addresses=?, organization=?, title=?, birthday=?, urls=?, notes=?, photo=?,
+         custom_fields=?, favorite=?, sequence=sequence+1, updated_at=? WHERE id=?`,
+      [
+        input.full_name, input.given_name, input.family_name, input.additional_names,
+        input.honorific_prefix, input.honorific_suffix, input.nickname, input.emails,
+        input.phones, input.addresses, input.organization, input.title, input.birthday,
+        input.urls, input.notes, input.photo, input.custom_fields, input.favorite,
+        now, input.id,
+      ],
+    );
+    return input.id;
+  }
+  const id = newId();
+  await d.execute(
+    `INSERT INTO people (id, full_name, given_name, family_name, additional_names,
+       honorific_prefix, honorific_suffix, nickname, emails, phones, addresses,
+       organization, title, birthday, urls, notes, photo, custom_fields, favorite,
+       sequence, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)`,
+    [
+      id, input.full_name, input.given_name, input.family_name, input.additional_names,
+      input.honorific_prefix, input.honorific_suffix, input.nickname, input.emails,
+      input.phones, input.addresses, input.organization, input.title, input.birthday,
+      input.urls, input.notes, input.photo, input.custom_fields, input.favorite,
+      now, now,
+    ],
+  );
+  return id;
+}
+
+/**
+ * Insert-or-update a person while preserving a caller-supplied id (= vCard UID).
+ * For future .vcf import so imported contacts keep their original stable UID as
+ * the primary key, which CardDAV sync depends on. Mirrors upsertEventWithId.
+ */
+export async function upsertPersonWithId(id: string, input: PersonInput): Promise<void> {
+  const existing = await getPerson(id);
+  if (existing) {
+    await upsertPerson({ ...input, id });
+    return;
+  }
+  const now = nowIso();
+  await (await db()).execute(
+    `INSERT INTO people (id, full_name, given_name, family_name, additional_names,
+       honorific_prefix, honorific_suffix, nickname, emails, phones, addresses,
+       organization, title, birthday, urls, notes, photo, custom_fields, favorite,
+       sequence, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)`,
+    [
+      id, input.full_name, input.given_name, input.family_name, input.additional_names,
+      input.honorific_prefix, input.honorific_suffix, input.nickname, input.emails,
+      input.phones, input.addresses, input.organization, input.title, input.birthday,
+      input.urls, input.notes, input.photo, input.custom_fields, input.favorite,
+      now, now,
+    ],
+  );
+}
+
+export async function deletePerson(id: string): Promise<void> {
+  await (await db()).execute("DELETE FROM people WHERE id=?", [id]);
+  await removeItemRelations("person", id);
+}
+
+// ---------------------------------------------------------------------------
+// Tags (shared across all item types)
 // ---------------------------------------------------------------------------
 export async function listTags(): Promise<TagRow[]> {
   return (await db()).select<TagRow[]>("SELECT * FROM tags ORDER BY name ASC");
@@ -414,19 +519,21 @@ export async function allLinkTargets(): Promise<
   const reminders = await d.select<{ id: string; title: string }[]>("SELECT id, title FROM reminders");
   const todos = await d.select<{ id: string; title: string }[]>("SELECT id, title FROM todos");
   const notes = await d.select<{ id: string; title: string | null }[]>("SELECT id, title FROM notes");
+  const people = await d.select<{ id: string; full_name: string }[]>("SELECT id, full_name FROM people");
   return [
     ...events.map((e) => ({ type: "event" as ItemType, id: e.id, label: e.summary })),
     ...reminders.map((r) => ({ type: "reminder" as ItemType, id: r.id, label: r.title })),
     ...todos.map((t) => ({ type: "todo" as ItemType, id: t.id, label: t.title })),
     ...notes.map((n) => ({ type: "note" as ItemType, id: n.id, label: n.title || "(untitled)" })),
+    ...people.map((p) => ({ type: "person" as ItemType, id: p.id, label: p.full_name })),
   ];
 }
 
 /** Human-readable label for any item, used when rendering links/search. */
 export async function getItemLabel(type: ItemType, id: string): Promise<string> {
   const d = await db();
-  const table = { event: "events", reminder: "reminders", todo: "todos", note: "notes" }[type];
-  const col = type === "event" ? "summary" : type === "note" ? "title" : "title";
+  const table = { event: "events", reminder: "reminders", todo: "todos", note: "notes", person: "people" }[type];
+  const col = type === "event" ? "summary" : type === "person" ? "full_name" : "title";
   const rows = await d.select<{ label: string | null }[]>(
     `SELECT ${col} AS label FROM ${table} WHERE id=?`,
     [id],

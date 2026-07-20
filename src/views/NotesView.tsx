@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import type { NoteRow } from "../types";
 import { listNotes, upsertNote, deleteNote, searchNotes, allLinkTargets } from "../db";
 import { Button } from "../components/ui";
-import { TagEditor, LinksPanel, LinkTarget } from "../components/ItemMeta";
+import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/ItemMeta";
 import { fmtDateTime } from "../lib/format";
 
 export default function NotesView({ onChange }: { onChange: () => void }) {
@@ -161,8 +161,9 @@ function NoteEditor({
         />
       )}
 
-      <div className="mt-4 grid grid-cols-2 gap-4 rounded-lg border border-neutral-200 p-4 dark:border-neutral-700">
+      <div className="mt-4 grid grid-cols-3 gap-4 rounded-lg border border-neutral-200 p-4 dark:border-neutral-700">
         <TagEditor type="note" id={note.id} />
+        <PeoplePanel type="note" id={note.id} />
         <LinksPanel type="note" id={note.id} targets={targets} />
       </div>
     </div>

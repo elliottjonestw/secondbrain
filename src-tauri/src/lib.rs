@@ -4,6 +4,7 @@ use tauri_plugin_sql::{Migration, MigrationKind};
 
 const MIGRATION_V1: &str = include_str!("../migrations/001_init.sql");
 const MIGRATION_V2: &str = include_str!("../migrations/002_default_lists.sql");
+const MIGRATION_V3: &str = include_str!("../migrations/003_people.sql");
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -18,6 +19,12 @@ pub fn run() {
             version: 2,
             description: "seed default lists Personal and Work, drop Inbox",
             sql: MIGRATION_V2,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 3,
+            description: "people (contacts, vCard-modeled)",
+            sql: MIGRATION_V3,
             kind: MigrationKind::Up,
         },
     ];

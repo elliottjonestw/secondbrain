@@ -2,7 +2,7 @@
 // Booleans are stored as 0/1 integers in SQLite; we expose them as numbers
 // at the DB boundary and convert where convenient.
 
-export type ItemType = "event" | "reminder" | "todo" | "note";
+export type ItemType = "event" | "reminder" | "todo" | "note" | "person";
 
 export interface EventRow {
   id: string;
@@ -65,6 +65,48 @@ export interface NoteRow {
   title: string | null;
   body: string | null;
   pinned: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+// People (contacts), modeled on vCard 4.0 (RFC 6350). See 003_people.sql.
+// Multi-value fields are stored as JSON arrays on the row (parsed at the UI
+// boundary), the same pattern events use for exdates/categories.
+export interface PersonEmail { type: string; value: string; primary?: boolean }
+export interface PersonPhone { type: string; value: string; primary?: boolean }
+export interface PersonAddress {
+  type: string;
+  street?: string;
+  city?: string;
+  region?: string;
+  postal_code?: string;
+  country?: string;
+}
+export interface PersonUrl { type: string; value: string }
+/** User-defined data point, e.g. { label: "Eye Color", value: "Blue" }. */
+export interface PersonCustomField { label: string; value: string }
+
+export interface PersonRow {
+  id: string;               // UUID, = vCard UID
+  full_name: string;        // vCard FN
+  given_name: string | null;
+  family_name: string | null;
+  additional_names: string | null;
+  honorific_prefix: string | null;
+  honorific_suffix: string | null;
+  nickname: string | null;
+  emails: string | null;    // JSON PersonEmail[]
+  phones: string | null;    // JSON PersonPhone[]
+  addresses: string | null; // JSON PersonAddress[]
+  organization: string | null;
+  title: string | null;
+  birthday: string | null;  // ISO date (vCard BDAY)
+  urls: string | null;      // JSON PersonUrl[]
+  notes: string | null;
+  photo: string | null;     // data URI / URL
+  custom_fields: string | null; // JSON PersonCustomField[]
+  favorite: number;         // 0 | 1
+  sequence: number;
   created_at: string | null;
   updated_at: string | null;
 }
