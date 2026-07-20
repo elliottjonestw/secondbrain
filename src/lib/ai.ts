@@ -1613,6 +1613,9 @@ const SYSTEM_PROMPT =
   "How to answer:\n" +
   "- Your replies are often read aloud by a text-to-speech voice, so write the way a person would SAY it: one " +
   "or two short sentences of ordinary prose.\n" +
+  "- BUT keep numbers as digits — never spell them out as words. Phone numbers, times, dates, prices and codes " +
+  "go in normal readable form (+1 555-010-2020, 3pm, $50, Jul 21), NOT \"plus one five five five…\". The " +
+  "sentence around them can sound spoken; the number itself must be readable at a glance.\n" +
   "- NEVER use tables, bullet points, numbered lists, headings, or bold field labels like \"**Time:**\". Do not " +
   "recite an item's every field.\n" +
   "- Lead with the answer. Don't open with a preamble like \"You have the following events\" or \"Here is what I " +
