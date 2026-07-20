@@ -17,6 +17,7 @@ import type { EventRow, ItemType } from "../types";
 import {
   db, listLists, listTags, linksForItem, tagsForItem, getItemLabel,
   upsertTodo, upsertEvent, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
+  deleteTodo, deleteEvent, deleteReminder, deleteNote, deleteList,
 } from "../db";
 import { expandEvents } from "./recurrence";
 import { getSettings } from "./settings";
@@ -384,6 +385,48 @@ const TOOLS = [
         },
         required: ["type", "id", "tag"],
       },
+    },
+  },
+
+  // ---- Delete tools. Destructive & irreversible — confirm before using. ----
+  {
+    type: "function",
+    function: {
+      name: "delete_todo",
+      description: "Permanently delete a to-do (and its subtasks) by id. Irreversible — look up the item and confirm it's the right one with the user before deleting.",
+      parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_event",
+      description: "Permanently delete a calendar event by id. Deletes the whole event/series. Irreversible — confirm with the user first.",
+      parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_reminder",
+      description: "Permanently delete a reminder by id. Irreversible — confirm with the user first.",
+      parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_note",
+      description: "Permanently delete a note by id. Irreversible — confirm with the user first.",
+      parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "delete_list",
+      description: "Delete a to-do list by id; its tasks are moved to another list (not deleted). Cannot delete the only remaining list. Confirm with the user first.",
+      parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
     },
   },
 ] as const;
@@ -754,6 +797,40 @@ async function toolAddTag(args: Record<string, unknown>) {
   return { ok: true };
 }
 
+// ---- Delete executors (destructive; reuse the same db helpers as the UI) ----
+async function toolDeleteTodo(args: Record<string, unknown>) {
+  const t = await getRowById("todos", args.id);
+  if (!t) return { error: `No todo found with id ${args.id}.` };
+  await deleteTodo(t.id);
+  return { ok: true, deleted: { type: "todo", id: t.id, title: t.title } };
+}
+async function toolDeleteEvent(args: Record<string, unknown>) {
+  const e = await getRowById("events", args.id);
+  if (!e) return { error: `No event found with id ${args.id}.` };
+  await deleteEvent(e.id);
+  return { ok: true, deleted: { type: "event", id: e.id, summary: e.summary } };
+}
+async function toolDeleteReminder(args: Record<string, unknown>) {
+  const r = await getRowById("reminders", args.id);
+  if (!r) return { error: `No reminder found with id ${args.id}.` };
+  await deleteReminder(r.id);
+  return { ok: true, deleted: { type: "reminder", id: r.id, title: r.title } };
+}
+async function toolDeleteNote(args: Record<string, unknown>) {
+  const n = await getRowById("notes", args.id);
+  if (!n) return { error: `No note found with id ${args.id}.` };
+  await deleteNote(n.id);
+  return { ok: true, deleted: { type: "note", id: n.id, title: n.title } };
+}
+async function toolDeleteList(args: Record<string, unknown>) {
+  const l = await getRowById("lists", args.id);
+  if (!l) return { error: `No list found with id ${args.id}.` };
+  const lists = await listLists();
+  if (lists.length <= 1) return { error: "Can't delete the only remaining list." };
+  await deleteList(l.id);
+  return { ok: true, deleted: { type: "list", id: l.id, name: l.name }, note: "Its tasks were moved to another list." };
+}
+
 async function executeTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   switch (name) {
     // read
@@ -774,6 +851,12 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case "update_note": return toolUpdateNote(args);
     case "create_list": return toolCreateList(args);
     case "add_tag": return toolAddTag(args);
+    // delete
+    case "delete_todo": return toolDeleteTodo(args);
+    case "delete_event": return toolDeleteEvent(args);
+    case "delete_reminder": return toolDeleteReminder(args);
+    case "delete_note": return toolDeleteNote(args);
+    case "delete_list": return toolDeleteList(args);
     default: return { error: `Unknown tool: ${name}` };
   }
 }
@@ -797,6 +880,11 @@ function statusFor(name: string, args: Record<string, unknown>): string {
     case "update_note": return "Updating a note…";
     case "create_list": return "Creating a list…";
     case "add_tag": return "Adding a tag…";
+    case "delete_todo": return "Deleting a to-do…";
+    case "delete_event": return "Deleting an event…";
+    case "delete_reminder": return "Deleting a reminder…";
+    case "delete_note": return "Deleting a note…";
+    case "delete_list": return "Deleting a list…";
     default: return "Working…";
   }
 }
@@ -804,19 +892,23 @@ function statusFor(name: string, args: Record<string, unknown>): string {
 const SYSTEM_PROMPT =
   "You are a helpful personal assistant embedded in a local life-management app called Second Brain. " +
   "You help the user with THEIR data — calendar events, reminders, to-dos, notes, lists, and tags.\n\n" +
-  "You can both READ and WRITE data:\n" +
+  "You can READ, WRITE, and DELETE data:\n" +
   "- Read/lookup tools: get_overview, search_todos, search_events, search_reminders, search_notes, get_item.\n" +
   "- Create/update tools: create_todo, update_todo, create_event, update_event, create_reminder, " +
   "update_reminder, create_note, update_note, create_list, add_tag.\n" +
-  "There are NO delete tools — you cannot delete anything; if asked to delete, say the user must do that in the app.\n\n" +
+  "- Delete tools: delete_todo, delete_event, delete_reminder, delete_note, delete_list.\n\n" +
   "Guidelines:\n" +
-  "- Never assume or invent data; use the read tools to look things up first. To update or tag an existing item, " +
-  "find its id with a search tool before calling the write tool.\n" +
+  "- Never assume or invent data; use the read tools to look things up first. To update, tag, or delete an existing " +
+  "item, find its id with a search tool before calling the write/delete tool.\n" +
   "- Prefer specific, filtered queries (by date range, list, tag, or keyword). If a tool reports `truncated: true`, " +
   "narrow your filters rather than assuming you've seen everything.\n" +
   "- Before creating or updating, make sure the request is clear. If key details are ambiguous (which item, what " +
   "date/time, which list), ask a brief clarifying question instead of guessing. For clearly-specified requests, just " +
   "do it.\n" +
+  "- DELETION IS PERMANENT AND CANNOT BE UNDONE. Before deleting, identify the exact item(s) and confirm with the " +
+  "user which one(s) you will delete, unless they have already unambiguously identified the specific item to delete. " +
+  "Never delete more than the user asked for; when a request is broad or could match multiple items, list what you " +
+  "found and ask before deleting.\n" +
   "- Interpret relative dates/times (\"tomorrow at 3pm\", \"next Friday\") against the current date, and pass concrete " +
   "ISO 8601 values to the tools.\n" +
   "- After making changes, briefly confirm exactly what you created or updated. Answer concisely and specifically.";

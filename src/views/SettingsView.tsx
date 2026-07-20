@@ -8,7 +8,6 @@ export default function SettingsView() {
   const [apiKey, setApiKey] = useState(initial.openaiApiKey);
   const [model, setModel] = useState(initial.openaiModel);
   const [sttModel, setSttModel] = useState(initial.sttModel);
-  const [voiceReplies, setVoiceReplies] = useState(initial.voiceReplies);
   const [reveal, setReveal] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -17,7 +16,6 @@ export default function SettingsView() {
       openaiApiKey: apiKey.trim(),
       openaiModel: model.trim() || "gpt-4o-mini",
       sttModel: sttModel.trim() || "whisper-1",
-      voiceReplies,
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -70,16 +68,9 @@ export default function SettingsView() {
 
         <div className="mb-4 border-t border-neutral-200 pt-4 dark:border-neutral-700">
           <h3 className="mb-2 text-sm font-semibold">Voice</h3>
-
-          <label className="mb-3 flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={voiceReplies}
-              onChange={(e) => setVoiceReplies(e.target.checked)}
-              className="h-4 w-4 accent-blue-600"
-            />
-            Speak the assistant's replies aloud (uses your system voice)
-          </label>
+          <p className="mb-3 text-xs text-neutral-500">
+            Talk to the assistant and it replies aloud; type and it replies in text.
+          </p>
 
           <label className="mb-1 block text-sm font-medium">Speech-to-text model</label>
           <input

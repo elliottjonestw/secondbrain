@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Send, Sparkles, Trash2, Settings as SettingsIcon, Mic, Square, Volume2, VolumeX } from "lucide-react";
+import { Send, Sparkles, Trash2, Settings as SettingsIcon, Mic, Square, VolumeX } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { askAssistant, ChatMessage } from "../lib/ai";
-import { hasApiKey, getSettings } from "../lib/settings";
+import { hasApiKey } from "../lib/settings";
 import {
   startRecording, transcribe, speak, stopSpeaking, isSpeechSupported, isRecordingSupported, Recording,
 } from "../lib/voice";
@@ -52,7 +52,7 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
     try {
       const reply = await askAssistant(next, { onStatus: setStatus });
       setMessages([...next, { role: "assistant", content: reply }]);
-      if (spoken && voiceOutput && getSettings().voiceReplies) {
+      if (spoken && voiceOutput) {
         setSpeaking(true);
         speak(reply);
         // Poll speechSynthesis to clear the speaking indicator when done.
@@ -257,11 +257,6 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
             <Send size={18} />
           </button>
         </div>
-        {voiceOutput && (
-          <div className="mx-auto mt-2 flex max-w-2xl items-center gap-1 text-xs text-neutral-400">
-            <Volume2 size={12} /> Voice replies {getSettings().voiceReplies ? "on" : "off"} — change in Settings
-          </div>
-        )}
       </div>
     </div>
   );

@@ -54,7 +54,8 @@ Runtime DB (macOS): `~/Library/Application Support/com.elliottjones.secondbrain/
 
 - **Tool-calling, not context-stuffing.** The model is given read + write tools and pulls/changes only what it needs via an agentic loop (capped at `MAX_TOOL_ROUNDS`). This scales to large datasets.
 - **Read tools are filtered + paginated:** bounded `limit` (default 25, max 100), returning `total` + `truncated` so the model narrows filters instead of assuming it saw everything. Push filters into SQL / FTS; `search_events` only fully expands *recurring* events and pre-filters the rest by window.
-- **Write tools: create/update only — NO delete tools by design** (every change is reversible in the UI). Updates do a partial merge (`"field" in args` distinguishes "clear to null" from "leave unchanged") and call the same `db.ts` upsert helpers so `sequence`/timestamps stay correct.
+- **Write tools (create/update)** do a partial merge (`"field" in args` distinguishes "clear to null" from "leave unchanged") and call the same `db.ts` upsert helpers so `sequence`/timestamps stay correct.
+- **Delete tools** (`delete_todo/event/reminder/note/list`) reuse the `db.ts` delete helpers. Deletion is **permanent** — the system prompt makes the model confirm the exact item(s) before deleting. There is still no in-UI confirmation dialog; if you add one, that's a deliberate change (update the README). `delete_list` rehomes tasks and refuses to delete the last list.
 - **To add a capability:** add an entry to the `TOOLS` array (OpenAI function schema) and a `case` in `executeTool`, plus a status string in `statusFor`. The loop handles multi-tool rounds automatically. Keep new tools scoped and, for reads, paginated.
 - The model gets the current **date + timezone** in the system prompt every request — keep that. Settings (API key, model, voice) live in `localStorage` (`src/lib/settings.ts`), **not** the SQLite DB, so a demo reset doesn't wipe them.
 - There is **no per-write confirmation dialog** today; the prompt tells the model to confirm ambiguous requests in chat. If adding confirmation UX, that's a deliberate change — update the README.
@@ -64,6 +65,7 @@ Runtime DB (macOS): `~/Library/Application Support/com.elliottjones.secondbrain/
 - Voice is just an **I/O layer around `askAssistant()`** — transcript in as a normal user turn, text reply read out. Don't couple it to the agent logic.
 - **STT:** `getUserMedia` + `MediaRecorder` in the webview → OpenAI Whisper via `plugin-http` (`/v1/audio/transcriptions`, covered by the existing `api.openai.com/*` scope — no new capability). Audio is multipart `FormData`; don't set `Content-Type` (the boundary is auto-added). WKWebView tends to record mp4/aac, so `preferredMime()` probes support and `extFor()` sets the right filename.
 - **TTS:** system `speechSynthesis` (free, offline, portable). Strip markdown before speaking.
+- **Behavior rule (no setting):** if the user spoke (voice turn), speak the reply; if they typed, reply in text only. `deliver(text, spoken)` carries this — don't reintroduce a "voice replies" toggle.
 - **Interaction is push-to-talk** (click start / click stop). No hands-free/VAD yet — that's the planned phase 2.
 - **macOS mic gotcha:** `getUserMedia` requires `NSMicrophoneUsageDescription` in `src-tauri/Info.plist` (Tauri merges it into the bundle) or the OS kills the app. Dev builds may not always pick it up — a packaged `tauri build` will. All three web APIs work in Chromium/WebView2/browsers, so voice stays portable.
 

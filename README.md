@@ -1,6 +1,6 @@
 # 🧠 Second Brain
 
-A local-first personal life-management desktop app: **Calendar, Reminders, To-Do, and Notes** in one integrated tool, with an optional **AI assistant** that can answer questions about your data *and* create/update items on your behalf. Built with Tauri v2 + React + TypeScript + SQLite. Fully offline (the only network call is to OpenAI, and only if you opt in) — no account, no cloud sync.
+A local-first personal life-management desktop app: **Calendar, Reminders, To-Do, and Notes** in one integrated tool, with an optional **AI assistant** that can answer questions about your data *and* create, update, or delete items on your behalf. Built with Tauri v2 + React + TypeScript + SQLite. Fully offline (the only network call is to OpenAI, and only if you opt in) — no account, no cloud sync.
 
 ## Stack
 
@@ -64,7 +64,7 @@ Migrations are versioned and idempotent (managed by `tauri-plugin-sql`); they ru
 - **Reminders** — Apple-Reminders-style with a filter sidebar (**All / Scheduled / Flagged / Completed**, each with live counts). Due date + optional alert time, recurrence, priority, link to a to-do. Native OS notifications fire when due (polled once a minute while the app is open).
 - **To-Do** — multiple lists (defaults: **Personal**, **Work**), inline list creation, subtasks, priority, due dates, drag-to-reorder, and "Convert to event". Incomplete tasks always sort above completed ones.
 - **Notes** — markdown with live preview, pin, FTS5 full-text search. The editor holds local state and debounces saves, so typing stays smooth.
-- **Assistant** — an AI chat that answers questions about your data and can create/update items, by typing **or by voice** (see below).
+- **Assistant** — an AI chat that answers questions about your data and can create, update, or delete items, by typing **or by voice** (see below).
 - **Settings** — enter your OpenAI API key + model.
 - **Integration** — shared tagging and generic `links` (any item ↔ any item) across all four types; global search across everything.
 
@@ -77,6 +77,7 @@ An optional assistant that answers questions about your events, to-dos, reminder
 **Setup:** open **Settings** (sidebar, bottom) → paste your `sk-…` key → pick a model (default `gpt-4o-mini`) → Save. Then open **Assistant** and try:
 - *"What's due next week in Work?"* / *"Which notes mention the Q3 report?"* (read)
 - *"Add a to-do to call the dentist tomorrow at 2pm"* / *"Mark 'Buy groceries' as done"* / *"Create a weekly team-lunch event on Fridays at noon"* (write)
+- *"Delete the dentist to-do"* / *"Remove the team-lunch event"* (delete — it'll confirm the exact item first)
 
 **How it works — tool calling, not context stuffing:** rather than sending your entire dataset with every request (which doesn't scale), the model is given a set of **tools** and pulls/changes only what it needs via an agentic loop (`src/lib/ai.ts`):
 
@@ -97,18 +98,20 @@ An optional assistant that answers questions about your events, to-dos, reminder
 | `create_note` / `update_note` | create or edit a markdown note |
 | `create_list` | add a new to-do list |
 | `add_tag` | tag any item |
+| `delete_todo` / `delete_event` / `delete_reminder` / `delete_note` | permanently delete an item |
+| `delete_list` | delete a list (its tasks move to another list; can't delete the last list) |
 
 **Built to scale:** every read tool is filtered and paginated — bounded `limit` (default 25, max 100) — and returns a `total` count and `truncated` flag so the model knows when there's more and narrows its filters instead of assuming it saw everything. Nothing loads a whole table blindly: searches push filters into SQL, notes use the FTS index, and `search_events` only fully expands *recurring* events while pre-filtering non-recurring ones by the requested window. Live tool activity ("Checking the calendar…", "Creating a to-do…") is shown while the assistant works.
 
-**Voice mode:** the Assistant has a mic button (push-to-talk). Click it to record, click again to stop — your speech is transcribed with **OpenAI Whisper** (`whisper-1` by default) and sent as a normal turn, and the reply is read back aloud using your **operating system's built-in voice** (Web Speech Synthesis). Voice is just an I/O layer around the same tool-calling loop, so it can answer *and* create/update items by voice. Toggle spoken replies and choose the transcription model in **Settings → Voice**.
+**Voice mode:** the Assistant has a mic button (push-to-talk). Click it to record, click again to stop — your speech is transcribed with **OpenAI Whisper** (`whisper-1` by default) and sent as a normal turn. **Talk to the assistant and it replies aloud** (your OS's built-in voice, Web Speech Synthesis); **type and it replies in text** — that's the whole rule, no toggle. Voice is just an I/O layer around the same tool-calling loop, so it can answer *and* create/update/delete items by voice. Choose the transcription model in **Settings → Voice**.
 
 - Voice **input** sends audio to OpenAI (billed per minute); spoken **replies** are generated locally by your OS (free, offline).
 - **Voice input requires a packaged build** (`npm run tauri build`), not `tauri dev`. macOS WKWebView only exposes `navigator.mediaDevices` when the running app is recognized as mic-capable, which needs the `NSMicrophoneUsageDescription` from the merged `src-tauri/Info.plist` — present only in a bundled `.app`. In the packaged app, the first voice attempt triggers the system mic prompt. In `tauri dev` the mic button shows a "not available in this environment" error.
 - Recording/transcription/TTS all use standard web APIs (`getUserMedia`/`MediaRecorder`/`speechSynthesis`), so this stays portable to the browser/Windows builds.
 
 **Write behavior & safety:**
-- **No delete** — there are no delete tools by design; every change the assistant makes is reversible by you in the app. Deletions are yours to do manually.
-- The system prompt instructs the model to look up an item's id before updating it, to **ask a clarifying question when a request is ambiguous** rather than guess, and to briefly **confirm what it created or updated** afterwards.
+- The assistant can **create, update, and delete**. Deletion is **permanent and irreversible**, so the system prompt tells the model to look up the exact item first and **confirm which item(s) it will delete** unless you've already named a specific one — and never to delete more than you asked for.
+- The system prompt also instructs the model to look up an item's id before updating it, to **ask a clarifying question when a request is ambiguous** rather than guess, and to briefly **confirm what it created, updated, or deleted** afterwards.
 - Changes appear in the other views the next time you open them (each view reloads its data on navigation).
 - The key is stored locally and sent directly to OpenAI (via the Rust HTTP plugin, scoped to `api.openai.com`).
 
@@ -165,7 +168,7 @@ See [CLAUDE.md](CLAUDE.md) for architecture principles, conventions, and the got
 
 ## Notes / current limitations
 
-- The AI assistant can read and create/update data (no delete) and requires your own OpenAI API key. It acts without a per-change confirmation dialog — it relies on the model to confirm ambiguous requests in chat first — so review changes it reports. Replies are non-streaming (the whole answer appears once ready).
+- The AI assistant can read, create/update, **and delete** data, and requires your own OpenAI API key. It acts without a per-change confirmation *dialog* — it relies on the model to confirm ambiguous or destructive requests in chat first — so review what it reports, especially deletions (which are permanent). Replies are non-streaming (the whole answer appears once ready).
 - Voice input is **push-to-talk** (click to start/stop) — no hands-free/continuous mode or silence auto-stop yet. It **only works in a packaged build** (`tauri dev` can't access the mic — see the Setup section), needs microphone permission, and sends audio to OpenAI for transcription. Spoken-reply voice quality depends on the OS's installed voices.
 - Desktop notifications are **poll-based** (checked every 60s while the app is open) — the plugin has no cross-platform "schedule for later" API. Alerts won't fire while the app is closed.
 - Drag-to-reschedule is day-granularity in month view and disabled for recurring series (dragging a single instance is ambiguous; edit the series, or use "Skip this day").
