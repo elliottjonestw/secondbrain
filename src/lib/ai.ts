@@ -320,7 +320,7 @@ const TOOLS = [
     function: {
       name: "search_people",
       description:
-        "Search the user's contacts (people). Matches name, nickname, organization, and email/phone text. Returns compact records including ids.",
+        "Search the user's contacts (people). Matches name, nickname, organization, and email/phone text. Returns compact records including ids, emails, phones, addresses, websites, custom fields, and notes.",
       parameters: {
         type: "object",
         properties: {
@@ -885,6 +885,7 @@ async function toolSearchEvents(args: Record<string, unknown>) {
       start: toLocalIso(o.start.toISOString()), end: o.end ? toLocalIso(o.end.toISOString()) : null,
       all_day: !!o.event.all_day, recurring: o.isRecurringInstance,
       location: o.event.location || undefined,
+      description: o.event.description || undefined,
       calendar_id: o.event.calendarId,
       calendar: getCalendar(o.event.calendarId)?.name,
     })),
@@ -1051,6 +1052,10 @@ async function toolSearchPeople(args: Record<string, unknown>) {
       birthday: p.birthday || undefined,
       emails: parseCol(p.emails),
       phones: parseCol(p.phones),
+      addresses: parseCol(p.addresses),
+      websites: parseCol(p.urls),
+      custom_fields: parseCol(p.custom_fields),
+      notes: p.notes || undefined,
       favorite: !!p.favorite,
     })),
   };
