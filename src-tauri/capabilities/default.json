@@ -24,7 +24,11 @@
     },
     {
       "identifier": "http:default",
-      "allow": [{ "url": "https://api.openai.com/*" }]
+      "allow": [
+        { "url": "https://api.openai.com/*" },
+        { "url": "https://caldav.icloud.com/*" },
+        { "url": "https://*.icloud.com/*" }
+      ]
     }
   ]
 }

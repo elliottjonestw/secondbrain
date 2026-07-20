@@ -1,9 +1,13 @@
 // Recurrence expansion via the `rrule` package (RFC 5545). We never hand-roll
 // recurrence math. Given an event and a visible date window, produce concrete
 // occurrences for the calendar to render.
+//
+// This is the *local* calendar's expansion path: local events store a plain
+// absolute DTSTART with no TZID to resolve. Remote (CalDAV) events carry their
+// own VTIMEZONE and are expanded by ical.js instead — see lib/caldav/ical.ts.
 
 import { rrulestr } from "rrule";
-import type { EventRow, EventOccurrence } from "../types";
+import type { UnifiedEvent, EventOccurrence } from "../types";
 
 function normalizeRule(rrule: string): string {
   return rrule.startsWith("RRULE:") || rrule.startsWith("DTSTART")
@@ -25,7 +29,7 @@ function sameDay(a: Date, b: Date): boolean {
  * Non-recurring events yield 0 or 1 occurrence.
  */
 export function expandEvent(
-  ev: EventRow,
+  ev: UnifiedEvent,
   windowStart: Date,
   windowEnd: Date,
 ): EventOccurrence[] {
@@ -73,7 +77,7 @@ export function expandEvent(
 
 /** Expand many events across a window and sort chronologically. */
 export function expandEvents(
-  events: EventRow[],
+  events: UnifiedEvent[],
   windowStart: Date,
   windowEnd: Date,
 ): EventOccurrence[] {

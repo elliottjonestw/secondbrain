@@ -1,0 +1,242 @@
+// VEVENT <-> UnifiedEvent, via ical.js. We never hand-roll iCalendar parsing or
+// recurrence (same rule as lib/ics.ts and lib/recurrence.ts).
+//
+// Why ical.js expansion here rather than the `rrule` path used for local
+// events: a remote VEVENT carries its own timezone (DTSTART;TZID=... plus an
+// embedded VTIMEZONE). ical.js resolves that to a true absolute instant, so an
+// event authored in another zone lands at the right wall-clock time once the
+// app renders it in the machine's local zone. Local events have no TZID to
+// resolve, so they keep using `rrule`.
+
+import ICAL from "ical.js";
+import type { EventOccurrence, UnifiedEvent } from "../../types";
+import type { CalDavCalendar } from "../settings";
+
+/** Safety cap so a pathological RRULE can't spin forever. */
+const MAX_OCCURRENCES = 750;
+
+/**
+ * Teach ical.js about the timezones a calendar-data blob defines, so TZID
+ * references inside it resolve. Registrations are process-global and keyed by
+ * TZID, which is exactly the sharing we want.
+ */
+function registerTimezones(comp: ICAL.Component): void {
+  for (const vt of comp.getAllSubcomponents("vtimezone")) {
+    const tzid = vt.getFirstPropertyValue("tzid") as unknown as string | null;
+    if (!tzid || ICAL.TimezoneService.has(tzid)) continue;
+    try {
+      ICAL.TimezoneService.register(new ICAL.Timezone(vt));
+    } catch {
+      /* a malformed VTIMEZONE shouldn't sink the whole calendar */
+    }
+  }
+}
+
+/** The series master — the VEVENT without a RECURRENCE-ID. */
+function masterVevent(comp: ICAL.Component): ICAL.Component | null {
+  const vevents = comp.getAllSubcomponents("vevent");
+  if (vevents.length === 0) return null;
+  return vevents.find((v) => !v.getFirstPropertyValue("recurrence-id")) ?? vevents[0];
+}
+
+function readRrule(ve: ICAL.Component): string | null {
+  const prop = ve.getFirstPropertyValue("rrule");
+  if (!prop) return null;
+  const text = String(prop);
+  return text.replace(/^RRULE:/i, "") || null;
+}
+
+function readExdates(ve: ICAL.Component): string | null {
+  const out: string[] = [];
+  for (const prop of ve.getAllProperties("exdate")) {
+    for (const value of prop.getValues()) {
+      const time = value as unknown as ICAL.Time;
+      if (typeof time?.toJSDate === "function") out.push(time.toJSDate().toISOString());
+    }
+  }
+  return out.length ? JSON.stringify(out) : null;
+}
+
+function readCategories(ve: ICAL.Component): string | null {
+  const cats = ve.getAllProperties("categories").flatMap((p) => p.getValues() as unknown as string[]);
+  return cats.length ? JSON.stringify(cats) : null;
+}
+
+/** Build the UnifiedEvent for a remote VEVENT master. */
+function toUnified(
+  ve: ICAL.Component,
+  event: ICAL.Event,
+  cal: CalDavCalendar,
+  href: string,
+  etag: string | undefined,
+): UnifiedEvent {
+  const allDay = event.startDate?.isDate ?? false;
+  return {
+    source: "caldav",
+    calendarId: cal.id,
+    id: event.uid || href,
+    href,
+    etag,
+    color: cal.color,
+    summary: event.summary || "(untitled)",
+    description: event.description || null,
+    location: event.location || null,
+    dtstart: event.startDate ? event.startDate.toJSDate().toISOString() : new Date().toISOString(),
+    dtend: event.endDate ? event.endDate.toJSDate().toISOString() : null,
+    all_day: allDay ? 1 : 0,
+    rrule: readRrule(ve),
+    exdates: readExdates(ve),
+    status: (ve.getFirstPropertyValue("status") as unknown as string) || "CONFIRMED",
+    categories: readCategories(ve),
+  };
+}
+
+/**
+ * Parse one CalDAV calendar resource and expand it into the occurrences that
+ * overlap [windowStart, windowEnd]. Returns [] for anything unparseable — one
+ * bad event should never blank out the calendar.
+ */
+export function expandRemoteEvent(
+  calendarData: string,
+  href: string,
+  etag: string | undefined,
+  cal: CalDavCalendar,
+  windowStart: Date,
+  windowEnd: Date,
+): EventOccurrence[] {
+  let comp: ICAL.Component;
+  try {
+    comp = new ICAL.Component(ICAL.parse(calendarData));
+  } catch {
+    return [];
+  }
+
+  registerTimezones(comp);
+  const ve = masterVevent(comp);
+  if (!ve) return [];
+
+  let event: ICAL.Event;
+  try {
+    event = new ICAL.Event(ve);
+  } catch {
+    return [];
+  }
+  if (!event.startDate) return [];
+
+  const unified = toUnified(ve, event, cal, href, etag);
+
+  if (!event.isRecurring()) {
+    const start = event.startDate.toJSDate();
+    const end = event.endDate ? event.endDate.toJSDate() : null;
+    const effectiveEnd = end ?? start;
+    if (effectiveEnd >= windowStart && start <= windowEnd) {
+      return [{ event: unified, start, end, isRecurringInstance: false }];
+    }
+    return [];
+  }
+
+  const out: EventOccurrence[] = [];
+  try {
+    // Start iterating from the series start; ical.js applies EXDATE for us.
+    const iterator = event.iterator();
+    for (let i = 0; i < MAX_OCCURRENCES; i++) {
+      const next = iterator.next();
+      if (!next) break;
+      const details = event.getOccurrenceDetails(next);
+      const start = details.startDate.toJSDate();
+      if (start > windowEnd) break;
+      const end = details.endDate ? details.endDate.toJSDate() : null;
+      if ((end ?? start) >= windowStart) {
+        out.push({ event: unified, start, end, isRecurringInstance: true });
+      }
+    }
+    return out;
+  } catch {
+    // Malformed rule — show the series master rather than dropping the event.
+    const start = event.startDate.toJSDate();
+    const end = event.endDate ? event.endDate.toJSDate() : null;
+    const effectiveEnd = end ?? start;
+    if (effectiveEnd >= windowStart && start <= windowEnd) {
+      return [{ event: unified, start, end, isRecurringInstance: false }];
+    }
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Serialization (for PUT)
+// ---------------------------------------------------------------------------
+
+/**
+ * Render a UnifiedEvent as a one-VEVENT VCALENDAR.
+ *
+ * Timed events are written in UTC so we never have to emit a VTIMEZONE; the
+ * instant is unambiguous either way. All-day events are written as VALUE=DATE.
+ * (Emitting local TZID + VTIMEZONE is a fidelity upgrade for later.)
+ */
+export function buildCalendarData(ev: UnifiedEvent): string {
+  const vcal = new ICAL.Component("vcalendar");
+  vcal.addPropertyWithValue("version", "2.0");
+  vcal.addPropertyWithValue("prodid", "-//Second Brain//CalDAV//EN");
+
+  const ve = new ICAL.Component("vevent");
+  vcal.addSubcomponent(ve);
+
+  ve.addPropertyWithValue("uid", ev.id);
+  ve.addPropertyWithValue("dtstamp", ICAL.Time.fromJSDate(new Date(), true));
+  ve.addPropertyWithValue("summary", ev.summary || "(untitled)");
+  if (ev.description) ve.addPropertyWithValue("description", ev.description);
+  if (ev.location) ve.addPropertyWithValue("location", ev.location);
+  if (ev.status) ve.addPropertyWithValue("status", ev.status);
+
+  if (ev.all_day) {
+    const start = new Date(ev.dtstart);
+    ve.addPropertyWithValue("dtstart", ICAL.Time.fromDateString(toDateString(start)));
+    // DTEND is exclusive for all-day events: default to the day after DTSTART.
+    const end = ev.dtend ? new Date(ev.dtend) : new Date(start.getTime() + 864e5);
+    ve.addPropertyWithValue("dtend", ICAL.Time.fromDateString(toDateString(end)));
+  } else {
+    ve.addPropertyWithValue("dtstart", ICAL.Time.fromJSDate(new Date(ev.dtstart), true));
+    if (ev.dtend) ve.addPropertyWithValue("dtend", ICAL.Time.fromJSDate(new Date(ev.dtend), true));
+  }
+
+  if (ev.rrule) {
+    try {
+      ve.addPropertyWithValue("rrule", ICAL.Recur.fromString(ev.rrule.replace(/^RRULE:/i, "")));
+    } catch {
+      /* skip an unparseable rule rather than refusing to save at all */
+    }
+  }
+
+  if (ev.exdates) {
+    try {
+      for (const iso of JSON.parse(ev.exdates) as string[]) {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) continue;
+        ve.addPropertyWithValue(
+          "exdate",
+          ev.all_day ? ICAL.Time.fromDateString(toDateString(d)) : ICAL.Time.fromJSDate(d, true),
+        );
+      }
+    } catch {
+      /* ignore malformed exdates */
+    }
+  }
+
+  if (ev.categories) {
+    try {
+      const cats = JSON.parse(ev.categories) as string[];
+      if (Array.isArray(cats) && cats.length) ve.addPropertyWithValue("categories", cats.join(","));
+    } catch {
+      /* ignore malformed categories */
+    }
+  }
+
+  return vcal.toString();
+}
+
+/** Local calendar date as YYYY-MM-DD (what VALUE=DATE expects). */
+function toDateString(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}

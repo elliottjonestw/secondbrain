@@ -129,9 +129,43 @@ export interface LinkRow {
 // we keep it simple with 0/1/2/3).
 export const PRIORITY = { NONE: 0, LOW: 1, MEDIUM: 2, HIGH: 3 } as const;
 
-// A single concrete occurrence of an event after RRULE expansion.
+// ---------------------------------------------------------------------------
+// Calendars
+//
+// Events come from two places: the built-in SQLite calendar (`local`) and any
+// CalDAV calendars the user has connected (`caldav`, e.g. iCloud). Remote
+// events are fetched live and never stored in SQLite, so `UnifiedEvent` — not
+// `EventRow` — is the shape the calendar UI, the aggregator, and the assistant
+// work with. `href`/`etag` are the CalDAV resource identity needed to write.
+// ---------------------------------------------------------------------------
+export type EventSource = "local" | "caldav";
+
+/** The id of the built-in SQLite calendar. */
+export const LOCAL_CALENDAR_ID = "local";
+
+export interface UnifiedEvent {
+  source: EventSource;
+  calendarId: string; // LOCAL_CALENDAR_ID, or a CalDavCalendar.id
+  id: string; // local UUID, or the remote event's iCal UID
+  href?: string; // CalDAV resource URL — required for PUT/DELETE
+  etag?: string; // CalDAV ETag — sent as If-Match on write
+  color: string | null; // event colour (local) or calendar colour (remote)
+  // RFC 5545 core, same shape/units as the matching EventRow fields.
+  summary: string;
+  description: string | null;
+  location: string | null;
+  dtstart: string; // ISO 8601, absolute instant (TZID already resolved)
+  dtend: string | null;
+  all_day: number; // 0 | 1
+  rrule: string | null;
+  exdates: string | null; // JSON array of ISO dates
+  status: string;
+  categories: string | null; // JSON array
+}
+
+// A single concrete occurrence of an event after recurrence expansion.
 export interface EventOccurrence {
-  event: EventRow;
+  event: UnifiedEvent;
   start: Date;
   end: Date | null;
   isRecurringInstance: boolean;

@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Bell, Pin, Cake } from "lucide-react";
 import type { EventOccurrence, TodoRow, ReminderRow, NoteRow, PersonRow } from "../types";
-import { listEvents, listTodos, listReminders, listNotes, listPeople, toggleTodo, toggleReminder } from "../db";
-import { expandEvents } from "../lib/recurrence";
+import { listTodos, listReminders, listNotes, listPeople, toggleTodo, toggleReminder } from "../db";
+import { getOccurrences } from "../lib/calendars";
 import { startOfDay, endOfDay, format, fmtTime, fmtDateTime, isOverdue, isToday } from "../lib/format";
 import { PriorityFlag } from "../components/ui";
 
@@ -16,8 +16,10 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
   const [people, setPeople] = useState<PersonRow[]>([]);
 
   const reload = async () => {
-    const events = await listEvents();
-    setOccs(expandEvents(events, startOfDay(new Date()), endOfDay(new Date())));
+    // Pulls the built-in calendar plus any visible connected ones; a calendar
+    // that can't be reached is skipped rather than breaking the whole card.
+    const { occurrences } = await getOccurrences(startOfDay(new Date()), endOfDay(new Date()));
+    setOccs(occurrences);
     setTodos(await listTodos());
     setReminders(await listReminders());
     setNotes(await listNotes());

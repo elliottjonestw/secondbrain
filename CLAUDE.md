@@ -42,6 +42,25 @@ Runtime DB (macOS): `~/Library/Application Support/com.elliottjones.secondbrain/
 2. **`src/db.ts` is the only module that touches SQLite.** Everything else calls its functions. Don't scatter raw SQL through the UI. (Exception by design: `src/lib/ai.ts` runs some read-only/filtered SQL for the assistant's tools — keep new query logic there or in `db.ts`, not in views.)
 3. **Keep domain tables separate; connect via `links` + `item_tags`.** Don't collapse events/todos/reminders/notes into one generic table.
 4. **Schema is CalDAV-ready.** UUID text PKs double as iCalendar UIDs; events carry RFC 5545 fields; every syncable row has `created_at`, `updated_at`, and a `sequence` that increments on edit. Preserve this when adding fields.
+5. **All event access goes through `src/lib/calendars.ts`.** Events now come from two backends — SQLite (the built-in calendar) and CalDAV (connected Apple calendars) — so views and `ai.ts` must call the aggregator, never `db.ts`'s event helpers or the CalDAV client directly. See the Calendars section below.
+
+## Calendars (local + CalDAV)
+
+```
+  Calendar / Today / ai.ts  ──►  src/lib/calendars.ts  ──┬──► src/db.ts        (local, SQLite)
+                                  (registry, merge,      └──► src/lib/caldav/  (remote, network)
+                                   write routing)
+```
+
+- **`UnifiedEvent` (types.ts) is the event shape everywhere above the backends** — `EventRow` is now just the SQLite row. `EventOccurrence.event` is a `UnifiedEvent`, tagged with `source` (`local` | `caldav`) and `calendarId`, plus `href`/`etag` for remote writes. `localToUnified()` converts a row.
+- **Remote events are fetched live and never stored in SQLite.** That's why this feature needed **no migration and no schema change** — and it's load-bearing, not incidental. Don't "helpfully" add a remote-events table; two-way sync with local caching is a separate, deliberate project (needs `ctag`/`sync-token` + a migration).
+- **Calendar config lives in `localStorage`** via `settings.ts` (`getCalendarSettings`/`saveCalendarSettings`): the account (Apple ID + app-specific password, plaintext, same trade-off as the OpenAI key), the discovered calendars, per-calendar visibility, and `defaultCalendarId`. Not in the DB, so a demo reset doesn't wipe it.
+- **Two expansion paths, on purpose.** Local events use `rrule` (`lib/recurrence.ts`) — they store a plain absolute DTSTART with nothing to resolve. Remote events use **ical.js** (`lib/caldav/ical.ts`) because they carry `DTSTART;TZID=…` + an embedded `VTIMEZONE`, and only ical.js resolves that to the right absolute instant. Don't unify these onto `rrule`; you'd silently break cross-timezone events. Don't hand-roll either.
+- **Writes are ETag-guarded.** `If-Match` on PUT/DELETE, `If-None-Match: *` on create. A `412` becomes `ConflictError` and must surface to the user — never blind-retry without one.
+- **Remote events have no local row**, so tags/links/people (keyed on a local event id) don't apply to them. `EventForm` hides those panels and `get_item` says so. Don't fake a local row to work around it.
+- **Reads fail soft.** `getOccurrences` returns `{ occurrences, errors }`; a dead iCloud connection must never break the local calendar. Keep that contract when adding callers.
+- **Writes emit UTC `DTSTART`, not `TZID`** (v1 — avoids having to generate a `VTIMEZONE`). Known consequence: re-saving a recurring Apple event that was authored with a `TZID` converts it to UTC, so it drifts by an hour across DST instead of holding its wall-clock time. Documented in the README limitations; emitting `TZID` + `VTIMEZONE` on write is the intended fix. Don't "fix" it by dropping the UTC conversion without also writing a VTIMEZONE — you'd produce floating times, which is worse.
+- **To add another provider** (Google/Fastmail/generic): add a `provider` case in `discovery.ts`, a host in `capabilities/default.json`, and a Settings entry. The client itself is already generic CalDAV.
 
 ## Hard-won gotchas (these have bitten us)
 
@@ -52,7 +71,10 @@ Runtime DB (macOS): `~/Library/Application Support/com.elliottjones.secondbrain/
 - **View mounting / refresh.** Only one main view is mounted at a time (conditional render in `App.tsx`); each view reloads its data on mount, so navigating away and back shows fresh data — no global refresh signal needed. **Do not** add a `key={version}` that bumps on every mutation (it remounts the view and wipes in-progress edits — this broke Notes typing). The `resetNonce` key exists *only* to force a remount after a demo-data reset; keep it changing rarely.
 - **Note editor** keeps local state and **debounces DB writes (400ms)**, flushing on unmount. Don't revert it to save-per-keystroke.
 - **New Tauri plugin?** Three steps: add the crate in `Cargo.toml`, `.plugin(...)` in `lib.rs`, and add the permission (with scope if needed) in `src-tauri/capabilities/default.json`. Missing capability = runtime "not allowed" error.
-- **Calling external APIs** (e.g. OpenAI): use `@tauri-apps/plugin-http`'s `fetch`, not the webview `fetch` — the latter is blocked by CORS from the `tauri://` origin. Scope the URL in capabilities.
+- **Calling external APIs** (e.g. OpenAI, iCloud): use `@tauri-apps/plugin-http`'s `fetch`, not the webview `fetch` — the latter is blocked by CORS from the `tauri://` origin. Scope the URL in capabilities. (Parsing the XML/ICS that comes back is ordinary JS — only the network hop needs to go through Rust.)
+- **`reqwest` drops the `Authorization` header on cross-host redirects**, and iCloud *always* redirects the entry point to a per-user shard (`pNN-caldav.icloud.com`). So `davRequest` sets `maxRedirections: 0` and follows redirects by hand, re-attaching auth each hop. If you "simplify" that away you get a 401 that looks like bad credentials. Always issue requests to the absolute hrefs discovery returned.
+- **iCloud needs an app-specific password** — a 2FA account cannot Basic-auth with the main Apple password. The Settings UI links users to `account.apple.com` for this; keep that guidance visible or connection failures look like a bug.
+- **CalDAV responses are `207 Multi-Status`**, and a single `<response>` can carry both a `200` and a `404` propstat. Use `propstatOk()` to take the 200 block — reading properties off the response directly picks up junk.
 
 ## AI assistant (`src/lib/ai.ts`)
 
@@ -62,6 +84,7 @@ Runtime DB (macOS): `~/Library/Application Support/com.elliottjones.secondbrain/
 - **Delete tools** (`delete_todo/event/reminder/note/list`) reuse the `db.ts` delete helpers. Deletion is **permanent** — the system prompt makes the model confirm the exact item(s) before deleting. There is still no in-UI confirmation dialog; if you add one, that's a deliberate change (update the README). `delete_list` rehomes tasks and refuses to delete the last list.
 - **To add a capability:** add an entry to the `TOOLS` array (OpenAI function schema) and a `case` in `executeTool`, plus a status string in `statusFor`. The loop handles multi-tool rounds automatically. Keep new tools scoped and, for reads, paginated.
 - **People + linking tools:** `search_people`/`create_person`/`update_person`/`delete_person`, `get_item` supports `type:"person"`, `add_tag` accepts `person`, and generic `link_items`/`unlink_items` connect any two items via `links` (e.g. attach a person to an event). `update_person`'s array fields (emails/phones/etc.) **replace** the whole list — the prompt tells the model to `get_item` then send the merged list to add a single entry.
+- **Calendar tools are multi-calendar.** `search_events` merges local (SQL-prefiltered + `rrule`) with remote (`getRemoteOccurrences`) and returns `calendar_id` + `calendar` per result; `list_calendars` advertises what exists. `create_event` takes an optional `calendar` **name** and otherwise uses `defaultCalendarId()`. `update_event`/`delete_event`/`get_item` take an optional `calendar_id` and go through `resolveEvent()`, which falls back to scanning calendars by UID when it's absent — pass `calendar_id` from search results to avoid that. All of them route through `lib/calendars.ts`, not `db.ts`.
 - The model gets the current **date + timezone** in the system prompt every request — keep that. Settings (API key, model, voice) live in `localStorage` (`src/lib/settings.ts`), **not** the SQLite DB, so a demo reset doesn't wipe them.
 - There is **no per-write confirmation dialog** today; the prompt tells the model to confirm ambiguous requests in chat. If adding confirmation UX, that's a deliberate change — update the README.
 
@@ -79,13 +102,19 @@ Runtime DB (macOS): `~/Library/Application Support/com.elliottjones.secondbrain/
 ```
 src/
   db.ts            # data-access layer — ONLY module that touches SQLite
-  types.ts         # domain types mirroring the schema
+  types.ts         # domain types mirroring the schema + UnifiedEvent
   lib/
-    recurrence.ts  # rrule (RFC 5545) expansion — never hand-roll recurrence
+    recurrence.ts  # rrule (RFC 5545) expansion, local events — never hand-roll
     ics.ts         # ICS import/export (ical-generator / ical.js)
+    calendars.ts   # calendar registry + local/remote merge + write routing
+    caldav/        # CalDAV client (network, NOT SQLite — hence not in db.ts)
+      client.ts    #   authenticated WebDAV requests (plugin-http) + XML helpers
+      discovery.ts #   principal -> calendar-home -> calendar collections
+      events.ts    #   calendar-query REPORT (read) + PUT/DELETE (write), ETags
+      ical.ts      #   VEVENT <-> UnifiedEvent via ical.js (TZID-aware)
     notifications.ts  # poll-based due-item OS notifications
     format.ts      # date helpers (date-fns) + <input> value converters
-    settings.ts    # app settings in localStorage (OpenAI key/model)
+    settings.ts    # localStorage: OpenAI key/model + calendar accounts
     ai.ts          # assistant: tool schemas + executors + agentic loop
     demo.ts        # reset + seed demo data (Shift+8+9 easter egg)
   components/      # ui.tsx (Modal/Button), Avatar, ItemMeta (Tags/Links/People
@@ -96,7 +125,8 @@ src-tauri/
   src/lib.rs       # plugin wiring + migration registration (keep thin)
   migrations/00N_*.sql       # versioned, checksummed — add, never edit
                              #   (001 init, 002 lists, 003 people, 004 custom fields)
-  capabilities/default.json  # plugin permissions (add scope for new plugins)
+  capabilities/default.json  # plugin permissions (add scope for new plugins;
+                             #   http scope covers api.openai.com + *.icloud.com)
 ```
 
 ## Conventions
@@ -108,7 +138,8 @@ src-tauri/
 
 ## Don't
 
-- Don't add Xcode/Swift/SwiftUI or any Apple-only API. Cross-platform web tech + Rust only.
-- Don't hand-roll iCalendar parsing or recurrence — use the existing libraries.
-- Don't add cloud/account features for v1.
+- Don't add Xcode/Swift/SwiftUI or any Apple-only API. Cross-platform web tech + Rust only. (iCloud is reached over plain CalDAV/HTTP — no Apple frameworks, so it stays portable.)
+- Don't hand-roll iCalendar parsing, recurrence, or WebDAV XML — use the existing libraries/helpers.
+- Don't cache remote calendar events to SQLite. Live fetch is the design; changing it is a migration-scale decision.
+- Don't add cloud/account features beyond user-supplied CalDAV credentials (no app backend, no hosting, no developer-side config).
 - Don't forget the README. (See top.)

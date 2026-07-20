@@ -1,6 +1,6 @@
 # 🧠 Second Brain
 
-A local-first personal life-management desktop app: **Calendar, Reminders, To-Do, Notes, and People** in one integrated tool, with an optional **AI assistant** that can answer questions about your data *and* create, update, or delete items on your behalf. Built with Tauri v2 + React + TypeScript + SQLite. Fully offline (the only network call is to OpenAI, and only if you opt in) — no account, no cloud sync.
+A local-first personal life-management desktop app: **Calendar, Reminders, To-Do, Notes, and People** in one integrated tool, with an optional **AI assistant** that can answer questions about your data *and* create, update, or delete items on your behalf. Built with Tauri v2 + React + TypeScript + SQLite. Local-first and offline by default — no account, no cloud sync. The only network calls are the ones you opt into: OpenAI (assistant/voice) and your own **iCloud calendar** if you connect one.
 
 ## Stack
 
@@ -11,10 +11,11 @@ A local-first personal life-management desktop app: **Calendar, Reminders, To-Do
 | Icons | `lucide-react` |
 | Database | SQLite via `tauri-plugin-sql` (sqlx) |
 | Notifications | `tauri-plugin-notification` |
-| Recurrence | `rrule` (RFC 5545) |
+| Recurrence | `rrule` (RFC 5545) for local events; `ical.js` for remote (TZID-aware) |
 | ICS import/export | `ical-generator` (export) + `ical.js` (import) |
+| Calendar sync | CalDAV (RFC 4791) over `tauri-plugin-http`; `ical.js` for VEVENT parse/serialize |
 | File I/O | `tauri-plugin-dialog` + `tauri-plugin-fs` |
-| AI networking | `tauri-plugin-http` (bypasses webview CORS to reach OpenAI) |
+| Networking | `tauri-plugin-http` (bypasses webview CORS to reach OpenAI + iCloud) |
 | Voice | `getUserMedia`/`MediaRecorder` + OpenAI Whisper (STT); Web `speechSynthesis` (TTS) |
 
 The Rust side is intentionally thin — just plugin registration + versioned migrations (`src-tauri/src/lib.rs`, `src-tauri/migrations/`). **All business logic lives in TypeScript** (`src/db.ts` is the only module that touches the DB), so a plain-browser or Windows build later is a packaging change, not a rewrite.
@@ -55,21 +56,45 @@ A single SQLite file, `secondbrain.db`, in Tauri's app-data directory:
 
 - macOS: `~/Library/Application Support/com.elliottjones.secondbrain/`
 
-Migrations are versioned and idempotent (managed by `tauri-plugin-sql`); they run automatically on startup. App **settings** (your OpenAI key + model) live separately in the webview's `localStorage`, not in the database — so they survive a data reset and stay out of the syncable calendar data.
+Migrations are versioned and idempotent (managed by `tauri-plugin-sql`); they run automatically on startup. App **settings** (your OpenAI key + model, and your calendar-account configuration) live separately in the webview's `localStorage`, not in the database — so they survive a data reset and stay out of the syncable calendar data.
+
+**Connected Apple calendars are not stored here.** They're fetched from iCloud live whenever the visible date range changes, and edits are written straight back — nothing is copied to disk. That's why connecting a calendar needs no migration and no schema change, and also why Apple events need a connection to show up (see [Limitations](#notes--current-limitations)).
 
 ## Features
 
-- **Today** — dashboard of today's schedule, due/overdue tasks & reminders, pinned + recent notes, and upcoming birthdays. Schedule events and notes are clickable — they jump straight to that item.
-- **Calendar** — month / week / day views, event CRUD, drag-to-reschedule (month view, non-recurring events), RRULE recurrence, all-day + color-coded events. Todos with due dates appear as dashed chips. A bottom bar (on every calendar view) has **ICS import/export**.
+- **Today** — dashboard of today's schedule (across every visible calendar), due/overdue tasks & reminders, pinned + recent notes, and upcoming birthdays. Schedule events and notes are clickable — they jump straight to that item.
+- **Calendar** — month / week / day views, event CRUD, drag-to-reschedule (month view, non-recurring events), RRULE recurrence, all-day + color-coded events. Todos with due dates appear as dashed chips. A bottom bar (on every calendar view) has **ICS import/export**. Supports **multiple calendars** — the built-in one plus connected Apple/iCloud calendars — viewable individually or together (see below).
+- **Apple Calendar (iCloud)** — connect your iCloud account in Settings and your Apple calendars appear alongside the built-in one, each with its own color and a visibility toggle so you can view them **individually or together**. Create, edit, delete, and skip-an-occurrence all write straight back to iCloud. When creating an event you pick its calendar; a **default calendar** setting decides where events land otherwise (including ones the assistant creates).
 - **Reminders** — Apple-Reminders-style with a filter sidebar (**All / Scheduled / Flagged / Completed**, each with live counts). Due date + optional alert time, recurrence, priority, link to a to-do. Native OS notifications fire when due (polled once a minute while the app is open).
 - **To-Do** — multiple lists (defaults: **Personal**, **Work**), inline list creation, subtasks, priority, due dates, drag-to-reorder, and "Convert to event". Incomplete tasks always sort above completed ones.
 - **Notes** — markdown with live preview, pin, FTS5 full-text search. The editor holds local state and debounces saves, so typing stays smooth.
 - **People** — a contacts book modeled on **vCard 4.0**: multiple emails/phones/addresses/websites (each with a type), structured name, nickname, organization, title, birthday, notes, favorite, and **user-defined custom fields** (e.g. "Eye color: Blue", drag to reorder). Custom-field **labels are global** — a field you add shows up on every person (each person keeps its own value); removing one removes it everywhere. Master-detail with the same debounced auto-save as Notes (no Save button). Click an email/phone/website to open it (`mailto:`/`tel:`/browser). Upcoming birthdays surface on the Today dashboard.
 - **Assistant** — an AI chat that answers questions about your data and can create, update, or delete items, by typing **or by voice** (see below).
-- **Settings** — enter your OpenAI API key + model.
+- **Settings** — enter your OpenAI API key + model, and connect a calendar account (see below).
 - **Integration** — shared tagging and generic `links` (any item ↔ any item) across all five types; a person can be attached to any event, to-do, reminder, or note (and shown/edited from either side). Global search across everything.
 
 The UI uses a consistent modern icon set (`lucide-react`) throughout — no emoji.
+
+## Apple Calendar (CalDAV)
+
+Connect your iCloud account and your Apple calendars work alongside the built-in **Second Brain** calendar. There is **no server, hosting, or developer configuration** — the app talks to iCloud's CalDAV endpoints directly using your own credentials.
+
+**Setup (Settings → Calendar accounts):**
+
+1. Create an **app-specific password** at [account.apple.com](https://account.apple.com/account/manage) → *Sign-In and Security* → *App-Specific Passwords*. Your normal Apple password will **not** work if you have two-factor authentication on (and you almost certainly do).
+2. Enter your Apple ID + that app-specific password, then hit **Connect**. The app discovers your calendars and lists them.
+3. Tick the calendars you want visible, and choose a **default calendar** for new events.
+
+**What syncs:** title, start/end, all-day, recurrence (`RRULE`), skipped occurrences (`EXDATE`), location, description, and status. Real timezones are handled properly — an event authored in another zone (`DTSTART;TZID=…` with an embedded `VTIMEZONE`) resolves to the correct absolute instant and renders at the right wall-clock time locally.
+
+**How it works:**
+
+- **Live fetch, no local copy.** Events are read with a window-scoped CalDAV `calendar-query` `REPORT` whenever the visible date range changes, and written back with `PUT`/`DELETE`. Nothing is persisted to SQLite, so there's no migration, no schema change, and no stale-copy problem — but also no offline access to Apple events.
+- **Conflict-safe writes.** Every write carries the event's `ETag` as `If-Match`. If the event changed on another device in the meantime the server returns `412` and the app tells you to reload rather than silently overwriting.
+- **Fails soft.** If iCloud is unreachable or the credentials are wrong, the built-in calendar and every other feature keep working; the Calendar view shows a *"Some calendars unavailable"* chip instead of erroring.
+- **Provider-agnostic seams.** The client is generic CalDAV behind a small provider abstraction (`src/lib/caldav/`), with iCloud the only implementation shipped. Google/Fastmail/Nextcloud/generic-URL accounts are a provider entry plus a capability scope.
+
+`src/lib/calendars.ts` is the aggregation layer the UI and the assistant both call: it lists calendars, merges occurrences for a window, and routes each write to either `db.ts` (local) or the CalDAV client (remote).
 
 ## AI Assistant
 
@@ -79,6 +104,7 @@ An optional assistant that answers questions about your events, to-dos, reminder
 - *"What's due next week in Work?"* / *"Which notes mention the Q3 report?"* (read)
 - *"Add a to-do to call the dentist tomorrow at 2pm"* / *"Mark 'Buy groceries' as done"* / *"Create a weekly team-lunch event on Fridays at noon"* (write)
 - *"Add a contact for Alex Rivera at Acme, email alex@acme.com"* / *"Set Alex's eye color to blue"* / *"Add Alex to Friday's lunch"* (people + linking)
+- *"Add lunch tomorrow at noon"* (lands in your **default** calendar) / *"Put it in my Work calendar instead"* (calendars)
 - *"Delete the dentist to-do"* / *"Remove the team-lunch event"* (delete — it'll confirm the exact item first)
 
 **How it works — tool calling, not context stuffing:** rather than sending your entire dataset with every request (which doesn't scale), the model is given a set of **tools** and pulls/changes only what it needs via an agentic loop (`src/lib/ai.ts`):
@@ -87,16 +113,17 @@ An optional assistant that answers questions about your events, to-dos, reminder
 |------|---------|
 | `get_overview` | counts, list/tag names, current time (cheap orientation) |
 | `search_todos` | filter by query, list, status, priority, due-date range, tag |
-| `search_events` | events in a date range (recurring events expanded to occurrences) + query/tag |
+| `search_events` | events in a date range **across every visible calendar** (recurring events expanded to occurrences) + query/calendar/tag |
+| `list_calendars` | the available calendars (built-in + connected), which are visible/read-only, and which is the default |
 | `search_reminders` | filter by query, status, flagged, date range, tag |
 | `search_notes` | FTS5 keyword search (or recent), pinned filter |
 | `search_people` | contacts by name/nickname/org/email/phone, tag filter |
-| `get_item` | full detail of one item (incl. `person`) + its tags and linked items |
+| `get_item` | full detail of one item (incl. `person`, and events in a connected calendar) + its tags and linked items |
 
 | Write tool | Purpose |
 |------|---------|
 | `create_todo` / `update_todo` | create or edit a task (incl. list, due date, priority, mark complete) |
-| `create_event` / `update_event` | create or edit a calendar event (incl. recurrence, all-day, location) |
+| `create_event` / `update_event` | create or edit a calendar event **in any calendar** (incl. recurrence, all-day, location); new events use the default calendar unless a `calendar` name is given |
 | `create_reminder` / `update_reminder` | create or edit a reminder (incl. alert time, recurrence, complete) |
 | `create_note` / `update_note` | create or edit a markdown note |
 | `create_person` / `update_person` | create or edit a contact (incl. emails/phones/addresses, birthday, and user-defined `custom_fields`; custom labels register globally) |
@@ -106,7 +133,9 @@ An optional assistant that answers questions about your events, to-dos, reminder
 | `delete_todo` / `delete_event` / `delete_reminder` / `delete_note` / `delete_person` | permanently delete an item |
 | `delete_list` | delete a list (its tasks move to another list; can't delete the last list) |
 
-**Built to scale:** every read tool is filtered and paginated — bounded `limit` (default 25, max 100) — and returns a `total` count and `truncated` flag so the model knows when there's more and narrows its filters instead of assuming it saw everything. Nothing loads a whole table blindly: searches push filters into SQL, notes use the FTS index, and `search_events` only fully expands *recurring* events while pre-filtering non-recurring ones by the requested window. Live tool activity ("Checking the calendar…", "Creating a to-do…") is shown while the assistant works.
+**Built to scale:** every read tool is filtered and paginated — bounded `limit` (default 25, max 100) — and returns a `total` count and `truncated` flag so the model knows when there's more and narrows its filters instead of assuming it saw everything. Nothing loads a whole table blindly: searches push filters into SQL, notes use the FTS index, and `search_events` only fully expands *recurring* local events while pre-filtering non-recurring ones by the requested window (connected calendars are filtered server-side by the CalDAV time-range query). Live tool activity ("Checking the calendar…", "Creating a to-do…") is shown while the assistant works.
+
+**Calendars and the assistant:** `search_events` covers the built-in calendar and every visible Apple calendar in one call, and the assistant can view, edit, and delete events in all of them. New events go to your **default calendar** unless you name another one ("put it in my Work calendar"). Two things it's told to be honest about: events in connected calendars have **no tags, links, or attached people** (those are local-only), and if a calendar can't be reached the tool reports `unavailable_calendars` so the assistant says which ones it couldn't see rather than implying it saw your whole schedule.
 
 **Voice mode:** the Assistant has a mic button (push-to-talk). Click it to record, click again to stop — your speech is transcribed with **OpenAI Whisper** (`whisper-1` by default) and sent as a normal turn. **Talk to the assistant and it replies aloud** (your OS's built-in voice, Web Speech Synthesis); **type and it replies in text** — that's the whole rule, no toggle. Voice is just an I/O layer around the same tool-calling loop, so it can answer *and* create/update/delete items by voice. Choose the transcription model in **Settings → Voice**.
 
@@ -126,9 +155,9 @@ Adding further capabilities later is just more entries in the `TOOLS` array and 
 
 Hold **Shift + 8 + 9** together anywhere in the app to open a "Load demo data?" prompt. Confirming **permanently deletes all current data** and seeds a realistic, cross-linked sample dataset (events, recurring events, to-dos with subtasks, reminders, notes, people with birthdays/custom fields, tags, and links — including people attached to events and tasks) — handy for exploring the app. Your API key is **not** affected (it lives in `localStorage`). See `src/lib/demo.ts`.
 
-## Standards / future sync
+## Standards / sync
 
-The schema is deliberately CalDAV/CardDAV-ready even though sync isn't built yet:
+Calendar sync is built (**CalDAV, iCloud** — see above). The schema was designed for it, and remains CardDAV-ready for contacts:
 
 - UUID primary keys double as iCalendar `UID`s (events) and vCard `UID`s (people).
 - Events store RFC 5545 fields directly (`summary`, `dtstart`, `rrule`, `exdates`, `status`, `categories`, …).
@@ -143,11 +172,17 @@ src/
   db.ts                 # data-access layer (only module that touches SQLite)
   types.ts              # domain types mirroring the schema
   lib/
-    recurrence.ts       # rrule expansion
+    recurrence.ts       # rrule expansion (local events)
     ics.ts              # ICS import/export
+    calendars.ts        # calendar registry + local/remote aggregation & write routing
+    caldav/
+      client.ts         # authenticated WebDAV requests + XML helpers
+      discovery.ts      # principal -> calendar-home -> calendar collections
+      events.ts         # calendar-query REPORT (read) + PUT/DELETE (write), ETags
+      ical.ts           # VEVENT <-> UnifiedEvent via ical.js (TZID-aware)
     notifications.ts    # due-item notification poller
     format.ts           # date helpers
-    settings.ts         # app settings (OpenAI key/model, voice) in localStorage
+    settings.ts         # app settings (OpenAI key/model, voice, calendar accounts)
     ai.ts               # AI assistant: read + write tools + agentic loop
     voice.ts            # mic recording, Whisper transcription, system TTS
     demo.ts             # reset + seed demo data
@@ -167,7 +202,8 @@ src-tauri/
     003_people.sql          # people (contacts, vCard 4.0-modeled)
     004_person_custom_fields.sql  # global custom-field label registry
   capabilities/default.json  # plugin permissions (sql, notification, dialog,
-                             #   fs scope, http scope for api.openai.com)
+                             #   fs scope, http scope for api.openai.com +
+                             #   caldav.icloud.com / *.icloud.com)
 CLAUDE.md              # architecture, conventions & gotchas for contributors
 ```
 
@@ -181,5 +217,11 @@ See [CLAUDE.md](CLAUDE.md) for architecture principles, conventions, and the got
 - Voice input is **push-to-talk** (click to start/stop) — no hands-free/continuous mode or silence auto-stop yet. It **only works in a packaged build** (`tauri dev` can't access the mic — see the Setup section), needs microphone permission, and sends audio to OpenAI for transcription. Spoken-reply voice quality depends on the OS's installed voices.
 - Desktop notifications are **poll-based** (checked every 60s while the app is open) — the plugin has no cross-platform "schedule for later" API. Alerts won't fire while the app is closed.
 - Drag-to-reschedule is day-granularity in month view and disabled for recurring series (dragging a single instance is ambiguous; edit the series, or use "Skip this day").
-- No timezone handling beyond the machine's local zone (fine for single-user local use; revisit before CalDAV sync).
-- The OpenAI API key is stored in plaintext in `localStorage` (typical for a local single-user app); anyone with access to the machine profile can read it.
+- **Apple calendars need a connection** — they're fetched live and never cached to disk, so they don't appear offline (the built-in calendar is unaffected). This is the deliberate trade for having no local copy to keep in sync.
+- **Apple events can't carry tags, links, or people.** Those live in SQLite keyed by a local event id, and a connected event has no local row. The event editor hides those panels for remote events.
+- **Global search covers local events only.** CalDAV has no unbounded keyword search, so searching connected calendars means naming a date window — which the assistant's `search_events` does, but the global search bar doesn't.
+- **Moving an event between calendars isn't supported in-app** — the calendar picker is fixed once an event exists, because copy-then-delete would silently drop a local event's tags, links, and people. Delete it and recreate it in the target calendar.
+- Remote **timed** events are written in UTC (unambiguous, avoids emitting a `VTIMEZONE`); all-day events use `VALUE=DATE`. Reading is fully `TZID`-aware. **One consequence worth knowing:** editing an existing *recurring* Apple event rewrites its `DTSTART` from the original `TZID` to UTC, so a series pinned to a wall-clock time (a 9am weekly standup) will shift by an hour across a daylight-saving boundary instead of staying at 9am. Editing non-recurring events, and creating new ones, are unaffected. Emitting `TZID` + `VTIMEZONE` on write is the fix and is planned.
+- Per-instance `RECURRENCE-ID` overrides, attendees, and `VALARM` alarms are not synced — an event with per-instance overrides shows its series pattern, and editing it would drop the overrides.
+- Local events have no timezone handling beyond the machine's local zone (fine for single-user local use; remote events *are* resolved from their source zone).
+- The OpenAI API key **and the iCloud app-specific password** are stored in plaintext in `localStorage` (typical for a local single-user app); anyone with access to the machine profile can read them. Moving credentials to the OS keychain is future work.

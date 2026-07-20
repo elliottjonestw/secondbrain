@@ -16,12 +16,18 @@ import { format } from "date-fns";
 import type { EventRow, ItemType } from "../types";
 import {
   db, listLists, listTags, linksForItem, tagsForItem, getItemLabel,
-  upsertTodo, upsertEvent, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
-  deleteTodo, deleteEvent, deleteReminder, deleteNote, deleteList,
+  upsertTodo, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
+  deleteTodo, deleteReminder, deleteNote, deleteList,
   listPeople, searchPeople, upsertPerson, deletePerson, createLink, deleteLink,
   ensureCustomField,
 } from "../db";
 import { expandEvents } from "./recurrence";
+import {
+  listCalendars, getCalendar, findCalendarByName, defaultCalendarId, localToUnified,
+  getRemoteOccurrences, getEventByRef, findEventById, createEvent as createCalendarEvent,
+  updateEvent as updateCalendarEvent, deleteEvent as deleteCalendarEvent,
+  type EventDraft,
+} from "./calendars";
 import { getSettings } from "./settings";
 
 export interface ChatMessage {
@@ -137,17 +143,27 @@ const TOOLS = [
     function: {
       name: "search_events",
       description:
-        "Get calendar events within a date range. Recurring events are expanded into concrete occurrences. If start/end are omitted, defaults to the next 30 days.",
+        "Get calendar events within a date range, across every visible calendar (the built-in one and any connected Apple/CalDAV calendars). Recurring events are expanded into concrete occurrences. If start/end are omitted, defaults to the next 30 days. Connected calendars are always searched by date window — there is no keyword search over their whole history, so widen start/end rather than expecting an unbounded search.",
       parameters: {
         type: "object",
         properties: {
           start: { type: "string", description: "ISO date/datetime for the window start." },
           end: { type: "string", description: "ISO date/datetime for the window end." },
           query: { type: "string", description: "Case-insensitive text to match in the summary/description/location." },
-          tag: { type: "string", description: "Tag name (without #)." },
+          calendar: { type: "string", description: "Limit to one calendar by name (see list_calendars)." },
+          tag: { type: "string", description: "Tag name (without #). Only events in the built-in calendar carry tags." },
           limit: { type: "integer", description: `Max occurrences (default ${DEFAULT_LIMIT}, max ${MAX_LIMIT}).` },
         },
       },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_calendars",
+      description:
+        "List every calendar available: the built-in local one plus any connected Apple/CalDAV calendars. Shows which are visible, which are read-only, and which is the default for new events. Call this before creating an event in a named calendar.",
+      parameters: { type: "object", properties: {} },
     },
   },
   {
@@ -206,12 +222,13 @@ const TOOLS = [
     function: {
       name: "get_item",
       description:
-        "Fetch the full detail of a single item by type and id, including its tags and any linked items. Use ids returned by the search tools.",
+        "Fetch the full detail of a single item by type and id, including its tags and any linked items. Use ids returned by the search tools. Events may live in a connected calendar; pass calendar_id when you have it.",
       parameters: {
         type: "object",
         properties: {
           type: { type: "string", enum: ["event", "reminder", "todo", "note", "person"] },
           id: { type: "string" },
+          calendar_id: { type: "string", description: "For events: the calendar_id returned by search_events." },
         },
         required: ["type", "id"],
       },
@@ -262,7 +279,8 @@ const TOOLS = [
     type: "function",
     function: {
       name: "create_event",
-      description: "Create a new calendar event. Confirm ambiguous details with the user before creating.",
+      description:
+        "Create a new calendar event. Goes into the user's default calendar unless `calendar` names another one. Confirm ambiguous details with the user before creating.",
       parameters: {
         type: "object",
         properties: {
@@ -274,6 +292,7 @@ const TOOLS = [
           description: { type: "string" },
           rrule: { type: "string", description: "RFC 5545 recurrence, e.g. FREQ=WEEKLY;BYDAY=MO,WE,FR." },
           category: { type: "string" },
+          calendar: { type: "string", description: "Calendar name; omit to use the user's default calendar." },
         },
         required: ["summary", "start"],
       },
@@ -283,11 +302,13 @@ const TOOLS = [
     type: "function",
     function: {
       name: "update_event",
-      description: "Update fields of an existing event by id. Only include the fields you want to change.",
+      description:
+        "Update fields of an existing event by id, in any calendar. Only include the fields you want to change. Pass calendar_id from search_events when you have it — it avoids searching every calendar for the id.",
       parameters: {
         type: "object",
         properties: {
           id: { type: "string" },
+          calendar_id: { type: "string", description: "The calendar_id returned by search_events." },
           summary: { type: "string" },
           start: { type: "string", description: "ISO date/datetime." },
           end: { type: "string", description: "ISO datetime, or null to clear." },
@@ -511,8 +532,15 @@ const TOOLS = [
     type: "function",
     function: {
       name: "delete_event",
-      description: "Permanently delete a calendar event by id. Deletes the whole event/series. Irreversible — confirm with the user first.",
-      parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      description: "Permanently delete a calendar event by id, in any calendar. Deletes the whole event/series. Irreversible — confirm with the user first.",
+      parameters: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          calendar_id: { type: "string", description: "The calendar_id returned by search_events." },
+        },
+        required: ["id"],
+      },
     },
   },
   {
@@ -622,12 +650,29 @@ async function toolSearchTodos(args: Record<string, unknown>) {
   };
 }
 
+function toolListCalendars() {
+  const def = defaultCalendarId();
+  return {
+    default_calendar: getCalendar(def)?.name,
+    calendars: listCalendars().map((c) => ({
+      calendar_id: c.id,
+      name: c.name,
+      source: c.source === "local" ? "built-in" : "apple",
+      visible: c.visible,
+      read_only: c.readOnly,
+      is_default: c.id === def,
+    })),
+  };
+}
+
 async function toolSearchEvents(args: Record<string, unknown>) {
   const start = parseDate(args.start) ?? new Date();
   const end = parseDate(args.end, true) ?? new Date(Date.now() + 30 * 864e5);
 
-  // Scale-conscious pre-filter: always load recurring events (must be expanded),
-  // but only the non-recurring events that overlap the window.
+  // Scale-conscious pre-filter for the local calendar: always load recurring
+  // events (they must be expanded), but only the non-recurring ones that
+  // overlap the window. Connected calendars are filtered server-side by the
+  // CalDAV time-range query, so they need no equivalent here.
   const d = await db();
   const rows = await d.select<EventRow[]>(
     `SELECT * FROM events WHERE rrule IS NOT NULL
@@ -635,8 +680,19 @@ async function toolSearchEvents(args: Record<string, unknown>) {
     [end.toISOString(), start.toISOString()],
   );
 
-  let occs = expandEvents(rows, start, end);
+  const remote = await getRemoteOccurrences(start, end);
+  let occs = [
+    ...expandEvents(rows.map(localToUnified), start, end),
+    ...remote.occurrences,
+  ].sort((a, b) => a.start.getTime() - b.start.getTime());
 
+  if (typeof args.calendar === "string" && args.calendar.trim()) {
+    const cal = findCalendarByName(args.calendar);
+    if (!cal) {
+      return { error: `No calendar named "${args.calendar}". Call list_calendars to see the options.` };
+    }
+    occs = occs.filter((o) => o.event.calendarId === cal.id);
+  }
   if (typeof args.query === "string" && args.query.trim()) {
     const q = args.query.trim().toLowerCase();
     occs = occs.filter((o) =>
@@ -654,13 +710,27 @@ async function toolSearchEvents(args: Record<string, unknown>) {
     range: { start: start.toISOString(), end: end.toISOString() },
     total: occs.length,
     truncated: occs.length > limit,
+    // Surfaced so the user can be told which calendars didn't answer rather
+    // than being shown a confidently incomplete schedule.
+    unavailable_calendars: remote.errors.length ? remote.errors : undefined,
     results: occs.slice(0, limit).map((o) => ({
       id: o.event.id, summary: o.event.summary,
       start: o.start.toISOString(), end: o.end ? o.end.toISOString() : null,
       all_day: !!o.event.all_day, recurring: o.isRecurringInstance,
       location: o.event.location || undefined,
+      calendar_id: o.event.calendarId,
+      calendar: getCalendar(o.event.calendarId)?.name,
     })),
   };
+}
+
+/** Locate an event the model referred to by id (+ optional calendar_id). */
+async function resolveEvent(args: Record<string, unknown>) {
+  const id = typeof args.id === "string" ? args.id : "";
+  if (!id) return null;
+  const calendarId = typeof args.calendar_id === "string" ? args.calendar_id : "";
+  if (calendarId && getCalendar(calendarId)) return getEventByRef(calendarId, id);
+  return findEventById(id);
 }
 
 async function toolSearchReminders(args: Record<string, unknown>) {
@@ -747,6 +817,22 @@ async function toolGetItem(args: Record<string, unknown>) {
   const d = await db();
   const rows = await d.select<any[]>(`SELECT * FROM ${table} WHERE id = ?`, [id]);
   const item = rows[0];
+
+  // Events can live in a connected calendar, where there is no SQLite row —
+  // and no tags/links, which are keyed on local ids.
+  if (!item && type === "event") {
+    const remote = await resolveEvent(args);
+    if (!remote) return { error: `No event found with id ${id}.` };
+    return {
+      type,
+      item: remote,
+      calendar: getCalendar(remote.calendarId)?.name,
+      tags: [],
+      linked: [],
+      note: "This event is in a connected calendar; tags and links apply to built-in calendar events only.",
+    };
+  }
+
   if (!item) return { error: `No ${type} found with id ${id}.` };
 
   const tags = (await tagsForItem(type as any, id)).map((t) => t.name);
@@ -837,40 +923,57 @@ async function toolCreateEvent(args: Record<string, unknown>) {
   if (typeof args.summary !== "string" || !args.summary.trim()) return { error: "summary is required." };
   const dtstart = asIso(args.start);
   if (!dtstart) return { error: "A valid ISO start is required." };
+
+  // A named calendar wins; otherwise new events land in the user's default.
+  let calendarId = defaultCalendarId();
+  if (typeof args.calendar === "string" && args.calendar.trim()) {
+    const named = findCalendarByName(args.calendar);
+    if (!named) {
+      return { error: `No calendar named "${args.calendar}". Call list_calendars to see the options.` };
+    }
+    calendarId = named.id;
+  }
+
   const allDay = args.all_day === true;
   const dtend = allDay ? null : (asIso(args.end) ?? new Date(new Date(dtstart).getTime() + 3600e3).toISOString());
-  const id = await upsertEvent({
-    summary: args.summary.trim(),
-    description: typeof args.description === "string" ? args.description : null,
-    location: typeof args.location === "string" ? args.location : null,
-    dtstart, dtend, all_day: allDay ? 1 : 0,
-    rrule: typeof args.rrule === "string" ? args.rrule : null,
-    exdates: null, status: "CONFIRMED",
-    categories: typeof args.category === "string" ? JSON.stringify([args.category]) : null,
-    color: null,
-  });
-  return { ok: true, id };
+  try {
+    const id = await createCalendarEvent(calendarId, {
+      summary: args.summary.trim(),
+      description: typeof args.description === "string" ? args.description : null,
+      location: typeof args.location === "string" ? args.location : null,
+      dtstart, dtend, all_day: allDay ? 1 : 0,
+      rrule: typeof args.rrule === "string" ? args.rrule : null,
+      exdates: null, status: "CONFIRMED",
+      categories: typeof args.category === "string" ? JSON.stringify([args.category]) : null,
+      color: null,
+    });
+    return { ok: true, id, calendar_id: calendarId, calendar: getCalendar(calendarId)?.name };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 async function toolUpdateEvent(args: Record<string, unknown>) {
-  const e = await getRowById("events", args.id);
-  if (!e) return { error: `No event found with id ${args.id}.` };
-  const allDay = "all_day" in args ? (args.all_day ? 1 : 0) : e.all_day;
-  await upsertEvent({
-    id: e.id,
-    summary: "summary" in args ? String(args.summary) : e.summary,
-    description: "description" in args ? (args.description as string | null) : e.description,
-    location: "location" in args ? (args.location as string | null) : e.location,
-    dtstart: "start" in args ? (asIso(args.start) ?? e.dtstart) : e.dtstart,
-    dtend: "end" in args ? asIso(args.end) : e.dtend,
-    all_day: allDay,
-    rrule: "rrule" in args ? (args.rrule ? String(args.rrule) : null) : e.rrule,
-    exdates: e.exdates,
-    status: e.status,
-    categories: "category" in args ? (args.category ? JSON.stringify([args.category]) : null) : e.categories,
-    color: e.color,
-  });
-  return { ok: true, id: e.id };
+  const ev = await resolveEvent(args);
+  if (!ev) return { error: `No event found with id ${args.id}.` };
+
+  // Partial merge: "field" in args distinguishes "clear it" from "leave it".
+  const patch: Partial<EventDraft> = {};
+  if ("summary" in args) patch.summary = String(args.summary);
+  if ("description" in args) patch.description = args.description as string | null;
+  if ("location" in args) patch.location = args.location as string | null;
+  if ("start" in args) patch.dtstart = asIso(args.start) ?? ev.dtstart;
+  if ("end" in args) patch.dtend = asIso(args.end);
+  if ("all_day" in args) patch.all_day = args.all_day ? 1 : 0;
+  if ("rrule" in args) patch.rrule = args.rrule ? String(args.rrule) : null;
+  if ("category" in args) patch.categories = args.category ? JSON.stringify([args.category]) : null;
+
+  try {
+    await updateCalendarEvent(ev, patch);
+    return { ok: true, id: ev.id, calendar: getCalendar(ev.calendarId)?.name };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 async function toolCreateReminder(args: Record<string, unknown>) {
@@ -1073,10 +1176,20 @@ async function toolDeleteTodo(args: Record<string, unknown>) {
   return { ok: true, deleted: { type: "todo", id: t.id, title: t.title } };
 }
 async function toolDeleteEvent(args: Record<string, unknown>) {
-  const e = await getRowById("events", args.id);
-  if (!e) return { error: `No event found with id ${args.id}.` };
-  await deleteEvent(e.id);
-  return { ok: true, deleted: { type: "event", id: e.id, summary: e.summary } };
+  const ev = await resolveEvent(args);
+  if (!ev) return { error: `No event found with id ${args.id}.` };
+  try {
+    await deleteCalendarEvent(ev);
+    return {
+      ok: true,
+      deleted: {
+        type: "event", id: ev.id, summary: ev.summary,
+        calendar: getCalendar(ev.calendarId)?.name,
+      },
+    };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
 }
 async function toolDeleteReminder(args: Record<string, unknown>) {
   const r = await getRowById("reminders", args.id);
@@ -1111,6 +1224,7 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case "get_overview": return toolGetOverview();
     case "search_todos": return toolSearchTodos(args);
     case "search_events": return toolSearchEvents(args);
+    case "list_calendars": return toolListCalendars();
     case "search_reminders": return toolSearchReminders(args);
     case "search_notes": return toolSearchNotes(args);
     case "search_people": return toolSearchPeople(args);
@@ -1147,6 +1261,7 @@ function statusFor(name: string, args: Record<string, unknown>): string {
     case "get_overview": return "Getting an overview…";
     case "search_todos": return "Searching to-dos…";
     case "search_events": return "Checking the calendar…";
+    case "list_calendars": return "Looking at your calendars…";
     case "search_reminders": return "Searching reminders…";
     case "search_notes": return args.query ? `Searching notes for "${args.query}"…` : "Looking through notes…";
     case "search_people": return args.query ? `Searching people for "${args.query}"…` : "Looking through contacts…";
@@ -1179,13 +1294,23 @@ const SYSTEM_PROMPT =
   "You are a helpful personal assistant embedded in a local life-management app called Second Brain. " +
   "You help the user with THEIR data — calendar events, reminders, to-dos, notes, people (contacts), lists, and tags.\n\n" +
   "You can READ, WRITE, and DELETE data:\n" +
-  "- Read/lookup tools: get_overview, search_todos, search_events, search_reminders, search_notes, search_people, get_item.\n" +
+  "- Read/lookup tools: get_overview, search_todos, search_events, list_calendars, search_reminders, search_notes, search_people, get_item.\n" +
   "- Create/update tools: create_todo, update_todo, create_event, update_event, create_reminder, " +
   "update_reminder, create_note, update_note, create_list, create_person, update_person, add_tag.\n" +
   "- Linking tools: link_items / unlink_items connect any two items (e.g. attach a person to an event, " +
   "or a note to a to-do). People are contacts with emails/phones/addresses, a birthday, and user-defined " +
   "custom_fields (label/value, e.g. 'Eye color: Blue').\n" +
   "- Delete tools: delete_todo, delete_event, delete_reminder, delete_note, delete_person, delete_list.\n\n" +
+  "Calendars:\n" +
+  "- The user may have several calendars: the built-in local one plus any Apple/iCloud calendars they have " +
+  "connected. search_events covers every visible calendar at once, and you can view, edit and delete events in " +
+  "all of them. Use list_calendars to see the names.\n" +
+  "- New events go in the user's DEFAULT calendar unless they name a different one (\"put it in my Work " +
+  "calendar\") — pass that name as the `calendar` argument to create_event. Don't ask which calendar for every " +
+  "event; the default is the right answer unless they say otherwise.\n" +
+  "- Events in connected calendars have no tags, links or attached people — those apply to the built-in " +
+  "calendar only. If a tool reports `unavailable_calendars`, say which calendars you couldn't reach instead of " +
+  "implying you saw the user's whole schedule.\n\n" +
   "Guidelines:\n" +
   "- Never assume or invent data; use the read tools to look things up first. To update, tag, link, or delete an " +
   "existing item, find its id with a search tool before calling the write/delete tool. To add one entry to a " +

@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Plus, Repeat, Square, Upload, Download } from "lucide-react";
+import {
+  ChevronLeft, ChevronRight, Plus, Repeat, Square, Upload, Download,
+  Layers, Loader2, CloudOff,
+} from "lucide-react";
 import {
   addDays, addMonths, addWeeks, differenceInCalendarDays, format,
 } from "date-fns";
-import type { EventRow, TodoRow, EventOccurrence } from "../types";
-import { listEvents, listTodos, upsertEvent } from "../db";
-import { expandEvents } from "../lib/recurrence";
+import type { TodoRow, EventOccurrence, UnifiedEvent } from "../types";
+import { listTodos } from "../db";
+import {
+  getOccurrences, listCalendars, setCalendarVisible, updateEvent, invalidateCache,
+  defaultCalendarId, type CalendarInfo,
+} from "../lib/calendars";
 import {
   startOfMonth, endOfMonth, startOfWeek, endOfWeek, startOfDay, endOfDay,
   isSameDay, isToday, fmtTime,
@@ -20,39 +26,16 @@ const HOUR_PX = 48;
 export default function CalendarView({ onChange, openEventId }: { onChange: () => void; openEventId?: string }) {
   const [mode, setMode] = useState<ViewMode>("month");
   const [cursor, setCursor] = useState(new Date());
-  const [events, setEvents] = useState<EventRow[]>([]);
+  const [occurrences, setOccurrences] = useState<EventOccurrence[]>([]);
   const [todos, setTodos] = useState<TodoRow[]>([]);
-  const [editing, setEditing] = useState<{ event: EventRow | null; start?: Date; occ?: Date } | null>(null);
+  const [editing, setEditing] = useState<{ event: UnifiedEvent | null; calendarId?: string; start?: Date; occ?: Date } | null>(null);
   const [msg, setMsg] = useState("");
-
-  const reload = async () => {
-    setEvents(await listEvents());
-    setTodos((await listTodos()).filter((t) => t.due_at && !t.completed));
-  };
-  useEffect(() => { void reload(); }, []);
-  const bump = () => { void reload(); onChange(); };
-
-  // Open a specific event when navigated here with a target (e.g. from Today).
-  const opened = useRef(false);
-  useEffect(() => {
-    if (opened.current || !openEventId || events.length === 0) return;
-    const ev = events.find((e) => e.id === openEventId);
-    if (ev) {
-      opened.current = true;
-      setCursor(new Date(ev.dtstart));
-      setEditing({ event: ev });
-    }
-  }, [events, openEventId]);
-
-  async function doExport() {
-    const path = await exportCalendar();
-    setMsg(path ? `Exported to ${path}` : "");
-  }
-  async function doImport() {
-    const n = await importCalendar();
-    setMsg(`Imported ${n} event(s).`);
-    bump();
-  }
+  const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [calendars, setCalendars] = useState<CalendarInfo[]>(() => listCalendars());
+  const [showFilter, setShowFilter] = useState(false);
+  // Bumped to force a refetch after a write; the window itself is unchanged.
+  const [nonce, setNonce] = useState(0);
 
   // Visible window depends on mode.
   const [winStart, winEnd] = useMemo<[Date, Date]>(() => {
@@ -61,10 +44,49 @@ export default function CalendarView({ onChange, openEventId }: { onChange: () =
     return [startOfDay(cursor), endOfDay(cursor)];
   }, [mode, cursor]);
 
-  const occurrences = useMemo(
-    () => expandEvents(events, winStart, winEnd),
-    [events, winStart, winEnd],
-  );
+  // Remote calendars are fetched per visible window, so this runs on every
+  // navigation. `seq` discards out-of-order responses when the user pages
+  // faster than the network answers.
+  const seq = useRef(0);
+  useEffect(() => {
+    const mine = ++seq.current;
+    setLoading(true);
+    void (async () => {
+      const [{ occurrences: occs, errors: errs }, allTodos] = await Promise.all([
+        getOccurrences(winStart, winEnd),
+        listTodos(),
+      ]);
+      if (seq.current !== mine) return; // a newer window won
+      setOccurrences(occs);
+      setErrors(errs);
+      setTodos(allTodos.filter((t) => t.due_at && !t.completed));
+      setLoading(false);
+    })();
+  }, [winStart, winEnd, nonce]);
+
+  const reload = () => { invalidateCache(); setCalendars(listCalendars()); setNonce((n) => n + 1); };
+  const bump = () => { reload(); onChange(); };
+
+  // Open a specific event when navigated here with a target (e.g. from Today).
+  const opened = useRef(false);
+  useEffect(() => {
+    if (opened.current || !openEventId || occurrences.length === 0) return;
+    const match = occurrences.find((o) => o.event.id === openEventId);
+    if (match) {
+      opened.current = true;
+      setEditing({ event: match.event, occ: match.start });
+    }
+  }, [occurrences, openEventId]);
+
+  async function doExport() {
+    const path = await exportCalendar();
+    setMsg(path ? `Exported to ${path}` : "");
+  }
+  async function doImport() {
+    const n = await importCalendar();
+    setMsg(`Imported ${n} event(s) into the built-in calendar.`);
+    bump();
+  }
 
   const move = (dir: number) => {
     if (mode === "month") setCursor((c) => addMonths(c, dir));
@@ -88,12 +110,41 @@ export default function CalendarView({ onChange, openEventId }: { onChange: () =
           <h2 className="ml-2 text-lg font-semibold">{title}</h2>
         </div>
         <div className="flex items-center gap-1">
+          {loading && <Loader2 size={15} className="mr-1 animate-spin text-neutral-400" />}
           {(["month", "week", "day"] as ViewMode[]).map((m) => (
             <Button key={m} variant={mode === m ? "primary" : "ghost"} onClick={() => setMode(m)}>
               {m[0].toUpperCase() + m.slice(1)}
             </Button>
           ))}
-          <Button variant="primary" className="ml-2" onClick={() => setEditing({ event: null, start: cursor })}><span className="flex items-center gap-1"><Plus size={16} /> Event</span></Button>
+
+          {/* Per-calendar visibility — view them individually or together. */}
+          <div className="relative">
+            <Button variant="ghost" onClick={() => setShowFilter((v) => !v)} aria-label="Calendars">
+              <Layers size={16} />
+            </Button>
+            {showFilter && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowFilter(false)} />
+                <div className="absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-neutral-200 bg-white p-2 shadow-lg dark:border-neutral-700 dark:bg-neutral-800">
+                  <div className="px-1 pb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-400">Calendars</div>
+                  {calendars.map((cal) => (
+                    <label key={cal.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-700/50">
+                      <input
+                        type="checkbox"
+                        checked={cal.visible}
+                        onChange={(e) => { setCalendarVisible(cal.id, e.target.checked); reload(); }}
+                        className="accent-blue-600"
+                      />
+                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: cal.color ?? "#3b82f6" }} />
+                      <span className="truncate">{cal.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
+          <Button variant="primary" className="ml-1" onClick={() => setEditing({ event: null, calendarId: defaultCalendarId(), start: cursor })}><span className="flex items-center gap-1"><Plus size={16} /> Event</span></Button>
         </div>
       </div>
 
@@ -104,18 +155,21 @@ export default function CalendarView({ onChange, openEventId }: { onChange: () =
             cursor={cursor}
             occurrences={occurrences}
             todos={todos}
-            onNewEvent={(d) => setEditing({ event: null, start: d })}
+            onNewEvent={(d) => setEditing({ event: null, calendarId: defaultCalendarId(), start: d })}
             onOpen={(occ) => setEditing({ event: occ.event, occ: occ.start })}
             onReschedule={async (occ, day) => {
               const delta = differenceInCalendarDays(day, occ.start);
               const ns = addDays(new Date(occ.event.dtstart), delta);
               const ne = occ.event.dtend ? addDays(new Date(occ.event.dtend), delta) : null;
-              await upsertEvent({
-                ...occ.event,
-                dtstart: ns.toISOString(),
-                dtend: ne ? ne.toISOString() : null,
-              });
-              bump();
+              try {
+                await updateEvent(occ.event, {
+                  dtstart: ns.toISOString(),
+                  dtend: ne ? ne.toISOString() : null,
+                });
+                bump();
+              } catch (e) {
+                setMsg(e instanceof Error ? e.message : String(e));
+              }
             }}
           />
         ) : (
@@ -123,15 +177,25 @@ export default function CalendarView({ onChange, openEventId }: { onChange: () =
             days={eachDay(winStart, winEnd)}
             occurrences={occurrences}
             todos={todos}
-            onNewEvent={(d) => setEditing({ event: null, start: d })}
+            onNewEvent={(d) => setEditing({ event: null, calendarId: defaultCalendarId(), start: d })}
             onOpen={(occ) => setEditing({ event: occ.event, occ: occ.start })}
           />
         )}
       </div>
 
       {/* Bottom bar — ICS import/export, shown across all calendar views. */}
-      <div className="flex items-center justify-between border-t border-neutral-200 px-4 py-2 dark:border-neutral-700">
-        <span className="truncate text-xs text-neutral-400">{msg}</span>
+      <div className="flex items-center justify-between gap-3 border-t border-neutral-200 px-4 py-2 dark:border-neutral-700">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="truncate text-xs text-neutral-400">{msg}</span>
+          {errors.length > 0 && (
+            <span
+              className="flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-400"
+              title={errors.join("\n")}
+            >
+              <CloudOff size={12} /> Some calendars unavailable
+            </span>
+          )}
+        </div>
         <div className="flex shrink-0 gap-2">
           <Button onClick={doImport}><span className="flex items-center gap-1.5"><Upload size={15} /> Import .ics</span></Button>
           <Button onClick={doExport}><span className="flex items-center gap-1.5"><Download size={15} /> Export .ics</span></Button>
@@ -141,6 +205,7 @@ export default function CalendarView({ onChange, openEventId }: { onChange: () =
       {editing && (
         <EventForm
           event={editing.event}
+          calendarId={editing.calendarId}
           defaultStart={editing.start}
           occurrenceDate={editing.occ}
           onClose={() => setEditing(null)}
