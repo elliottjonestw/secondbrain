@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Plus, Repeat, Square } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, Plus, Repeat, Square, Upload, Download } from "lucide-react";
 import {
   addDays, addMonths, addWeeks, differenceInCalendarDays, format,
 } from "date-fns";
@@ -10,18 +10,20 @@ import {
   startOfMonth, endOfMonth, startOfWeek, endOfWeek, startOfDay, endOfDay,
   isSameDay, isToday, fmtTime,
 } from "../lib/format";
+import { exportCalendar, importCalendar } from "../lib/ics";
 import { Button } from "../components/ui";
 import EventForm from "../components/EventForm";
 
 type ViewMode = "month" | "week" | "day";
 const HOUR_PX = 48;
 
-export default function CalendarView({ onChange }: { onChange: () => void }) {
+export default function CalendarView({ onChange, openEventId }: { onChange: () => void; openEventId?: string }) {
   const [mode, setMode] = useState<ViewMode>("month");
   const [cursor, setCursor] = useState(new Date());
   const [events, setEvents] = useState<EventRow[]>([]);
   const [todos, setTodos] = useState<TodoRow[]>([]);
   const [editing, setEditing] = useState<{ event: EventRow | null; start?: Date; occ?: Date } | null>(null);
+  const [msg, setMsg] = useState("");
 
   const reload = async () => {
     setEvents(await listEvents());
@@ -29,6 +31,28 @@ export default function CalendarView({ onChange }: { onChange: () => void }) {
   };
   useEffect(() => { void reload(); }, []);
   const bump = () => { void reload(); onChange(); };
+
+  // Open a specific event when navigated here with a target (e.g. from Today).
+  const opened = useRef(false);
+  useEffect(() => {
+    if (opened.current || !openEventId || events.length === 0) return;
+    const ev = events.find((e) => e.id === openEventId);
+    if (ev) {
+      opened.current = true;
+      setCursor(new Date(ev.dtstart));
+      setEditing({ event: ev });
+    }
+  }, [events, openEventId]);
+
+  async function doExport() {
+    const path = await exportCalendar();
+    setMsg(path ? `Exported to ${path}` : "");
+  }
+  async function doImport() {
+    const n = await importCalendar();
+    setMsg(`Imported ${n} event(s).`);
+    bump();
+  }
 
   // Visible window depends on mode.
   const [winStart, winEnd] = useMemo<[Date, Date]>(() => {
@@ -103,6 +127,15 @@ export default function CalendarView({ onChange }: { onChange: () => void }) {
             onOpen={(occ) => setEditing({ event: occ.event, occ: occ.start })}
           />
         )}
+      </div>
+
+      {/* Bottom bar — ICS import/export, shown across all calendar views. */}
+      <div className="flex items-center justify-between border-t border-neutral-200 px-4 py-2 dark:border-neutral-700">
+        <span className="truncate text-xs text-neutral-400">{msg}</span>
+        <div className="flex shrink-0 gap-2">
+          <Button onClick={doImport}><span className="flex items-center gap-1.5"><Upload size={15} /> Import .ics</span></Button>
+          <Button onClick={doExport}><span className="flex items-center gap-1.5"><Download size={15} /> Export .ics</span></Button>
+        </div>
       </div>
 
       {editing && (

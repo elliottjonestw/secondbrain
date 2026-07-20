@@ -8,9 +8,9 @@ import { Button } from "../components/ui";
 import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/ItemMeta";
 import { fmtDateTime } from "../lib/format";
 
-export default function NotesView({ onChange }: { onChange: () => void }) {
+export default function NotesView({ onChange, initialId }: { onChange: () => void; initialId?: string }) {
   const [notes, setNotes] = useState<NoteRow[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialId ?? null);
   const [query, setQuery] = useState("");
   const [targets, setTargets] = useState<LinkTarget[]>([]);
 

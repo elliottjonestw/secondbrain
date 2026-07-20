@@ -59,8 +59,8 @@ Migrations are versioned and idempotent (managed by `tauri-plugin-sql`); they ru
 
 ## Features
 
-- **Today** — dashboard of today's schedule, due/overdue tasks & reminders, pinned + recent notes. ICS import/export buttons.
-- **Calendar** — month / week / day views, event CRUD, drag-to-reschedule (month view, non-recurring events), RRULE recurrence, all-day + color-coded events. Todos with due dates appear as dashed chips.
+- **Today** — dashboard of today's schedule, due/overdue tasks & reminders, pinned + recent notes, and upcoming birthdays. Schedule events and notes are clickable — they jump straight to that item.
+- **Calendar** — month / week / day views, event CRUD, drag-to-reschedule (month view, non-recurring events), RRULE recurrence, all-day + color-coded events. Todos with due dates appear as dashed chips. A bottom bar (on every calendar view) has **ICS import/export**.
 - **Reminders** — Apple-Reminders-style with a filter sidebar (**All / Scheduled / Flagged / Completed**, each with live counts). Due date + optional alert time, recurrence, priority, link to a to-do. Native OS notifications fire when due (polled once a minute while the app is open).
 - **To-Do** — multiple lists (defaults: **Personal**, **Work**), inline list creation, subtasks, priority, due dates, drag-to-reorder, and "Convert to event". Incomplete tasks always sort above completed ones.
 - **Notes** — markdown with live preview, pin, FTS5 full-text search. The editor holds local state and debounces saves, so typing stays smooth.
@@ -134,7 +134,7 @@ The schema is deliberately CalDAV/CardDAV-ready even though sync isn't built yet
 - Events store RFC 5545 fields directly (`summary`, `dtstart`, `rrule`, `exdates`, `status`, `categories`, …).
 - **People are modeled on vCard 4.0 (RFC 6350)** — `full_name`→`FN`, structured name→`N`, `emails`/`phones`/`addresses`/`urls`→`EMAIL`/`TEL`/`ADR`/`URL`, `birthday`→`BDAY`, `organization`/`title`→`ORG`/`TITLE`, tags→`CATEGORIES`, and user-defined `custom_fields`→`X-` extension properties. Multi-value fields are stored as JSON on the row (like `exdates`/`categories`), so a future `.vcf` import/export is a straight field mapping.
 - Every syncable row has `created_at`, `updated_at`, and a `sequence` that increments on edit (mirrors iCalendar `SEQUENCE` / vCard `REV`).
-- **Export to `.ics`** (Today → Export) proves the schema is standards-compliant — drag the file straight into Apple Calendar. Import reads events back, preserving UIDs. (vCard `.vcf` import/export is future work; the schema already maps to it.)
+- **Export to `.ics`** (Calendar → bottom bar → Export) proves the schema is standards-compliant — drag the file straight into Apple Calendar. Import reads events back, preserving UIDs. (vCard `.vcf` import/export is future work; the schema already maps to it.)
 
 ## Project layout
 

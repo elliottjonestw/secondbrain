@@ -40,10 +40,24 @@ export default function App() {
   // Bumped only on a data reset, to force every view to remount and reload.
   // (Not bumped on ordinary edits, so it never disrupts in-progress editing.)
   const [resetNonce, setResetNonce] = useState(0);
+  // A specific item to open when navigating into a view (e.g. clicking a note
+  // on the Today dashboard opens that note). Consumed by the view on mount and
+  // cleared on any other navigation so it never mis-fires later.
+  const [noteTarget, setNoteTarget] = useState<string | null>(null);
+  const [calTarget, setCalTarget] = useState<string | null>(null);
 
   // Each view reloads its own data after mutations and on mount; switching
   // views remounts the next one, so no global refresh signal is needed.
   const bump = () => {};
+
+  // Single entry point for view changes. Resets any pending open-target unless
+  // one is passed for this navigation.
+  function navigate(v: View, target?: { noteId?: string; eventId?: string }) {
+    setNoteTarget(target?.noteId ?? null);
+    setCalTarget(target?.eventId ?? null);
+    setSearch("");
+    setView(v);
+  }
 
   useEffect(() => {
     (async () => {
@@ -118,7 +132,7 @@ export default function App() {
             <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400" />
             <input
               value={search}
-              onChange={(e) => { setSearch(e.target.value); setView(e.target.value ? "search" : "today"); }}
+              onChange={(e) => { setNoteTarget(null); setCalTarget(null); setSearch(e.target.value); setView(e.target.value ? "search" : "today"); }}
               placeholder="Search everything…"
               className="w-full rounded-lg border border-neutral-200 py-1.5 pl-8 pr-3 text-sm outline-none focus:border-blue-400 dark:border-neutral-600 dark:bg-neutral-800"
             />
@@ -130,7 +144,7 @@ export default function App() {
             return (
               <button
                 key={n.id}
-                onClick={() => { setView(n.id); setSearch(""); }}
+                onClick={() => navigate(n.id)}
                 className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium ${
                   view === n.id ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800"
                 }`}
@@ -142,7 +156,7 @@ export default function App() {
         </div>
         <div className="px-2 pb-1">
           <button
-            onClick={() => { setView("settings"); setSearch(""); }}
+            onClick={() => navigate("settings")}
             className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium ${
               view === "settings" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800"
             }`}
@@ -154,15 +168,15 @@ export default function App() {
 
       {/* Main */}
       <main className="flex-1 overflow-hidden bg-neutral-50 dark:bg-neutral-900">
-        {view === "today" && <TodayView key={resetNonce} onChange={bump} goTo={(v) => setView(v as View)} />}
-        {view === "calendar" && <CalendarView key={resetNonce} onChange={bump} />}
+        {view === "today" && <TodayView key={resetNonce} onChange={bump} goTo={(v, target) => navigate(v as View, target)} />}
+        {view === "calendar" && <CalendarView key={resetNonce} onChange={bump} openEventId={calTarget ?? undefined} />}
         {view === "reminders" && <RemindersView key={resetNonce} onChange={bump} />}
         {view === "todos" && <TodosView key={resetNonce} onChange={bump} />}
-        {view === "notes" && <NotesView key={resetNonce} onChange={bump} />}
+        {view === "notes" && <NotesView key={resetNonce} onChange={bump} initialId={noteTarget ?? undefined} />}
         {view === "people" && <PeopleView key={resetNonce} onChange={bump} />}
-        {view === "assistant" && <AssistantView key={resetNonce} goTo={(v) => setView(v as View)} />}
+        {view === "assistant" && <AssistantView key={resetNonce} goTo={(v) => navigate(v as View)} />}
         {view === "settings" && <SettingsView />}
-        {view === "search" && <SearchView query={search} goTo={(v) => { setView(v as View); setSearch(""); }} />}
+        {view === "search" && <SearchView query={search} goTo={(v) => navigate(v as View)} />}
       </main>
 
       <Modal
