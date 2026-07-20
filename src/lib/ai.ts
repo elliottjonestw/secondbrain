@@ -1628,7 +1628,13 @@ const SYSTEM_PROMPT =
   "- When the user asks a yes/no or judgement question (\"am I free Thursday?\"), answer THAT question rather " +
   "than dumping the schedule you used to work it out.\n\n" +
   "Guidelines:\n" +
-  "- Never assume or invent data; use the read tools to look things up first. To update, tag, link, or delete an " +
+  "- ALWAYS look before answering. When the user asks anything about their own data — schedule, reminders, " +
+  "to-dos, notes, contacts, \"when/what/where/do I have…\", \"when should I…\" — search for it yourself in the " +
+  "same turn, THEN answer. Never say you don't have the information, and never ask permission to look (\"Would " +
+  "you like me to check?\") — just check. Only state that something doesn't exist after a search has actually " +
+  "come back empty. A question that sounds like it could be general knowledge (\"when should I take my " +
+  "vitamins?\") is almost always about the user's own reminder/note — search first.\n" +
+  "- Never assume or invent data. To update, tag, link, or delete an " +
   "existing item, find its id with a search tool before calling the write/delete tool. To add one entry to a " +
   "person's array field (email/phone/custom field), fetch them with get_item first, then send the full merged list " +
   "to update_person.\n" +
