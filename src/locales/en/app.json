@@ -296,6 +296,7 @@
     "stopRecording": "Stop recording",
     "startVoice": "Start voice input",
     "talk": "Talk to the assistant",
+    "talkHint": "Talk to the assistant, or hold Space",
     "listening": "Listening…",
     "inputPlaceholder": "Ask about your calendar, tasks, notes…",
     "send": "Send",

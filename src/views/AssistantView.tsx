@@ -41,6 +41,8 @@ export default function AssistantView({
   const [error, setError] = useState<string | null>(null);
   const [keyed, setKeyed] = useState(hasApiKey());
   const recRef = useRef<Recording | null>(null);
+  const startingRef = useRef(false);     // startRecording() is in flight
+  const stopPendingRef = useRef(false);  // released before recording began
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const voiceOutput = isSpeechSupported();
@@ -51,6 +53,48 @@ export default function AssistantView({
   }, [messages, loading]);
   // Stop any speech when leaving the page.
   useEffect(() => () => stopSpeaking(), []);
+
+  // Hold-to-talk: press and hold Space to record, release to send. Refs keep
+  // the listener stable while always calling the latest closures (so stopMic
+  // sees the current `messages`), which registering once with fresh functions
+  // via deps would not guarantee.
+  const startMicRef = useRef<() => void>(() => {});
+  const stopMicRef = useRef<() => void>(() => {});
+  startMicRef.current = () => void startMic();
+  stopMicRef.current = () => void stopMic();
+  const spaceHeld = useRef(false);
+  useEffect(() => {
+    // Don't hijack Space from text fields, buttons, or links — it must still
+    // type a space or activate the focused control there.
+    const isInteractive = (el: EventTarget | null) => {
+      const n = el as HTMLElement | null;
+      return !!n && (/^(INPUT|TEXTAREA|SELECT|BUTTON|A)$/.test(n.tagName) || n.isContentEditable);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || e.repeat || spaceHeld.current) return;
+      if (isInteractive(e.target) || isInteractive(document.activeElement)) return;
+      if (!isRecordingSupported()) return;
+      e.preventDefault(); // Space would otherwise scroll the chat.
+      spaceHeld.current = true;
+      startMicRef.current();
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || !spaceHeld.current) return;
+      e.preventDefault();
+      spaceHeld.current = false;
+      stopMicRef.current();
+    };
+    // Blur (e.g. app loses focus mid-hold) must release, or we'd never get keyup.
+    const onBlur = () => { if (spaceHeld.current) { spaceHeld.current = false; stopMicRef.current(); } };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
 
   const busy = loading || recording;
 
@@ -102,48 +146,59 @@ export default function AssistantView({
     void deliver(input, false);
   }
 
-  /** Mic button: click to start recording, click again to stop → transcribe → send. */
-  async function toggleMic() {
-    if (recording) {
-      const rec = recRef.current;
-      recRef.current = null;
-      setRecording(false);
-      if (!rec) return;
-      setLoading(true);
-      setStatus(t("assistant.transcribing"));
-      try {
-        const blob = await rec.stop();
-        const text = await transcribe(blob);
-        setLoading(false);
-        if (!text) { setError(t("assistant.notHeard")); return; }
-        await deliver(text, true); // spoken reply for voice turns
-      } catch (e) {
-        setLoading(false);
-        setError(e instanceof Error ? e.message : String(e));
-      }
-      return;
-    }
-    // start
-    if (loading) return;
+  /** Begin recording. No-op if already recording, starting, or busy. */
+  async function startMic() {
+    if (recRef.current || startingRef.current || loading) return;
     setError(null);
-    if (!isRecordingSupported()) {
-      setError(
-        t("assistant.micUnavailable"),
-      );
-      return;
-    }
+    if (!isRecordingSupported()) { setError(t("assistant.micUnavailable")); return; }
     stopSpeaking();
     setSpeaking(false);
+    startingRef.current = true;
+    stopPendingRef.current = false;
     try {
-      recRef.current = await startRecording();
+      const rec = await startRecording();
+      // Push-to-talk released before the mic actually opened: there's no usable
+      // audio, so discard it rather than leaving a recording no one can stop.
+      if (stopPendingRef.current) {
+        stopPendingRef.current = false;
+        try { await rec.stop(); } catch { /* nothing to keep */ }
+        return;
+      }
+      recRef.current = rec;
       setRecording(true);
     } catch (e) {
-      setError(
-        e instanceof Error
-          ? t("assistant.micError", { message: e.message })
-          : t("assistant.micDenied"),
-      );
+      setError(e instanceof Error ? t("assistant.micError", { message: e.message }) : t("assistant.micDenied"));
+    } finally {
+      startingRef.current = false;
     }
+  }
+
+  /** Stop recording → transcribe → send (spoken reply for voice turns). */
+  async function stopMic() {
+    // Released mid-startup: tell startMic to abort once the mic opens.
+    if (startingRef.current && !recRef.current) { stopPendingRef.current = true; return; }
+    const rec = recRef.current;
+    if (!rec) return;
+    recRef.current = null;
+    setRecording(false);
+    setLoading(true);
+    setStatus(t("assistant.transcribing"));
+    try {
+      const blob = await rec.stop();
+      const text = await transcribe(blob);
+      setLoading(false);
+      if (!text) { setError(t("assistant.notHeard")); return; }
+      await deliver(text, true);
+    } catch (e) {
+      setLoading(false);
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /** Mic button: click to start recording, click again to stop. */
+  function toggleMic() {
+    if (recRef.current) void stopMic();
+    else void startMic();
   }
 
   function stopVoice() {
@@ -276,7 +331,7 @@ export default function AssistantView({
               recording ? "bg-red-600 hover:bg-red-700" : "bg-neutral-500 hover:bg-neutral-600"
             }`}
             aria-label={recording ? t("assistant.stopRecording") : t("assistant.startVoice")}
-            title={recording ? t("assistant.stopRecording") : t("assistant.talk")}
+            title={recording ? t("assistant.stopRecording") : t("assistant.talkHint")}
           >
             {recording ? <Square size={18} /> : <Mic size={18} />}
           </button>

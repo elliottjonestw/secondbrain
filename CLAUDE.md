@@ -91,6 +91,7 @@ Runtime DB: `~/Library/Application Support/com.elliottjones.secondbrain/secondbr
 - **Rule (no setting):** spoke → speak the reply; typed → text only. `deliver(text, spoken)` carries this.
 - **TTS must set `utterance.lang` and pick a voice explicitly.** An unset `lang` inherits `<html lang>`, so a Chinese reply on an English voice is *silent* — a failure with no error. Normalize `_`→`-` (macOS reports `zh_TW`) and wait for `voiceschanged` (WebKit returns `[]` first call).
 - **Whisper gets a `prompt`, never a `language`** — `language` forces one and breaks bilingual speech ("提醒我 3pm 開會").
+- **Two ways to record, one lifecycle (`AssistantView`):** the mic button toggles `startMic`/`stopMic`; holding Space does the same (keydown→start, keyup→stop), skipped when an input/button/link is focused so Space still types/activates there. `startingRef`/`stopPendingRef` guard the release-before-mic-opened race — a tap that ends before `startRecording()` resolves discards the recording instead of leaving one running with no way to stop it. Don't collapse `start`/`stop` back into a single `recording`-state toggle; the state is stale during that race.
 
 ## Layout
 

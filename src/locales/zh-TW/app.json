@@ -294,6 +294,7 @@
     "stopRecording": "停止錄音",
     "startVoice": "開始語音輸入",
     "talk": "與助理對話",
+    "talkHint": "與助理對話，或按住空白鍵",
     "listening": "聆聽中…",
     "inputPlaceholder": "詢問你的行事曆、任務、備忘錄…",
     "send": "送出",
