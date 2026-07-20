@@ -1,11 +1,35 @@
 // Contact avatar: shows a photo if present, otherwise the person's initials on
 // a tinted circle. Shared by the People view and the PeoplePanel link widget.
 
+/** Han, Hiragana/Katakana, and Hangul — scripts written without word spaces. */
+const CJK = /[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯]/;
+
+/**
+ * Initials for the avatar circle.
+ *
+ * `[...str]` iterates by code point, not UTF-16 code unit — indexing with [0]
+ * splits a surrogate pair and renders a lone `` for names starting outside
+ * the BMP (rare Han in plane 2, for instance).
+ *
+ * CJK names have no spaces, so the Latin "first letter of first and last word"
+ * rule would return the whole name. The convention there is the surname
+ * character alone, which for Chinese is the leading character.
+ */
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+
+  if (parts.length === 1) {
+    const chars = [...parts[0]];
+    if (CJK.test(parts[0])) return chars[0];
+    return chars.slice(0, 2).join("").toUpperCase();
+  }
+
+  const first = [...parts[0]][0];
+  const last = [...parts[parts.length - 1]][0];
+  // A mixed or CJK name still reads best as single characters, uncased.
+  if (CJK.test(name)) return first + last;
+  return (first + last).toUpperCase();
 }
 
 export function Avatar({ name, photo, size = 36 }: { name: string; photo?: string | null; size?: number }) {

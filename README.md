@@ -9,6 +9,7 @@ A local-first personal life-management desktop app: **Calendar, Reminders, To-Do
 | Shell | Tauri v2 (Rust) |
 | Frontend | React 19 + TypeScript + Vite + Tailwind CSS |
 | Icons | `lucide-react` |
+| Languages | `i18next` + `react-i18next` (English, 繁體中文) |
 | Database | SQLite via `tauri-plugin-sql` (sqlx) |
 | Notifications | `tauri-plugin-notification` |
 | Recurrence | `rrule` (RFC 5545) for local events; `ical.js` for remote (TZID-aware) |
@@ -70,10 +71,29 @@ Migrations are versioned and idempotent (managed by `tauri-plugin-sql`); they ru
 - **Notes** — markdown with live preview, pin, FTS5 full-text search. The editor holds local state and debounces saves, so typing stays smooth.
 - **People** — a contacts book modeled on **vCard 4.0**: multiple emails/phones/addresses/websites (each with a type), structured name, nickname, organization, title, birthday, notes, favorite, and **user-defined custom fields** (e.g. "Eye color: Blue", drag to reorder). Custom-field **labels are global** — a field you add shows up on every person (each person keeps its own value); removing one removes it everywhere. Master-detail with the same debounced auto-save as Notes (no Save button). Click an email/phone/website to open it (`mailto:`/`tel:`/browser). Upcoming birthdays surface on the Today dashboard.
 - **Assistant** — an AI chat that answers questions about your data and can create, update, or delete items, by typing **or by voice** (see below).
-- **Settings** — a sidebar splits configuration into **Assistant** (OpenAI key + model), **Voice** (speech-to-text model), and **Calendars** (connect iCloud, pick visible calendars, set the default).
+- **Settings** — a sidebar splits configuration into **General** (language), **Assistant** (OpenAI key + model), **Voice** (speech-to-text model), and **Calendars** (connect iCloud, pick visible calendars, set the default).
+- **Languages** — the whole UI is available in **English** and **Traditional Chinese (繁體中文)**. Dates, times, the first day of the week, and relative labels ("tomorrow") follow the selected language via `Intl`; switching applies instantly with no restart. Set it in **Settings → General** (defaults to following your OS).
 - **Integration** — shared tagging and generic `links` (any item ↔ any item) across all five types; a person can be attached to any event, to-do, reminder, or note (and shown/edited from either side). Global search across everything.
 
 The UI uses a consistent modern icon set (`lucide-react`) throughout — no emoji.
+
+## Languages (i18n)
+
+The UI ships in **English** and **Traditional Chinese (繁體中文)**, built on **`i18next` + `react-i18next`**. Catalogs are plain JSON bundled at build time — there's no backend to fetch translations from, which suits an offline desktop app.
+
+**Choosing a language:** *Settings → General*. The default follows your OS locale; only Traditional variants (`zh-Hant`/`zh-TW`/`zh-HK`) map to Chinese, since showing Traditional characters to a Simplified reader would be worse than English. Switching applies **instantly** — `useTranslation()` subscribes to i18next's `languageChanged`, so the tree re-renders without a restart.
+
+**What follows the language:**
+
+- **Dates and times** go through `Intl.DateTimeFormat`, not hardcoded patterns, so each locale gets its own conventions: `2:30 PM` vs `下午2:30`, `Jul 20, 2026` vs `2026年7月20日`, `1 PM` vs `下午1時`. Hardcoded `"MMM d"`-style patterns produce `7月 20` in Chinese where the correct form is `7月20日`.
+- **The first day of the week** comes from the date-fns locale — Sunday for `en-US`, Monday for `zh-TW` — so the calendar grid and its weekday headers reorder.
+- **Relative labels** ("today", "tomorrow", "in 5 days") use `Intl.RelativeTimeFormat`.
+- **`<html lang>`** is set at runtime. This matters more than it looks: many CJK codepoints are Han-unified, and with a wrong or missing `lang` the renderer picks an arbitrary variant — a Traditional reader can end up seeing Japanese glyph forms.
+- **Spoken replies** pick a voice by detecting the script of the reply text (see AI Assistant → Voice).
+
+**Adding a language** is a translation job, not an engineering one: add a catalog under `src/locales/<code>/app.json`, add the code to `LANGUAGES` in `src/lib/i18n.ts`, and map it in `matchSystemLanguage`. Keys are **type-checked** — `src/@types/i18next.d.ts` derives the key union from the English catalog, so `t("typo.here")` is a compile error and English is the enforced source of truth.
+
+**Deliberately left in English:** the assistant's `SYSTEM_PROMPT`, its tool schemas, and the tool-result error strings. Those are model-facing, not user-facing — translating them costs tokens and tool-selection accuracy, and the model paraphrases them into the user's language anyway. The demo dataset (Shift+8+9) is also English-only.
 
 ## Apple Calendar (CalDAV)
 
@@ -171,7 +191,13 @@ Calendar sync is built (**CalDAV, iCloud** — see above). The schema was design
 src/
   db.ts                 # data-access layer (only module that touches SQLite)
   types.ts              # domain types mirroring the schema
+  locales/
+    en/app.json         # translation catalogs (English is the source of truth)
+    zh-TW/app.json
+  @types/
+    i18next.d.ts        # typed translation keys (a typo is a compile error)
   lib/
+    i18n.ts             # i18next setup, language detection, <html lang>
     recurrence.ts       # rrule expansion (local events)
     ics.ts              # ICS import/export
     calendars.ts        # calendar registry + local/remote aggregation & write routing
@@ -201,6 +227,7 @@ src-tauri/
     002_default_lists.sql   # seed Personal/Work, drop Inbox
     003_people.sql          # people (contacts, vCard 4.0-modeled)
     004_person_custom_fields.sql  # global custom-field label registry
+    005_fts_trigram.sql     # rebuild notes FTS with the trigram tokenizer (CJK)
   capabilities/default.json  # plugin permissions (sql, notification, dialog,
                              #   fs scope, http scope for api.openai.com +
                              #   caldav.icloud.com / *.icloud.com)
@@ -224,4 +251,7 @@ See [CLAUDE.md](CLAUDE.md) for architecture principles, conventions, and the got
 - Remote **timed** events are written in UTC (unambiguous, avoids emitting a `VTIMEZONE`); all-day events use `VALUE=DATE`. Reading is fully `TZID`-aware. **One consequence worth knowing:** editing an existing *recurring* Apple event rewrites its `DTSTART` from the original `TZID` to UTC, so a series pinned to a wall-clock time (a 9am weekly standup) will shift by an hour across a daylight-saving boundary instead of staying at 9am. Editing non-recurring events, and creating new ones, are unaffected. Emitting `TZID` + `VTIMEZONE` on write is the fix and is planned.
 - Per-instance `RECURRENCE-ID` overrides, attendees, and `VALARM` alarms are not synced — an event with per-instance overrides shows its series pattern, and editing it would drop the overrides.
 - Local events have no timezone handling beyond the machine's local zone (fine for single-user local use; remote events *are* resolved from their source zone).
+- **Chinese notes search needs 3+ characters to be ranked.** The notes index uses SQLite FTS5's `trigram` tokenizer, which can't answer queries shorter than 3 characters — and the commonest Chinese words are exactly 2 (北京, 會議). Those queries fall back to a `LIKE` scan, which is correct but unranked and slower on large note sets.
+- **A custom (non-preset) RRULE is described in English** even in Chinese. `rrule`'s `toText()` substitutes token by token, and Chinese word order differs enough ("every week on Monday" vs 每週一) that the output would read worse than English. The repeat presets themselves are translated, which covers the common cases.
+- The demo dataset and the assistant's own prose are **English-only**; the assistant replies in whatever language you write to it in.
 - The OpenAI API key **and the iCloud app-specific password** are stored in plaintext in `localStorage` (typical for a local single-user app); anyone with access to the machine profile can read them. Moving credentials to the OS keychain is future work.

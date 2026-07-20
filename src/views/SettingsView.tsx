@@ -1,13 +1,18 @@
-import { ReactNode, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import {
   Eye, EyeOff, Check, CalendarDays, ExternalLink, Loader2, AlertCircle,
-  Sparkles, Mic, LucideIcon,
+  Sparkles, Mic, Languages, LucideIcon,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   getSettings, saveSettings, getCalendarSettings, saveCalendarSettings,
   type AppSettings, type CalDavAccount,
 } from "../lib/settings";
+import {
+  LANGUAGES, SYSTEM_LANGUAGE, changeLanguage, matchSystemLanguage,
+} from "../lib/i18n";
+import { hasVoiceFor } from "../lib/voice";
 import { discoverAccount } from "../lib/caldav/discovery";
 import { invalidateCache, listCalendars, setCalendarVisible, LOCAL_CALENDAR_NAME } from "../lib/calendars";
 import { LOCAL_CALENDAR_ID } from "../types";
@@ -15,16 +20,18 @@ import { Button } from "../components/ui";
 
 const APPLE_PASSWORD_URL = "https://account.apple.com/account/manage";
 
-type Section = "assistant" | "voice" | "calendars";
+type Section = "general" | "assistant" | "voice" | "calendars";
 
-const SECTIONS: { id: Section; label: string; icon: LucideIcon }[] = [
-  { id: "assistant", label: "Assistant", icon: Sparkles },
-  { id: "voice", label: "Voice", icon: Mic },
-  { id: "calendars", label: "Calendars", icon: CalendarDays },
+const SECTIONS: { id: Section; labelKey: `settings.sections.${Section}`; icon: LucideIcon }[] = [
+  { id: "general", labelKey: "settings.sections.general", icon: Languages },
+  { id: "assistant", labelKey: "settings.sections.assistant", icon: Sparkles },
+  { id: "voice", labelKey: "settings.sections.voice", icon: Mic },
+  { id: "calendars", labelKey: "settings.sections.calendars", icon: CalendarDays },
 ];
 
 export default function SettingsView() {
-  const [section, setSection] = useState<Section>("assistant");
+  const { t } = useTranslation();
+  const [section, setSection] = useState<Section>("general");
 
   // The AI settings live here rather than in the panes so switching sections
   // doesn't unmount the inputs and throw away unsaved edits.
@@ -46,7 +53,7 @@ export default function SettingsView() {
   return (
     <div className="flex h-full">
       <aside className="w-48 shrink-0 border-r border-neutral-200 p-3 dark:border-neutral-700">
-        <h3 className="mb-2 text-xs font-semibold uppercase text-neutral-400">Settings</h3>
+        <h3 className="mb-2 text-xs font-semibold uppercase text-neutral-400">{t("settings.title")}</h3>
         {SECTIONS.map((s) => {
           const Icon = s.icon;
           return (
@@ -57,17 +64,19 @@ export default function SettingsView() {
                 section === s.id ? "bg-blue-100 dark:bg-blue-900/40" : "hover:bg-neutral-100 dark:hover:bg-neutral-700"
               }`}
             >
-              <Icon size={16} className="text-neutral-500" /> {s.label}
+              <Icon size={16} className="shrink-0 text-neutral-500" />
+              <span className="min-w-0 truncate">{t(s.labelKey)}</span>
             </button>
           );
         })}
         <p className="mt-4 px-2 text-xs leading-relaxed text-neutral-400">
-          Configuration is stored locally on this device.
+          {t("settings.storedLocally")}
         </p>
       </aside>
 
       <div className="flex-1 overflow-y-auto p-8">
         <div className="mx-auto max-w-2xl">
+          {section === "general" && <GeneralSettings />}
           {section === "assistant" && (
             <AssistantSettings draft={draft} patch={patch} onSave={save} saved={saved} />
           )}
@@ -112,6 +121,7 @@ function Field({
 function SecretInput({
   value, onChange, placeholder, mono = true,
 }: { value: string; onChange: (v: string) => void; placeholder: string; mono?: boolean }) {
+  const { t } = useTranslation();
   const [reveal, setReveal] = useState(false);
   return (
     <div className="relative">
@@ -128,7 +138,7 @@ function SecretInput({
         type="button"
         onClick={() => setReveal((v) => !v)}
         className="absolute right-2 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-600"
-        aria-label={reveal ? "Hide" : "Show"}
+        aria-label={reveal ? t("settings.hide") : t("settings.show")}
       >
         {reveal ? <EyeOff size={16} /> : <Eye size={16} />}
       </button>
@@ -137,12 +147,13 @@ function SecretInput({
 }
 
 function SaveRow({ onSave, saved }: { onSave: () => void; saved: boolean }) {
+  const { t } = useTranslation();
   return (
     <div className="flex items-center gap-3 border-t border-neutral-200 pt-5 dark:border-neutral-700">
-      <Button variant="primary" onClick={onSave}>Save</Button>
+      <Button variant="primary" onClick={onSave}>{t("common.save")}</Button>
       {saved && (
         <span className="flex items-center gap-1 text-sm text-green-600">
-          <Check size={16} /> Saved
+          <Check size={16} /> {t("settings.saved")}
         </span>
       )}
     </div>
@@ -169,19 +180,60 @@ interface PaneProps {
 }
 
 // ---------------------------------------------------------------------------
+// General (language)
+// ---------------------------------------------------------------------------
+function GeneralSettings() {
+  const { t } = useTranslation();
+  const [language, setLanguage] = useState(getSettings().language);
+
+  // Applied immediately rather than on a Save button: the whole point of a
+  // language picker is seeing the result, and there's nothing to validate.
+  function pick(value: string) {
+    setLanguage(value);
+    saveSettings({ language: value });
+    void changeLanguage(value);
+  }
+
+  const systemMatch = LANGUAGES.find((l) => l.code === matchSystemLanguage(navigator.language || "en"));
+
+  return (
+    <>
+      <PaneHeader title={t("settings.general.title")}>
+        {t("settings.general.description")}
+      </PaneHeader>
+
+      <Field label={t("settings.general.language")} hint={t("settings.general.languageHint")}>
+        <select
+          value={language}
+          onChange={(e) => pick(e.target.value)}
+          className={INPUT_CLASS}
+        >
+          <option value={SYSTEM_LANGUAGE}>
+            {t("settings.general.systemOption", { language: systemMatch?.nativeName ?? "English" })}
+          </option>
+          {LANGUAGES.map((l) => (
+            <option key={l.code} value={l.code}>{l.nativeName}</option>
+          ))}
+        </select>
+      </Field>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Assistant
 // ---------------------------------------------------------------------------
 function AssistantSettings({ draft, patch, onSave, saved }: PaneProps) {
+  const { t } = useTranslation();
   return (
     <>
-      <PaneHeader title="Assistant">
-        Bring your own OpenAI API key to enable the Assistant. Your key is stored only on this
-        device and is sent directly to OpenAI when you ask a question.
+      <PaneHeader title={t("settings.sections.assistant")}>
+        {t("settings.assistant.description")}
       </PaneHeader>
 
       <Field
-        label="OpenAI API key"
-        hint={<>Get a key at platform.openai.com. Usage is billed to your own OpenAI account.</>}
+        label={t("settings.assistant.apiKey")}
+        hint={t("settings.assistant.apiKeyHint")}
       >
         <SecretInput
           value={draft.openaiApiKey}
@@ -191,8 +243,8 @@ function AssistantSettings({ draft, patch, onSave, saved }: PaneProps) {
       </Field>
 
       <Field
-        label="Model"
-        hint={<>e.g. <code>gpt-4o-mini</code>, <code>gpt-4o</code>. Any chat-completions model your key can access.</>}
+        label={t("settings.assistant.model")}
+        hint={<>{t("settings.assistant.modelHint")} <code>gpt-4o-mini</code> / <code>gpt-4o</code></>}
       >
         <input
           value={draft.openaiModel}
@@ -212,16 +264,34 @@ function AssistantSettings({ draft, patch, onSave, saved }: PaneProps) {
 // Voice
 // ---------------------------------------------------------------------------
 function VoiceSettings({ draft, patch, onSave, saved }: PaneProps) {
+  const { t, i18n } = useTranslation();
+  // Spoken replies come from OS voices, which macOS ships on demand — if the
+  // language's voice isn't installed the reply is simply silent, with nothing
+  // in the UI to explain why. Check and say so.
+  const [voiceMissing, setVoiceMissing] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void hasVoiceFor(i18n.language).then((ok) => { if (live) setVoiceMissing(!ok); });
+    return () => { live = false; };
+  }, [i18n.language]);
+
   return (
     <>
-      <PaneHeader title="Voice">
-        Talk to the assistant and it replies aloud; type and it replies in text. Voice uses the same
-        tools as the chat, so it can answer questions and make changes.
+      <PaneHeader title={t("settings.sections.voice")}>
+        {t("settings.voice.description")}
       </PaneHeader>
 
+      {voiceMissing && (
+        <div className="mb-5">
+          <Notice tone="error">
+            {t("settings.voice.noVoice", { language: i18n.language })}
+          </Notice>
+        </div>
+      )}
+
       <Field
-        label="Speech-to-text model"
-        hint={<>e.g. <code>whisper-1</code> or <code>gpt-4o-transcribe</code>.</>}
+        label={t("settings.voice.sttModel")}
+        hint={<>{t("settings.voice.sttHint")} <code>whisper-1</code> / <code>gpt-4o-transcribe</code></>}
       >
         <input
           value={draft.sttModel}
@@ -233,11 +303,7 @@ function VoiceSettings({ draft, patch, onSave, saved }: PaneProps) {
       </Field>
 
       <div className="mb-5">
-        <Notice tone="info">
-          Voice input sends audio to OpenAI for transcription (billed per minute). Spoken replies are
-          generated locally by your OS, so they're free and work offline. The microphone is only
-          available in a packaged build, not in <code>tauri dev</code>.
-        </Notice>
+        <Notice tone="info">{t("settings.voice.privacyNote")}</Notice>
       </div>
 
       <SaveRow onSave={onSave} saved={saved} />
@@ -249,6 +315,7 @@ function VoiceSettings({ draft, patch, onSave, saved }: PaneProps) {
 // Calendars (CalDAV / iCloud)
 // ---------------------------------------------------------------------------
 function CalendarSettingsPane() {
+  const { t } = useTranslation();
   const stored = getCalendarSettings();
   const [username, setUsername] = useState(stored.account?.username ?? "");
   const [password, setPassword] = useState(stored.account?.appPassword ?? "");
@@ -278,7 +345,7 @@ function CalendarSettingsPane() {
       const account = await discoverAccount(draft, settings.account?.calendars);
       saveCalendarSettings({ account });
       invalidateCache();
-      setStatus(`Found ${account.calendars.length} calendar${account.calendars.length === 1 ? "" : "s"}.`);
+      setStatus(t("settings.calendars.found", { count: account.calendars.length }));
       refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -288,7 +355,7 @@ function CalendarSettingsPane() {
   }
 
   function disconnect() {
-    if (!window.confirm("Disconnect this iCloud account? Your local calendar is untouched.")) return;
+    if (!window.confirm(t("settings.calendars.confirmDisconnect"))) return;
     saveCalendarSettings({ account: null, defaultCalendarId: LOCAL_CALENDAR_ID });
     invalidateCache();
     setPassword("");
@@ -299,28 +366,26 @@ function CalendarSettingsPane() {
 
   return (
     <>
-      <PaneHeader title="Calendars">
-        Connect iCloud to see your Apple calendars alongside the built-in one. Events are read from
-        and written to iCloud live — nothing is copied to this device, so Apple calendars need a
-        connection to appear.
+      <PaneHeader title={t("settings.sections.calendars")}>
+        {t("settings.calendars.description")}
       </PaneHeader>
 
       {/* --- Account --------------------------------------------------- */}
       <section className="mb-8 rounded-xl border border-neutral-200 p-5 dark:border-neutral-700">
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
-            iCloud account
+            {t("settings.calendars.account")}
           </h2>
           {connected && (
             <span className="flex shrink-0 items-center gap-1 rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-950/40 dark:text-green-400">
-              <Check size={12} /> Connected
+              <Check size={12} /> {t("settings.calendars.connected")}
             </span>
           )}
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <label className="mb-1.5 block text-sm font-medium">Apple ID</label>
+            <label className="mb-1.5 block text-sm font-medium">{t("settings.calendars.appleId")}</label>
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
@@ -331,7 +396,7 @@ function CalendarSettingsPane() {
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-sm font-medium">App-specific password</label>
+            <label className="mb-1.5 block text-sm font-medium">{t("settings.calendars.appPassword")}</label>
             <SecretInput
               value={password}
               onChange={setPassword}
@@ -341,14 +406,13 @@ function CalendarSettingsPane() {
         </div>
 
         <p className="mt-3 text-xs leading-relaxed text-neutral-400">
-          Your regular Apple password won't work with two-factor authentication. Create an
-          app-specific password under Sign-In and Security, then paste it here.{" "}
+          {t("settings.calendars.passwordHint")}{" "}
           <button
             type="button"
             onClick={() => void openUrl(APPLE_PASSWORD_URL)}
             className="inline-flex items-center gap-1 text-blue-500 hover:underline"
           >
-            Apple ID settings <ExternalLink size={11} />
+            {t("settings.calendars.appleIdSettings")} <ExternalLink size={11} />
           </button>
         </p>
 
@@ -356,11 +420,11 @@ function CalendarSettingsPane() {
           <Button variant="primary" onClick={() => void connect()}>
             {busy ? (
               <span className="flex items-center gap-1.5">
-                <Loader2 size={15} className="animate-spin" /> Connecting…
+                <Loader2 size={15} className="animate-spin" /> {t("settings.calendars.connecting")}
               </span>
-            ) : connected ? "Reconnect" : "Connect"}
+            ) : connected ? t("settings.calendars.reconnect") : t("settings.calendars.connect")}
           </Button>
-          {connected && <Button onClick={disconnect}>Disconnect</Button>}
+          {connected && <Button onClick={disconnect}>{t("settings.calendars.disconnect")}</Button>}
           {status && (
             <span className="flex items-center gap-1 text-sm text-green-600">
               <Check size={16} /> {status}
@@ -374,10 +438,10 @@ function CalendarSettingsPane() {
       {/* --- Calendar list --------------------------------------------- */}
       <section className="mb-8 rounded-xl border border-neutral-200 p-5 dark:border-neutral-700">
         <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-          Visible calendars
+          {t("settings.calendars.visible")}
         </h2>
         <p className="mb-4 text-xs text-neutral-400">
-          Uncheck a calendar to hide it from the Calendar and Today views.
+          {t("settings.calendars.visibleHint")}
         </p>
 
         <div className="space-y-0.5">
@@ -398,10 +462,10 @@ function CalendarSettingsPane() {
               />
               <span className="min-w-0 truncate">{cal.name}</span>
               {cal.source === "local" && (
-                <span className="shrink-0 rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">built-in</span>
+                <span className="shrink-0 rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">{t("settings.calendars.builtIn")}</span>
               )}
               {cal.readOnly && (
-                <span className="shrink-0 rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">read-only</span>
+                <span className="shrink-0 rounded bg-neutral-100 px-1.5 py-0.5 text-xs text-neutral-500 dark:bg-neutral-700 dark:text-neutral-400">{t("settings.calendars.readOnly")}</span>
               )}
             </label>
           ))}
@@ -409,12 +473,12 @@ function CalendarSettingsPane() {
 
         {!connected && (
           <p className="mt-3 text-xs text-neutral-400">
-            Connect an account above to add more calendars.
+            {t("settings.calendars.connectPrompt")}
           </p>
         )}
         {connected && remoteCount === 0 && (
           <p className="mt-3 text-xs text-neutral-400">
-            No Apple event calendars were found on this account.
+            {t("settings.calendars.noneFound")}
           </p>
         )}
       </section>
@@ -422,11 +486,10 @@ function CalendarSettingsPane() {
       {/* --- Default --------------------------------------------------- */}
       <section className="rounded-xl border border-neutral-200 p-5 dark:border-neutral-700">
         <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
-          Default calendar
+          {t("settings.calendars.defaultCalendar")}
         </h2>
         <p className="mb-4 text-xs leading-relaxed text-neutral-400">
-          New events land here when you don't pick a calendar — including events the assistant
-          creates. The built-in {LOCAL_CALENDAR_NAME} calendar is the only one that works offline.
+          {t("settings.calendars.defaultHint", { calendar: LOCAL_CALENDAR_NAME })}
         </p>
         <select
           value={settings.defaultCalendarId}

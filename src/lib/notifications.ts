@@ -10,6 +10,7 @@ import {
   requestPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
+import i18next from "i18next";
 import { listReminders, listTodos } from "../db";
 
 const CHECK_INTERVAL_MS = 60_000;
@@ -40,7 +41,7 @@ async function checkDue(): Promise<void> {
     const key = `reminder:${r.id}:${at}`;
     if (t <= now && !notified.has(key)) {
       notified.add(key);
-      sendNotification({ title: "Reminder", body: r.title });
+      sendNotification({ title: i18next.t("itemType.reminder"), body: r.title });
     }
   }
 
@@ -51,7 +52,7 @@ async function checkDue(): Promise<void> {
     const key = `todo:${td.id}:${td.due_at}`;
     if (t <= now && !notified.has(key)) {
       notified.add(key);
-      sendNotification({ title: "Todo due", body: td.title });
+      sendNotification({ title: i18next.t("notifications.todoDue"), body: td.title });
     }
   }
 }

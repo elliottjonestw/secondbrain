@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { AlertCircle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { UnifiedEvent } from "../types";
 import { LOCAL_CALENDAR_ID } from "../types";
 import { allLinkTargets } from "../db";
@@ -9,17 +10,7 @@ import {
 import { Button, Modal, CATEGORY_COLORS } from "./ui";
 import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "./ItemMeta";
 import { toLocalInput, toDateInput, fromLocalInput } from "../lib/format";
-import { describeRrule } from "../lib/recurrence";
-
-// RRULE presets. "custom" reveals a raw RFC 5545 text field.
-const RRULE_PRESETS: { label: string; value: string | null }[] = [
-  { label: "Does not repeat", value: null },
-  { label: "Daily", value: "FREQ=DAILY" },
-  { label: "Every weekday", value: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR" },
-  { label: "Weekly", value: "FREQ=WEEKLY" },
-  { label: "Monthly", value: "FREQ=MONTHLY" },
-  { label: "Yearly", value: "FREQ=YEARLY" },
-];
+import { describeRrule, RRULE_PRESETS } from "../lib/recurrence";
 
 export default function EventForm({
   event, calendarId, defaultStart, occurrenceDate, onClose, onSaved,
@@ -31,6 +22,7 @@ export default function EventForm({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { t } = useTranslation();
   const start0 = event ? new Date(event.dtstart) : defaultStart ?? new Date();
   const end0 = event?.dtend ? new Date(event.dtend) : new Date(start0.getTime() + 60 * 60 * 1000);
 
@@ -95,7 +87,7 @@ export default function EventForm({
   async function save() {
     const effectiveRrule = isCustom ? (customRrule.trim() || null) : rrule;
     const draft = {
-      summary: summary.trim() || "(untitled)",
+      summary: summary.trim() || t("common.untitledParen"),
       description: description || null,
       location: location || null,
       dtstart: allDay ? new Date(toDateInput(start) + "T00:00:00").toISOString() : start.toISOString(),
@@ -123,18 +115,18 @@ export default function EventForm({
     <Modal
       open
       onClose={onClose}
-      title={event ? "Edit event" : "New event"}
+      title={event ? t("event.edit") : t("event.new")}
       footer={
         <>
           {event && !readOnly && (
             <Button variant="danger" onClick={() => void attempt(() => deleteEvent(event))}>
-              Delete{event.rrule ? " series" : ""}
+              {event.rrule ? t("event.deleteSeries") : t("common.delete")}
             </Button>
           )}
           {event?.rrule && occurrenceDate && !readOnly && (
-            <Button onClick={excludeThisOccurrence}>Skip this day</Button>
+            <Button onClick={excludeThisOccurrence}>{t("event.skipDay")}</Button>
           )}
-          {!readOnly && <Button variant="primary" onClick={save}>Save</Button>}
+          {!readOnly && <Button variant="primary" onClick={save}>{t("common.save")}</Button>}
         </>
       }
     >
@@ -146,7 +138,7 @@ export default function EventForm({
         )}
         {readOnly && (
           <p className="rounded-lg bg-neutral-100 p-2.5 text-sm text-neutral-500 dark:bg-neutral-700/50">
-            This calendar is read-only, so the event can't be changed here.
+{t("event.readOnly")}
           </p>
         )}
 
@@ -154,12 +146,12 @@ export default function EventForm({
           autoFocus
           value={summary}
           onChange={(e) => setSummary(e.target.value)}
-          placeholder="Event title"
+          placeholder={t("event.titlePlaceholder")}
           className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-lg dark:border-neutral-600 dark:bg-neutral-700"
         />
 
         <label className="block text-sm">
-          <span className="mb-1 block text-xs text-neutral-500">Calendar</span>
+          <span className="mb-1 block text-xs text-neutral-500">{t("event.calendar")}</span>
           <select
             value={targetCalendar}
             disabled={!!event}
@@ -172,19 +164,19 @@ export default function EventForm({
           </select>
           {event && (
             <span className="mt-1 block text-xs text-neutral-400">
-              To move an event to another calendar, delete it and create it again there.
+{t("event.calendarLocked")}
             </span>
           )}
         </label>
 
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} className="accent-blue-600" />
-          All day
+          {t("event.allDay")}
         </label>
 
         <div className="grid grid-cols-2 gap-3">
           <label className="text-sm">
-            <span className="mb-1 block text-xs text-neutral-500">Start</span>
+            <span className="mb-1 block text-xs text-neutral-500">{t("event.start")}</span>
             {allDay ? (
               <input type="date" value={toDateInput(start)} onChange={(e) => updateStart(new Date(e.target.value + "T00:00"))} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700" />
             ) : (
@@ -193,14 +185,14 @@ export default function EventForm({
           </label>
           {!allDay && (
             <label className="text-sm">
-              <span className="mb-1 block text-xs text-neutral-500">End</span>
+              <span className="mb-1 block text-xs text-neutral-500">{t("event.end")}</span>
               <input type="datetime-local" value={toLocalInput(end)} onChange={(e) => updateEnd(new Date(fromLocalInput(e.target.value)))} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700" />
             </label>
           )}
         </div>
 
         <label className="block text-sm">
-          <span className="mb-1 block text-xs text-neutral-500">Repeat</span>
+          <span className="mb-1 block text-xs text-neutral-500">{t("event.repeat")}</span>
           <select
             value={isCustom ? "__custom__" : (rrule ?? "__none__")}
             onChange={(e) => {
@@ -211,9 +203,9 @@ export default function EventForm({
             className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700"
           >
             {RRULE_PRESETS.map((p) => (
-              <option key={p.label} value={p.value ?? "__none__"}>{p.label}</option>
+              <option key={p.key} value={p.value ?? "__none__"}>{t(p.key)}</option>
             ))}
-            <option value="__custom__">Custom (RFC 5545)…</option>
+            <option value="__custom__">{t("recurrence.custom")}</option>
           </select>
         </label>
         {isCustom && (
@@ -228,11 +220,11 @@ export default function EventForm({
           </div>
         )}
 
-        <input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Location" className="w-full rounded-lg border border-neutral-200 px-3 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
-        <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description" rows={2} className="w-full rounded-lg border border-neutral-200 px-3 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
+        <input value={location} onChange={(e) => setLocation(e.target.value)} placeholder={t("event.location")} className="w-full rounded-lg border border-neutral-200 px-3 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
+        <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t("event.description")} rows={2} className="w-full rounded-lg border border-neutral-200 px-3 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
 
         <div className="flex items-center gap-3">
-          <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Category" className="flex-1 rounded-lg border border-neutral-200 px-3 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
+          <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder={t("event.category")} className="flex-1 rounded-lg border border-neutral-200 px-3 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
           {isLocal ? (
             <div className="flex gap-1">
               {CATEGORY_COLORS.map((c) => (
@@ -242,7 +234,7 @@ export default function EventForm({
           ) : (
             <span className="flex shrink-0 items-center gap-1.5 text-xs text-neutral-400">
               <span className="h-4 w-4 rounded-full" style={{ background: activeCalendar?.color ?? "#3b82f6" }} />
-              calendar colour
+  {t("event.calendarColour")}
             </span>
           )}
         </div>
@@ -259,8 +251,7 @@ export default function EventForm({
         )}
         {event && event.source !== "local" && (
           <p className="border-t border-neutral-200 pt-3 text-xs text-neutral-400 dark:border-neutral-700">
-            Tags, people and links are available on events in the built-in {" "}
-            {getCalendar(LOCAL_CALENDAR_ID)?.name} calendar only.
+{t("event.localOnlyMeta", { calendar: getCalendar(LOCAL_CALENDAR_ID)?.name })}
           </p>
         )}
       </div>

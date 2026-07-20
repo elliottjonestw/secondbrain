@@ -12,10 +12,14 @@
 // webview.
 
 import { fetch } from "@tauri-apps/plugin-http";
+import i18next from "i18next";
+// Deliberately date-fns' unlocalized `format`, not lib/format's locale-aware
+// wrapper: these strings go into the model's prompt, which stays English
+// regardless of the UI language. Localizing them would only confuse the model.
 import { format } from "date-fns";
 import type { EventRow, ItemType } from "../types";
 import {
-  db, listLists, listTags, linksForItem, tagsForItem, getItemLabel,
+  db, listLists, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes,
   upsertTodo, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
   deleteTodo, deleteReminder, deleteNote, deleteList,
   listPeople, searchPeople, upsertPerson, deletePerson, createLink, deleteLink,
@@ -779,23 +783,14 @@ async function toolSearchNotes(args: Record<string, unknown>) {
   const limit = clampLimit(args.limit);
   const q = typeof args.query === "string" ? args.query.trim() : "";
 
-  let rows: any[];
-  if (q) {
-    // FTS via searchNotes-style query, but inline so we can also apply pinned filter.
-    const match = q.split(/\s+/).map((t) => t.replace(/["*]/g, "")).filter(Boolean).map((t) => `${t}*`).join(" ");
-    try {
-      rows = await d.select<any[]>(
-        `SELECT n.* FROM notes n JOIN notes_fts f ON f.rowid = n.rowid WHERE notes_fts MATCH ? ORDER BY rank`,
-        [match],
-      );
-    } catch {
-      const like = `%${q}%`;
-      rows = await d.select<any[]>("SELECT * FROM notes WHERE title LIKE ? OR body LIKE ? ORDER BY updated_at DESC", [like, like]);
-    }
-  } else {
-    rows = await d.select<any[]>("SELECT * FROM notes ORDER BY pinned DESC, updated_at DESC");
-  }
-  if (args.pinned === true) rows = rows.filter((n) => n.pinned === 1);
+  // Reuse db.ts's searchNotes rather than reimplementing the query. This used
+  // to be an inline copy, which meant the CJK/short-query handling had to be
+  // fixed in two places — and wasn't, so the assistant reported "no notes" for
+  // Chinese notes that existed. The pinned filter is applied afterwards.
+  const found: any[] = q
+    ? await searchNotes(q)
+    : await d.select<any[]>("SELECT * FROM notes ORDER BY pinned DESC, updated_at DESC");
+  const rows = args.pinned === true ? found.filter((n) => n.pinned === 1) : found;
 
   return {
     total: rows.length,
@@ -1258,35 +1253,35 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
 // Human-readable status shown in the UI while a tool runs.
 function statusFor(name: string, args: Record<string, unknown>): string {
   switch (name) {
-    case "get_overview": return "Getting an overview…";
-    case "search_todos": return "Searching to-dos…";
-    case "search_events": return "Checking the calendar…";
-    case "list_calendars": return "Looking at your calendars…";
-    case "search_reminders": return "Searching reminders…";
-    case "search_notes": return args.query ? `Searching notes for "${args.query}"…` : "Looking through notes…";
-    case "search_people": return args.query ? `Searching people for "${args.query}"…` : "Looking through contacts…";
-    case "get_item": return "Fetching details…";
-    case "create_todo": return "Creating a to-do…";
-    case "update_todo": return "Updating a to-do…";
-    case "create_event": return "Adding a calendar event…";
-    case "update_event": return "Updating an event…";
-    case "create_reminder": return "Creating a reminder…";
-    case "update_reminder": return "Updating a reminder…";
-    case "create_note": return "Creating a note…";
-    case "update_note": return "Updating a note…";
-    case "create_list": return "Creating a list…";
-    case "create_person": return "Adding a contact…";
-    case "update_person": return "Updating a contact…";
-    case "add_tag": return "Adding a tag…";
-    case "link_items": return "Linking items…";
-    case "unlink_items": return "Unlinking items…";
-    case "delete_todo": return "Deleting a to-do…";
-    case "delete_event": return "Deleting an event…";
-    case "delete_reminder": return "Deleting a reminder…";
-    case "delete_note": return "Deleting a note…";
-    case "delete_person": return "Deleting a contact…";
-    case "delete_list": return "Deleting a list…";
-    default: return "Working…";
+    case "get_overview": return i18next.t("status.overview");
+    case "search_todos": return i18next.t("status.searchTodos");
+    case "search_events": return i18next.t("status.searchEvents");
+    case "list_calendars": return i18next.t("status.listCalendars");
+    case "search_reminders": return i18next.t("status.searchReminders");
+    case "search_notes": return args.query ? i18next.t("status.searchNotesFor", { query: String(args.query) }) : i18next.t("status.searchNotes");
+    case "search_people": return args.query ? i18next.t("status.searchPeopleFor", { query: String(args.query) }) : i18next.t("status.searchPeople");
+    case "get_item": return i18next.t("status.getItem");
+    case "create_todo": return i18next.t("status.createTodo");
+    case "update_todo": return i18next.t("status.updateTodo");
+    case "create_event": return i18next.t("status.createEvent");
+    case "update_event": return i18next.t("status.updateEvent");
+    case "create_reminder": return i18next.t("status.createReminder");
+    case "update_reminder": return i18next.t("status.updateReminder");
+    case "create_note": return i18next.t("status.createNote");
+    case "update_note": return i18next.t("status.updateNote");
+    case "create_list": return i18next.t("status.createList");
+    case "create_person": return i18next.t("status.createPerson");
+    case "update_person": return i18next.t("status.updatePerson");
+    case "add_tag": return i18next.t("status.addTag");
+    case "link_items": return i18next.t("status.linkItems");
+    case "unlink_items": return i18next.t("status.unlinkItems");
+    case "delete_todo": return i18next.t("status.deleteTodo");
+    case "delete_event": return i18next.t("status.deleteEvent");
+    case "delete_reminder": return i18next.t("status.deleteReminder");
+    case "delete_note": return i18next.t("status.deleteNote");
+    case "delete_person": return i18next.t("status.deletePerson");
+    case "delete_list": return i18next.t("status.deleteList");
+    default: return i18next.t("status.working");
   }
 }
 
@@ -1339,7 +1334,7 @@ async function callOpenAI(model: string, key: string, messages: OAIMessage[]) {
     let detail = "";
     try { const err = await res.json(); detail = err?.error?.message ?? JSON.stringify(err); }
     catch { detail = await res.text(); }
-    throw new Error(`OpenAI error (${res.status}): ${detail}`);
+    throw new Error(i18next.t("errors.openai", { status: res.status, detail }));
   }
   return res.json();
 }
@@ -1355,7 +1350,7 @@ export interface AskOptions {
 export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}): Promise<string> {
   const { openaiApiKey, openaiModel } = getSettings();
   const key = openaiApiKey.trim();
-  if (!key) throw new Error("No OpenAI API key set. Add one in Settings.");
+  if (!key) throw new Error(i18next.t("errors.noApiKey"));
 
   const now = new Date();
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "local time";
@@ -1376,13 +1371,13 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const data = await callOpenAI(openaiModel, key, messages);
     const msg = data?.choices?.[0]?.message as OAIMessage | undefined;
-    if (!msg) throw new Error("Empty response from OpenAI.");
+    if (!msg) throw new Error(i18next.t("errors.emptyResponse"));
 
     messages.push(msg);
 
     const calls = msg.tool_calls ?? [];
     if (calls.length === 0) {
-      if (!msg.content) throw new Error("Empty response from OpenAI.");
+      if (!msg.content) throw new Error(i18next.t("errors.emptyResponse"));
       return msg.content;
     }
 
@@ -1398,5 +1393,5 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
     }
   }
 
-  throw new Error("The assistant took too many steps without answering. Try rephrasing your question.");
+  throw new Error(i18next.t("errors.tooManySteps"));
 }

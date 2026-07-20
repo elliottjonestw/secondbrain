@@ -36,6 +36,35 @@ export function nowIso(): string {
   return new Date().toISOString();
 }
 
+/**
+ * Trim and Unicode-normalize user text used as an identity key.
+ *
+ * macOS IMEs and pasted text can produce NFD (`e` + combining acute) where
+ * typing gives NFC (single `é`). SQLite compares those byte-wise, so without
+ * this the same-looking tag or label becomes two rows — `tags.name` is UNIQUE
+ * under binary collation, and ensureTag matches exactly.
+ */
+export function normalizeKey(s: string): string {
+  return s.normalize("NFC").trim();
+}
+
+/**
+ * Locale-aware sort for display lists.
+ *
+ * SQLite has no COLLATE UNICODE without the ICU extension (not compiled in), so
+ * `ORDER BY name` is code-point order and COLLATE NOCASE folds ASCII only —
+ * which puts "Ärzte" after "Zebra" and sorts Chinese by codepoint. Sorting in
+ * JS with Intl.Collator is the practical fix.
+ */
+export function collator(): Intl.Collator {
+  return new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
+}
+
+function byName<T>(rows: T[], key: (row: T) => string): T[] {
+  const c = collator();
+  return [...rows].sort((a, b) => c.compare(key(a), key(b)));
+}
+
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
@@ -187,20 +216,22 @@ export async function deleteReminder(id: string): Promise<void> {
 // Lists + Todos
 // ---------------------------------------------------------------------------
 export async function listLists(): Promise<ListRow[]> {
-  return (await db()).select<ListRow[]>("SELECT * FROM lists ORDER BY name ASC");
+  const rows = await (await db()).select<ListRow[]>("SELECT * FROM lists");
+  return byName(rows, (l) => l.name);
 }
 
 export async function upsertList(input: Partial<ListRow> & { name: string }): Promise<string> {
   const d = await db();
+  const name = normalizeKey(input.name);
   if (input.id) {
     await d.execute("UPDATE lists SET name=?, color=? WHERE id=?", [
-      input.name, input.color ?? null, input.id,
+      name, input.color ?? null, input.id,
     ]);
     return input.id;
   }
   const id = newId();
   await d.execute("INSERT INTO lists (id, name, color) VALUES (?,?,?)", [
-    id, input.name, input.color ?? null,
+    id, name, input.color ?? null,
   ]);
   return id;
 }
@@ -310,19 +341,63 @@ export async function deleteNote(id: string): Promise<void> {
   await removeItemRelations("note", id);
 }
 
-/** Full-text search over notes via FTS5. Falls back to LIKE for short/odd input. */
+/** Shortest query the trigram tokenizer can answer (see 005_fts_trigram.sql). */
+const TRIGRAM_MIN = 3;
+
+/**
+ * Build an FTS5 MATCH expression, or null when the index can't answer it.
+ *
+ * Each whitespace-separated term becomes a quoted phrase, AND-ed together, so
+ * multi-word Latin queries still work while a CJK query — which has no spaces
+ * and so arrives as a single term — is substring-matched as a whole.
+ *
+ * Returns null if any term is shorter than three characters: the trigram
+ * tokenizer silently matches nothing there, and Chinese words are very often
+ * exactly two characters (北京, 會議). Callers must fall back to LIKE.
+ */
+function ftsMatchExpr(query: string): string | null {
+  const terms = queryTerms(query);
+  if (terms.length === 0) return null;
+  if (terms.some((t) => [...t].length < TRIGRAM_MIN)) return null;
+  return terms.map((t) => `"${t}"`).join(" AND ");
+}
+
+function queryTerms(query: string): string[] {
+  return query.split(/\s+/).map((t) => t.replace(/"/g, "")).filter(Boolean);
+}
+
+/**
+ * Full-text search over notes.
+ *
+ * Two paths on purpose: FTS5 (ranked) when the trigram index can answer the
+ * query, plain LIKE otherwise. The LIKE path is not just an error fallback —
+ * it is the *only* thing that can match short queries, which for Chinese means
+ * most of them.
+ */
 export async function searchNotes(query: string): Promise<NoteRow[]> {
   const q = query.trim();
   if (!q) return [];
   const d = await db();
+
+  // AND the terms, matching what the FTS path does. Matching the raw query as
+  // one literal substring would make "北京 預算" fail on a note containing both
+  // words apart — and for Chinese this is the path most queries take, so the
+  // two paths have to agree.
+  const likeSearch = () => {
+    const terms = queryTerms(q);
+    if (terms.length === 0) return Promise.resolve([] as NoteRow[]);
+    const clause = terms.map(() => "(title LIKE ? OR body LIKE ?)").join(" AND ");
+    const params = terms.flatMap((t) => [`%${t}%`, `%${t}%`]);
+    return d.select<NoteRow[]>(
+      `SELECT * FROM notes WHERE ${clause} ORDER BY updated_at DESC`,
+      params,
+    );
+  };
+
+  const match = ftsMatchExpr(q);
+  if (!match) return likeSearch();
+
   try {
-    // Prefix-match each token so typing feels live.
-    const match = q
-      .split(/\s+/)
-      .map((t) => t.replace(/["*]/g, ""))
-      .filter(Boolean)
-      .map((t) => `${t}*`)
-      .join(" ");
     return await d.select<NoteRow[]>(
       `SELECT n.* FROM notes n
        JOIN notes_fts f ON f.rowid = n.rowid
@@ -331,11 +406,7 @@ export async function searchNotes(query: string): Promise<NoteRow[]> {
       [match],
     );
   } catch {
-    const like = `%${q}%`;
-    return d.select<NoteRow[]>(
-      "SELECT * FROM notes WHERE title LIKE ? OR body LIKE ? ORDER BY updated_at DESC",
-      [like, like],
-    );
+    return likeSearch();
   }
 }
 
@@ -344,8 +415,15 @@ export async function searchNotes(query: string): Promise<NoteRow[]> {
 // `item_tags` — both already accept item_type 'person', no schema change.
 // ---------------------------------------------------------------------------
 export async function listPeople(): Promise<PersonRow[]> {
-  return (await db()).select<PersonRow[]>(
-    "SELECT * FROM people ORDER BY favorite DESC, full_name COLLATE NOCASE ASC",
+  const rows = await (await db()).select<PersonRow[]>("SELECT * FROM people");
+  return sortPeople(rows);
+}
+
+/** Favourites first, then locale-aware by name. */
+function sortPeople(rows: PersonRow[]): PersonRow[] {
+  const c = collator();
+  return [...rows].sort(
+    (a, b) => b.favorite - a.favorite || c.compare(a.full_name, b.full_name),
   );
 }
 
@@ -359,13 +437,13 @@ export async function searchPeople(query: string): Promise<PersonRow[]> {
   const q = query.trim();
   if (!q) return listPeople();
   const like = `%${q}%`;
-  return (await db()).select<PersonRow[]>(
+  const rows = await (await db()).select<PersonRow[]>(
     `SELECT * FROM people
      WHERE full_name LIKE ? OR nickname LIKE ? OR organization LIKE ?
-        OR emails LIKE ? OR phones LIKE ?
-     ORDER BY favorite DESC, full_name COLLATE NOCASE ASC`,
+        OR emails LIKE ? OR phones LIKE ?`,
     [like, like, like, like, like],
   );
+  return sortPeople(rows);
 }
 
 export type PersonInput = Omit<
@@ -457,7 +535,7 @@ export async function listCustomFields(): Promise<CustomFieldDef[]> {
 /** Add a global custom-field label if it doesn't already exist (case-insensitive). */
 export async function ensureCustomField(label: string): Promise<CustomFieldDef> {
   const d = await db();
-  const trimmed = label.trim();
+  const trimmed = normalizeKey(label);
   const existing = await d.select<CustomFieldDef[]>(
     "SELECT * FROM person_custom_fields WHERE label = ? COLLATE NOCASE", [trimmed],
   );
@@ -504,12 +582,13 @@ export async function reorderCustomFields(ids: string[]): Promise<void> {
 // Tags (shared across all item types)
 // ---------------------------------------------------------------------------
 export async function listTags(): Promise<TagRow[]> {
-  return (await db()).select<TagRow[]>("SELECT * FROM tags ORDER BY name ASC");
+  const rows = await (await db()).select<TagRow[]>("SELECT * FROM tags");
+  return byName(rows, (t) => t.name);
 }
 
 export async function ensureTag(name: string): Promise<TagRow> {
   const d = await db();
-  const trimmed = name.trim();
+  const trimmed = normalizeKey(name);
   const existing = await d.select<TagRow[]>("SELECT * FROM tags WHERE name=?", [trimmed]);
   if (existing[0]) return existing[0];
   const id = newId();

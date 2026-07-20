@@ -3,6 +3,7 @@ import {
   Plus, X, Trash2, Star, Mail, Phone, ExternalLink, GripVertical,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { useTranslation } from "react-i18next";
 import type {
   PersonRow, PersonEmail, PersonPhone, PersonAddress, PersonUrl, PersonCustomField,
 } from "../types";
@@ -41,6 +42,7 @@ function emptyPersonInput() {
 }
 
 export default function PeopleView({ onChange }: { onChange: () => void }) {
+  const { t } = useTranslation();
   const [people, setPeople] = useState<PersonRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -71,12 +73,12 @@ export default function PeopleView({ onChange }: { onChange: () => void }) {
       <aside className="flex w-72 shrink-0 flex-col border-r border-neutral-200 dark:border-neutral-700">
         <div className="space-y-2 border-b border-neutral-200 p-3 dark:border-neutral-700">
           <Button variant="primary" className="w-full" onClick={createPerson}>
-            <span className="flex items-center justify-center gap-1.5"><Plus size={16} /> New person</span>
+            <span className="flex items-center justify-center gap-1.5"><Plus size={16} /> {t("people.newPerson")}</span>
           </Button>
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search people…"
+            placeholder={t("people.searchPlaceholder")}
             className="w-full rounded-lg border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-blue-400 dark:border-neutral-600 dark:bg-neutral-800"
           />
         </div>
@@ -93,13 +95,13 @@ export default function PeopleView({ onChange }: { onChange: () => void }) {
               <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-1 truncate font-medium">
                   {p.favorite === 1 && <Star size={13} className="shrink-0 text-amber-400" fill="currentColor" />}
-                  {p.full_name || "New contact"}
+                  {p.full_name || t("people.newContact")}
                 </span>
                 {p.organization && <span className="block truncate text-xs text-neutral-400">{p.organization}</span>}
               </span>
             </button>
           ))}
-          {people.length === 0 && <p className="p-4 text-sm text-neutral-400">No people found.</p>}
+          {people.length === 0 && <p className="p-4 text-sm text-neutral-400">{t("people.noneFound")}</p>}
         </div>
       </aside>
 
@@ -115,7 +117,7 @@ export default function PeopleView({ onChange }: { onChange: () => void }) {
           />
         ) : (
           <div className="flex h-full items-center justify-center text-neutral-400">
-            Select or create a person.
+            {t("people.selectOrCreate")}
           </div>
         )}
       </div>
@@ -176,6 +178,7 @@ function PersonEditor({
   onChanged: () => void;
   onDeleted: () => void;
 }) {
+  const { t } = useTranslation();
   // Local state is the source of truth while editing; DB writes are debounced
   // (400ms) and flushed on unmount, so typing stays instant and the row never
   // re-fetches out from under the editor. Same pattern as the Notes editor.
@@ -233,7 +236,7 @@ function PersonEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const display = form.full_name.trim() || "New contact";
+  const display = form.full_name.trim() || t("people.newContact");
 
   return (
     <div className="mx-auto max-w-3xl p-6">
@@ -243,16 +246,16 @@ function PersonEditor({
         <input
           value={form.full_name}
           onChange={(e) => patch({ full_name: e.target.value })}
-          placeholder="Full name"
+          placeholder={t("people.fullName")}
           className="flex-1 bg-transparent text-2xl font-bold outline-none"
         />
-        <Button variant="ghost" onClick={() => patch({ favorite: !form.favorite })} aria-label={form.favorite ? "Unfavorite" : "Favorite"}>
+        <Button variant="ghost" onClick={() => patch({ favorite: !form.favorite })} aria-label={form.favorite ? t("people.unfavorite") : t("people.favorite")}>
           <Star size={18} className={form.favorite ? "text-amber-400" : "text-neutral-400"} fill={form.favorite ? "currentColor" : "none"} />
         </Button>
         <Button
           variant="danger"
           onClick={async () => {
-            if (confirm(`Delete ${display}? This cannot be undone.`)) {
+            if (confirm(t("people.confirmDelete", { name: display }))) {
               if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
               dirty.current = false;
               await deletePerson(person.id);
@@ -260,34 +263,34 @@ function PersonEditor({
             }
           }}
         >
-          <span className="flex items-center gap-1.5"><Trash2 size={15} /> Delete</span>
+          <span className="flex items-center gap-1.5"><Trash2 size={15} /> {t("common.delete")}</span>
         </Button>
       </div>
 
       <div className="space-y-5">
         {/* Basics */}
-        <Section title="Details">
+        <Section title={t("people.details")}>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Nickname"><input value={form.nickname} onChange={(e) => patch({ nickname: e.target.value })} className={inputCls} /></Field>
-            <Field label="Birthday"><input type="date" value={form.birthday} onChange={(e) => patch({ birthday: e.target.value })} className={inputCls} /></Field>
-            <Field label="Organization"><input value={form.organization} onChange={(e) => patch({ organization: e.target.value })} className={inputCls} /></Field>
-            <Field label="Title"><input value={form.title} onChange={(e) => patch({ title: e.target.value })} className={inputCls} /></Field>
+            <Field label={t("people.nickname")}><input value={form.nickname} onChange={(e) => patch({ nickname: e.target.value })} className={inputCls} /></Field>
+            <Field label={t("people.birthday")}><input type="date" value={form.birthday} onChange={(e) => patch({ birthday: e.target.value })} className={inputCls} /></Field>
+            <Field label={t("people.organization")}><input value={form.organization} onChange={(e) => patch({ organization: e.target.value })} className={inputCls} /></Field>
+            <Field label={t("people.jobTitle")}><input value={form.title} onChange={(e) => patch({ title: e.target.value })} className={inputCls} /></Field>
           </div>
         </Section>
 
         {/* Structured name (vCard N) */}
-        <Section title="Name details">
+        <Section title={t("people.nameDetails")}>
           <div className="grid grid-cols-5 gap-2">
-            <Field label="Prefix"><input value={form.honorific_prefix} onChange={(e) => patch({ honorific_prefix: e.target.value })} className={inputCls} /></Field>
-            <Field label="First"><input value={form.given_name} onChange={(e) => patch({ given_name: e.target.value })} className={inputCls} /></Field>
-            <Field label="Middle"><input value={form.additional_names} onChange={(e) => patch({ additional_names: e.target.value })} className={inputCls} /></Field>
-            <Field label="Last"><input value={form.family_name} onChange={(e) => patch({ family_name: e.target.value })} className={inputCls} /></Field>
-            <Field label="Suffix"><input value={form.honorific_suffix} onChange={(e) => patch({ honorific_suffix: e.target.value })} className={inputCls} /></Field>
+            <Field label={t("people.prefix")}><input value={form.honorific_prefix} onChange={(e) => patch({ honorific_prefix: e.target.value })} className={inputCls} /></Field>
+            <Field label={t("people.first")}><input value={form.given_name} onChange={(e) => patch({ given_name: e.target.value })} className={inputCls} /></Field>
+            <Field label={t("people.middle")}><input value={form.additional_names} onChange={(e) => patch({ additional_names: e.target.value })} className={inputCls} /></Field>
+            <Field label={t("people.last")}><input value={form.family_name} onChange={(e) => patch({ family_name: e.target.value })} className={inputCls} /></Field>
+            <Field label={t("people.suffix")}><input value={form.honorific_suffix} onChange={(e) => patch({ honorific_suffix: e.target.value })} className={inputCls} /></Field>
           </div>
         </Section>
 
         {/* Emails */}
-        <Section title="Email">
+        <Section title={t("people.email")}>
           <TypedValueRows
             rows={form.emails}
             typeOptions={EMAIL_TYPES}
@@ -299,7 +302,7 @@ function PersonEditor({
         </Section>
 
         {/* Phones */}
-        <Section title="Phone">
+        <Section title={t("people.phone")}>
           <TypedValueRows
             rows={form.phones}
             typeOptions={PHONE_TYPES}
@@ -311,7 +314,7 @@ function PersonEditor({
         </Section>
 
         {/* URLs */}
-        <Section title="Websites">
+        <Section title={t("people.websites")}>
           <TypedValueRows
             rows={form.urls}
             typeOptions={URL_TYPES}
@@ -323,21 +326,21 @@ function PersonEditor({
         </Section>
 
         {/* Addresses */}
-        <Section title="Addresses">
+        <Section title={t("people.addresses")}>
           <AddressRows rows={form.addresses} onChange={(rows) => patch({ addresses: rows })} />
         </Section>
 
         {/* Custom fields — labels are global (shared across all people). */}
-        <Section title="Custom fields">
+        <Section title={t("people.customFields")}>
           <CustomFields values={form.custom_fields} onChange={(rows) => patch({ custom_fields: rows })} />
         </Section>
 
         {/* Notes */}
-        <Section title="Notes">
+        <Section title={t("nav.notes")}>
           <textarea
             value={form.notes}
             onChange={(e) => patch({ notes: e.target.value })}
-            placeholder="Anything worth remembering…"
+            placeholder={t("people.notesPlaceholder")}
             rows={3}
             className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-blue-400 dark:border-neutral-700 dark:bg-neutral-800"
           />
@@ -391,6 +394,7 @@ function TypedValueRows({
   onOpen: (value: string) => void;
   openIcon: React.ReactNode;
 }) {
+  const { t } = useTranslation();
   const update = (i: number, p: Partial<{ type: string; value: string }>) =>
     onChange(rows.map((r, idx) => (idx === i ? { ...r, ...p } : r)));
   const remove = (i: number) => onChange(rows.filter((_, idx) => idx !== i));
@@ -408,12 +412,12 @@ function TypedValueRows({
             onClick={() => r.value.trim() && onOpen(r.value.trim())}
             disabled={!r.value.trim()}
             className="rounded p-1.5 text-neutral-400 hover:bg-neutral-100 hover:text-blue-500 disabled:opacity-40 dark:hover:bg-neutral-700"
-            title="Open"
+            title={t("people.open")}
           >{openIcon}</button>
-          <button onClick={() => remove(i)} className="rounded p-1.5 text-neutral-400 hover:text-red-500" aria-label="Remove"><X size={14} /></button>
+          <button onClick={() => remove(i)} className="rounded p-1.5 text-neutral-400 hover:text-red-500" aria-label={t("people.remove")}><X size={14} /></button>
         </div>
       ))}
-      <Button variant="ghost" className="px-1" onClick={add}><span className="flex items-center gap-1"><Plus size={14} /> Add</span></Button>
+      <Button variant="ghost" className="px-1" onClick={add}><span className="flex items-center gap-1"><Plus size={14} /> {t("common.add")}</span></Button>
     </div>
   );
 }
@@ -423,6 +427,7 @@ function hasAddress(a: PersonAddress): boolean {
 }
 
 function AddressRows({ rows, onChange }: { rows: PersonAddress[]; onChange: (rows: PersonAddress[]) => void }) {
+  const { t } = useTranslation();
   const update = (i: number, p: Partial<PersonAddress>) =>
     onChange(rows.map((r, idx) => (idx === i ? { ...r, ...p } : r)));
   const remove = (i: number) => onChange(rows.filter((_, idx) => idx !== i));
@@ -437,18 +442,18 @@ function AddressRows({ rows, onChange }: { rows: PersonAddress[]; onChange: (row
               {ADDR_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
             <span className="flex-1" />
-            <button onClick={() => remove(i)} className="rounded p-1 text-neutral-400 hover:text-red-500" aria-label="Remove address"><X size={14} /></button>
+            <button onClick={() => remove(i)} className="rounded p-1 text-neutral-400 hover:text-red-500" aria-label={t("people.removeAddress")}><X size={14} /></button>
           </div>
           <div className="grid grid-cols-2 gap-2">
-            <input value={a.street ?? ""} onChange={(e) => update(i, { street: e.target.value })} placeholder="Street" className={`col-span-2 ${inputCls}`} />
-            <input value={a.city ?? ""} onChange={(e) => update(i, { city: e.target.value })} placeholder="City" className={inputCls} />
-            <input value={a.region ?? ""} onChange={(e) => update(i, { region: e.target.value })} placeholder="Region / State" className={inputCls} />
-            <input value={a.postal_code ?? ""} onChange={(e) => update(i, { postal_code: e.target.value })} placeholder="Postal code" className={inputCls} />
-            <input value={a.country ?? ""} onChange={(e) => update(i, { country: e.target.value })} placeholder="Country" className={inputCls} />
+            <input value={a.street ?? ""} onChange={(e) => update(i, { street: e.target.value })} placeholder={t("people.street")} className={`col-span-2 ${inputCls}`} />
+            <input value={a.city ?? ""} onChange={(e) => update(i, { city: e.target.value })} placeholder={t("people.city")} className={inputCls} />
+            <input value={a.region ?? ""} onChange={(e) => update(i, { region: e.target.value })} placeholder={t("people.region")} className={inputCls} />
+            <input value={a.postal_code ?? ""} onChange={(e) => update(i, { postal_code: e.target.value })} placeholder={t("people.postalCode")} className={inputCls} />
+            <input value={a.country ?? ""} onChange={(e) => update(i, { country: e.target.value })} placeholder={t("people.country")} className={inputCls} />
           </div>
         </div>
       ))}
-      <Button variant="ghost" className="px-1" onClick={add}><span className="flex items-center gap-1"><Plus size={14} /> Add address</span></Button>
+      <Button variant="ghost" className="px-1" onClick={add}><span className="flex items-center gap-1"><Plus size={14} /> {t("people.addAddress")}</span></Button>
     </div>
   );
 }
@@ -461,6 +466,7 @@ function AddressRows({ rows, onChange }: { rows: PersonAddress[]; onChange: (row
  * not. Drag-to-reorder uses HTML5 DnD like the Todos list.
  */
 function CustomFields({ values, onChange }: { values: PersonCustomField[]; onChange: (rows: PersonCustomField[]) => void }) {
+  const { t } = useTranslation();
   const [defs, setDefs] = useState<CustomFieldDef[]>([]);
   const [adding, setAdding] = useState(false);
   const [newLabel, setNewLabel] = useState("");
@@ -492,7 +498,7 @@ function CustomFields({ values, onChange }: { values: PersonCustomField[]; onCha
   }
 
   async function removeField(def: CustomFieldDef) {
-    if (!confirm(`Remove the "${def.label}" field from all people? Existing values for it are deleted.`)) return;
+    if (!confirm(t("people.confirmRemoveField", { label: def.label }))) return;
     await deleteCustomFieldDef(def.id);
     onChange(values.filter((v) => v.label !== def.label));
     await reloadDefs();
@@ -521,12 +527,12 @@ function CustomFields({ values, onChange }: { values: PersonCustomField[]; onCha
         >
           <GripVertical size={15} className="shrink-0 cursor-grab text-neutral-300" />
           <span className="w-40 shrink-0 truncate text-sm text-neutral-600 dark:text-neutral-300" title={def.label}>{def.label}</span>
-          <input value={valueFor(def.label)} onChange={(e) => setValue(def.label, e.target.value)} placeholder="Value" className={`flex-1 ${inputBase}`} />
-          <button onClick={() => removeField(def)} className="rounded p-1.5 text-neutral-400 hover:text-red-500" aria-label={`Remove ${def.label} field`}><X size={14} /></button>
+          <input value={valueFor(def.label)} onChange={(e) => setValue(def.label, e.target.value)} placeholder={t("people.value")} className={`flex-1 ${inputBase}`} />
+          <button onClick={() => removeField(def)} className="rounded p-1.5 text-neutral-400 hover:text-red-500" aria-label={t("people.removeField", { label: def.label })}><X size={14} /></button>
         </div>
       ))}
       {defs.length === 0 && !adding && (
-        <p className="text-xs text-neutral-400">No custom fields yet. Fields you add here appear on every person.</p>
+        <p className="text-xs text-neutral-400">{t("people.noCustomFields")}</p>
       )}
       {adding ? (
         <input
@@ -535,11 +541,11 @@ function CustomFields({ values, onChange }: { values: PersonCustomField[]; onCha
           onChange={(e) => setNewLabel(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") void addField(); if (e.key === "Escape") { setAdding(false); setNewLabel(""); } }}
           onBlur={() => void addField()}
-          placeholder="New field name (e.g. Eye color)"
+          placeholder={t("people.newFieldPlaceholder")}
           className={`w-full ${inputBase}`}
         />
       ) : (
-        <Button variant="ghost" className="px-1" onClick={() => setAdding(true)}><span className="flex items-center gap-1"><Plus size={14} /> Add field</span></Button>
+        <Button variant="ghost" className="px-1" onClick={() => setAdding(true)}><span className="flex items-center gap-1"><Plus size={14} /> {t("people.addField")}</span></Button>
       )}
     </div>
   );

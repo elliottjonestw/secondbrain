@@ -6,6 +6,7 @@
 
 import ical, { ICalEventStatus } from "ical-generator";
 import ICAL from "ical.js";
+import i18next from "i18next";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
 import type { EventRow } from "../types";
@@ -62,7 +63,7 @@ export async function exportCalendar(): Promise<string | null> {
   const events = await listEvents();
   const ics = eventsToIcs(events);
   const path = await save({
-    title: "Export calendar",
+    title: i18next.t("calendar.exportTitle"),
     defaultPath: "second-brain.ics",
     filters: [{ name: "iCalendar", extensions: ["ics"] }],
   });
@@ -77,7 +78,7 @@ export async function exportCalendar(): Promise<string | null> {
  */
 export async function importCalendar(): Promise<number> {
   const path = await open({
-    title: "Import .ics",
+    title: i18next.t("calendar.importIcs"),
     multiple: false,
     filters: [{ name: "iCalendar", extensions: ["ics"] }],
   });
@@ -113,7 +114,7 @@ export async function importIcsText(text: string): Promise<number> {
     const id = uid || newId();
 
     await upsertEventWithId(id, {
-      summary: ev.summary || "(untitled)",
+      summary: ev.summary || i18next.t("common.untitledParen"),
       description: ev.description || null,
       location: ev.location || null,
       dtstart: ev.startDate ? ev.startDate.toJSDate().toISOString() : nowIso(),

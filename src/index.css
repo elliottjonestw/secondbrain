@@ -15,5 +15,16 @@ body,
 
 body {
   @apply bg-neutral-50 text-neutral-900 antialiased;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* The Latin faces carry no Han glyphs, so CJK text would otherwise fall
+     through to an arbitrary OS fallback — often a Japanese face, which renders
+     the wrong variants for unified codepoints. Naming the CJK families (and
+     setting <html lang> from lib/i18n.ts) pins the correct glyph forms. */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "PingFang TC", "Microsoft JhengHei", "Noto Sans CJK TC", sans-serif;
+}
+
+/* CJK glyphs are full-em squares and read as cramped at Latin-tuned line
+   heights. Nudge the body default; Tailwind's per-element classes still win. */
+html:lang(zh-TW) body {
+  line-height: 1.7;
 }

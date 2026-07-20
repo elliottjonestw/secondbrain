@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Plus, Pin, PinOff, Eye, Pencil, Trash2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useTranslation } from "react-i18next";
 import type { NoteRow } from "../types";
 import { listNotes, upsertNote, deleteNote, searchNotes, allLinkTargets } from "../db";
 import { Button } from "../components/ui";
@@ -9,6 +10,7 @@ import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/It
 import { fmtDateTime } from "../lib/format";
 
 export default function NotesView({ onChange, initialId }: { onChange: () => void; initialId?: string }) {
+  const { t } = useTranslation();
   const [notes, setNotes] = useState<NoteRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(initialId ?? null);
   const [query, setQuery] = useState("");
@@ -36,11 +38,11 @@ export default function NotesView({ onChange, initialId }: { onChange: () => voi
       {/* Notes list */}
       <aside className="flex w-72 shrink-0 flex-col border-r border-neutral-200 dark:border-neutral-700">
         <div className="space-y-2 border-b border-neutral-200 p-3 dark:border-neutral-700">
-          <Button variant="primary" className="w-full" onClick={createNote}><span className="flex items-center justify-center gap-1.5"><Plus size={16} /> New note</span></Button>
+          <Button variant="primary" className="w-full" onClick={createNote}><span className="flex items-center justify-center gap-1.5"><Plus size={16} /> {t("notes.newNote")}</span></Button>
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search notes…"
+            placeholder={t("notes.searchPlaceholder")}
             className="w-full rounded-lg border border-neutral-200 px-3 py-1.5 text-sm outline-none focus:border-blue-400 dark:border-neutral-600 dark:bg-neutral-800"
           />
         </div>
@@ -55,14 +57,14 @@ export default function NotesView({ onChange, initialId }: { onChange: () => voi
             >
               <div className="flex items-center gap-1 truncate font-medium">
                 {n.pinned === 1 && <Pin size={13} className="shrink-0 text-blue-500" fill="currentColor" />}
-                {n.title || "Untitled"}
+                {n.title || t("common.untitled")}
               </div>
               <div className="truncate text-xs text-neutral-400">
                 {n.body?.slice(0, 60) || "No content"}
               </div>
             </button>
           ))}
-          {notes.length === 0 && <p className="p-4 text-sm text-neutral-400">No notes found.</p>}
+          {notes.length === 0 && <p className="p-4 text-sm text-neutral-400">{t("notes.noneFound")}</p>}
         </div>
       </aside>
 
@@ -78,7 +80,7 @@ export default function NotesView({ onChange, initialId }: { onChange: () => voi
           />
         ) : (
           <div className="flex h-full items-center justify-center text-neutral-400">
-            Select or create a note.
+            {t("notes.selectOrCreate")}
           </div>
         )}
       </div>
@@ -94,6 +96,7 @@ function NoteEditor({
   onChanged: () => void;
   onDeleted: () => void;
 }) {
+  const { t } = useTranslation();
   // Local state = source of truth while editing; DB writes are debounced so
   // typing stays instant and the note never re-fetches out from under you.
   const [title, setTitle] = useState(note.title ?? "");
@@ -135,20 +138,20 @@ function NoteEditor({
         <input
           value={title}
           onChange={(e) => { setTitle(e.target.value); scheduleSave({ title: e.target.value }); }}
-          placeholder="Title"
+          placeholder={t("notes.titlePlaceholder")}
           className="flex-1 bg-transparent text-2xl font-bold outline-none"
         />
         <Button variant="ghost" onClick={() => { const p = !pinned; setPinned(p); scheduleSave({ pinned: p }); }}>
-          <span className="flex items-center gap-1.5">{pinned ? <><Pin size={15} fill="currentColor" /> Pinned</> : <><PinOff size={15} /> Pin</>}</span>
+          <span className="flex items-center gap-1.5">{pinned ? <><Pin size={15} fill="currentColor" /> {t("notes.pinned")}</> : <><PinOff size={15} /> {t("notes.pin")}</>}</span>
         </Button>
         <Button variant="ghost" onClick={() => setPreview((v) => !v)}>
-          <span className="flex items-center gap-1.5">{preview ? <><Pencil size={15} /> Edit</> : <><Eye size={15} /> Preview</>}</span>
+          <span className="flex items-center gap-1.5">{preview ? <><Pencil size={15} /> {t("notes.edit")}</> : <><Eye size={15} /> {t("notes.preview")}</>}</span>
         </Button>
-        <Button variant="danger" onClick={async () => { if (confirm("Delete note?")) { if (saveTimer.current !== null) window.clearTimeout(saveTimer.current); await deleteNote(note.id); onDeleted(); } }}>
-          <span className="flex items-center gap-1.5"><Trash2 size={15} /> Delete</span>
+        <Button variant="danger" onClick={async () => { if (confirm(t("notes.confirmDelete"))) { if (saveTimer.current !== null) window.clearTimeout(saveTimer.current); await deleteNote(note.id); onDeleted(); } }}>
+          <span className="flex items-center gap-1.5"><Trash2 size={15} /> {t("common.delete")}</span>
         </Button>
       </div>
-      <div className="mb-2 text-xs text-neutral-400">Updated {fmtDateTime(note.updated_at)}</div>
+      <div className="mb-2 text-xs text-neutral-400">{t("notes.updated", { when: fmtDateTime(note.updated_at) })}</div>
 
       {preview ? (
         <div className="prose prose-sm max-w-none rounded-lg border border-neutral-200 p-4 dark:prose-invert dark:border-neutral-700">
@@ -158,7 +161,7 @@ function NoteEditor({
         <textarea
           value={body}
           onChange={(e) => { setBody(e.target.value); scheduleSave({ body: e.target.value }); }}
-          placeholder="Write in markdown…"
+          placeholder={t("notes.bodyPlaceholder")}
           className="h-96 w-full resize-none rounded-lg border border-neutral-200 p-4 font-mono text-sm outline-none focus:border-blue-400 dark:border-neutral-700 dark:bg-neutral-800"
         />
       )}

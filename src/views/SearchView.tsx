@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Calendar, Bell, ListChecks, StickyNote, Users, LucideIcon } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { ItemType } from "../types";
 import { db, searchNotes, searchPeople } from "../db";
 import { fmtDateTime } from "../lib/format";
@@ -9,6 +10,7 @@ interface Hit { type: ItemType; id: string; label: string; sub: string; }
 const ICON: Record<ItemType, LucideIcon> = { event: Calendar, reminder: Bell, todo: ListChecks, note: StickyNote, person: Users };
 
 export default function SearchView({ query, goTo }: { query: string; goTo: (v: string) => void }) {
+  const { t } = useTranslation();
   const [hits, setHits] = useState<Hit[]>([]);
 
   useEffect(() => {
@@ -27,7 +29,7 @@ export default function SearchView({ query, goTo }: { query: string; goTo: (v: s
         ...events.map((e) => ({ type: "event" as ItemType, id: e.id, label: e.summary, sub: fmtDateTime(e.dtstart) })),
         ...reminders.map((r) => ({ type: "reminder" as ItemType, id: r.id, label: r.title, sub: r.due_at ? `Due ${fmtDateTime(r.due_at)}` : "" })),
         ...todos.map((t) => ({ type: "todo" as ItemType, id: t.id, label: t.title, sub: t.due_at ? `Due ${fmtDateTime(t.due_at)}` : "" })),
-        ...notes.map((n) => ({ type: "note" as ItemType, id: n.id, label: n.title || "Untitled", sub: (n.body ?? "").slice(0, 60) })),
+        ...notes.map((n) => ({ type: "note" as ItemType, id: n.id, label: n.title || t("common.untitled"), sub: (n.body ?? "").slice(0, 60) })),
         ...people.map((p) => ({ type: "person" as ItemType, id: p.id, label: p.full_name || "New contact", sub: p.organization || p.nickname || "" })),
       ]);
     })();
@@ -37,11 +39,11 @@ export default function SearchView({ query, goTo }: { query: string; goTo: (v: s
 
   return (
     <div className="mx-auto h-full max-w-2xl overflow-y-auto p-6">
-      <h1 className="mb-4 text-xl font-bold">Search results for "{query}"</h1>
+      <h1 className="mb-4 text-xl font-bold">{t("search.resultsFor", { query })}</h1>
       {query.trim() === "" ? (
-        <p className="text-neutral-400">Type in the search box above.</p>
+        <p className="text-neutral-400">{t("search.prompt")}</p>
       ) : hits.length === 0 ? (
-        <p className="text-neutral-400">No matches.</p>
+        <p className="text-neutral-400">{t("search.noMatches")}</p>
       ) : (
         <div className="space-y-1">
           {hits.map((h) => {
@@ -57,7 +59,7 @@ export default function SearchView({ query, goTo }: { query: string; goTo: (v: s
                 <span className="block font-medium">{h.label}</span>
                 {h.sub && <span className="block truncate text-xs text-neutral-400">{h.sub}</span>}
               </span>
-              <span className="text-xs uppercase text-neutral-400">{h.type}</span>
+              <span className="shrink-0 text-xs text-neutral-400">{t(`itemType.${h.type}`)}</span>
             </button>
             );
           })}

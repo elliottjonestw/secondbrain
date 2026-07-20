@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { X, Link2, Plus, UserPlus } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { ItemType, TagRow, LinkRow, PersonRow } from "../types";
 import {
   tagsForItem, tagItem, untagItem,
@@ -12,11 +13,8 @@ import {
 import { Button } from "./ui";
 import { Avatar } from "./Avatar";
 
-const TYPE_LABEL: Record<ItemType, string> = {
-  event: "Event", reminder: "Reminder", todo: "Todo", note: "Note", person: "Person",
-};
-
 export function TagEditor({ type, id }: { type: ItemType; id: string }) {
+  const { t: tr } = useTranslation();
   const [tags, setTags] = useState<TagRow[]>([]);
   const [input, setInput] = useState("");
 
@@ -33,7 +31,7 @@ export function TagEditor({ type, id }: { type: ItemType; id: string }) {
 
   return (
     <div>
-      <label className="mb-1 block text-xs font-medium text-neutral-500">Tags</label>
+      <label className="mb-1 block text-xs font-medium text-neutral-500">{tr("meta.tags")}</label>
       <div className="flex flex-wrap items-center gap-1.5">
         {tags.map((t) => (
           <span key={t.id} className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2 py-0.5 text-xs dark:bg-neutral-700">
@@ -41,7 +39,7 @@ export function TagEditor({ type, id }: { type: ItemType; id: string }) {
             <button
               onClick={async () => { await untagItem(t.id, type, id); void reload(); }}
               className="text-neutral-400 hover:text-red-500"
-              aria-label={`Remove tag ${t.name}`}
+              aria-label={tr("meta.removeTag", { name: t.name })}
             ><X size={12} /></button>
           </span>
         ))}
@@ -49,8 +47,8 @@ export function TagEditor({ type, id }: { type: ItemType; id: string }) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), void add())}
-          placeholder="add tag…"
-          className="w-24 rounded border border-neutral-200 px-2 py-0.5 text-xs outline-none focus:border-blue-400 dark:border-neutral-600 dark:bg-neutral-700"
+          placeholder={tr("meta.addTag")}
+          className="w-32 rounded border border-neutral-200 px-2 py-0.5 text-xs outline-none focus:border-blue-400 dark:border-neutral-600 dark:bg-neutral-700"
         />
       </div>
     </div>
@@ -67,6 +65,7 @@ export function LinksPanel({
   id: string;
   targets: LinkTarget[];
 }) {
+  const { t: tr } = useTranslation();
   const [links, setLinks] = useState<LinkRow[]>([]);
   const [labels, setLabels] = useState<Record<string, string>>({});
   const [picking, setPicking] = useState(false);
@@ -79,7 +78,7 @@ export function LinksPanel({
         const other = l.source_type === type && l.source_id === id
           ? { t: l.target_type, i: l.target_id }
           : { t: l.source_type, i: l.source_id };
-        return [l.id, `${TYPE_LABEL[other.t]}: ${await getItemLabel(other.t, other.i)}`] as const;
+        return [l.id, `${tr(`itemType.${other.t}`)}: ${await getItemLabel(other.t, other.i)}`] as const;
       }),
     );
     setLabels(Object.fromEntries(entries));
@@ -90,7 +89,7 @@ export function LinksPanel({
 
   return (
     <div>
-      <label className="mb-1 block text-xs font-medium text-neutral-500">Linked items</label>
+      <label className="mb-1 block text-xs font-medium text-neutral-500">{tr("meta.linkedItems")}</label>
       <div className="space-y-1">
         {links.map((l) => (
           <div key={l.id} className="flex items-center justify-between rounded bg-neutral-50 px-2 py-1 text-xs dark:bg-neutral-700/50">
@@ -98,11 +97,11 @@ export function LinksPanel({
             <button
               onClick={async () => { await deleteLink(l.id); void reload(); }}
               className="text-neutral-400 hover:text-red-500"
-              aria-label="Remove link"
+              aria-label={tr("meta.removeLink")}
             ><X size={12} /></button>
           </div>
         ))}
-        {links.length === 0 && <p className="text-xs text-neutral-400">No links yet.</p>}
+        {links.length === 0 && <p className="text-xs text-neutral-400">{tr("meta.noLinks")}</p>}
       </div>
 
       {picking ? (
@@ -117,15 +116,15 @@ export function LinksPanel({
           }}
           defaultValue=""
         >
-          <option value="" disabled>Choose an item to link…</option>
+          <option value="" disabled>{tr("meta.chooseItem")}</option>
           {available.map((t) => (
             <option key={`${t.type}::${t.id}`} value={`${t.type}::${t.id}`}>
-              {TYPE_LABEL[t.type]}: {t.label}
+              {tr(`itemType.${t.type}`)}: {t.label}
             </option>
           ))}
         </select>
       ) : (
-        <Button variant="ghost" className="mt-1 px-1" onClick={() => setPicking(true)}><span className="flex items-center gap-1"><Plus size={14} /> Link item</span></Button>
+        <Button variant="ghost" className="mt-1 px-1" onClick={() => setPicking(true)}><span className="flex items-center gap-1"><Plus size={14} /> {tr("meta.linkItem")}</span></Button>
       )}
     </div>
   );
@@ -137,6 +136,7 @@ export function LinksPanel({
  * so attaching a person here shows up as a link everywhere (and vice-versa).
  */
 export function PeoplePanel({ type, id }: { type: ItemType; id: string }) {
+  const { t: tr } = useTranslation();
   const [everyone, setEveryone] = useState<PersonRow[]>([]);
   const [linked, setLinked] = useState<{ linkId: string; person: PersonRow }[]>([]);
   const [picking, setPicking] = useState(false);
@@ -163,20 +163,20 @@ export function PeoplePanel({ type, id }: { type: ItemType; id: string }) {
 
   return (
     <div>
-      <label className="mb-1 block text-xs font-medium text-neutral-500">People</label>
+      <label className="mb-1 block text-xs font-medium text-neutral-500">{tr("meta.people")}</label>
       <div className="flex flex-wrap items-center gap-1.5">
         {linked.map(({ linkId, person }) => (
           <span key={linkId} className="inline-flex items-center gap-1.5 rounded-full bg-neutral-100 py-0.5 pl-0.5 pr-2 text-xs dark:bg-neutral-700">
-            <Avatar name={person.full_name || "New contact"} photo={person.photo} size={20} />
-            {person.full_name || "New contact"}
+            <Avatar name={person.full_name || tr("people.newContact")} photo={person.photo} size={20} />
+            {person.full_name || tr("people.newContact")}
             <button
               onClick={async () => { await deleteLink(linkId); void reload(); }}
               className="text-neutral-400 hover:text-red-500"
-              aria-label={`Remove ${person.full_name}`}
+              aria-label={tr("meta.removePerson", { name: person.full_name })}
             ><X size={12} /></button>
           </span>
         ))}
-        {linked.length === 0 && <p className="text-xs text-neutral-400">No people attached.</p>}
+        {linked.length === 0 && <p className="text-xs text-neutral-400">{tr("meta.noPeople")}</p>}
       </div>
 
       {picking ? (
@@ -191,13 +191,13 @@ export function PeoplePanel({ type, id }: { type: ItemType; id: string }) {
           }}
           defaultValue=""
         >
-          <option value="" disabled>Choose a person…</option>
+          <option value="" disabled>{tr("meta.choosePerson")}</option>
           {available.map((p) => (
-            <option key={p.id} value={p.id}>{p.full_name || "New contact"}</option>
+            <option key={p.id} value={p.id}>{p.full_name || tr("people.newContact")}</option>
           ))}
         </select>
       ) : (
-        <Button variant="ghost" className="mt-1 px-1" onClick={() => setPicking(true)}><span className="flex items-center gap-1"><UserPlus size={14} /> Add person</span></Button>
+        <Button variant="ghost" className="mt-1 px-1" onClick={() => setPicking(true)}><span className="flex items-center gap-1"><UserPlus size={14} /> {tr("meta.addPerson")}</span></Button>
       )}
     </div>
   );

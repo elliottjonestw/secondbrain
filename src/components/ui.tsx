@@ -1,5 +1,6 @@
 import { ReactNode, useEffect } from "react";
 import { X, Flag } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 export function Modal({
   open,
@@ -14,6 +15,8 @@ export function Modal({
   children: ReactNode;
   footer?: ReactNode;
 }) {
+  const { t } = useTranslation();
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -36,7 +39,7 @@ export function Modal({
           <button
             onClick={onClose}
             className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-700"
-            aria-label="Close"
+            aria-label={t("common.close")}
           >
             <X size={18} />
           </button>
@@ -78,7 +81,13 @@ export function Button({
   );
 }
 
-export const PRIORITY_LABELS = ["None", "Low", "Medium", "High"];
+/** Priority levels, indexed 0–3. Labels come from the `priority.*` catalog keys
+ * — call `t(priorityKey(n))` rather than hardcoding an English array. */
+export function priorityKey(n: number): `priority.${0 | 1 | 2 | 3}` {
+  const i = Math.max(0, Math.min(3, n)) as 0 | 1 | 2 | 3;
+  return `priority.${i}`;
+}
+
 export const PRIORITY_COLORS = [
   "text-neutral-400",
   "text-sky-500",
@@ -87,13 +96,14 @@ export const PRIORITY_COLORS = [
 ];
 
 export function PriorityFlag({ priority }: { priority: number }) {
+  const { t } = useTranslation();
   if (!priority) return null;
   return (
     <Flag
       size={14}
       className={PRIORITY_COLORS[priority]}
       fill="currentColor"
-      aria-label={PRIORITY_LABELS[priority]}
+      aria-label={t(priorityKey(priority))}
     />
   );
 }

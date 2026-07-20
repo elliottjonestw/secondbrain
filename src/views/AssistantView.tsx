@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Send, Sparkles, Trash2, Settings as SettingsIcon, Mic, Square, VolumeX } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useTranslation } from "react-i18next";
 import { askAssistant, ChatMessage } from "../lib/ai";
 import { hasApiKey } from "../lib/settings";
 import {
@@ -9,14 +10,15 @@ import {
 } from "../lib/voice";
 import { Button } from "../components/ui";
 
-const SUGGESTIONS = [
-  "What's on my calendar today?",
-  "Which to-dos are overdue?",
-  "Add a to-do to call the dentist tomorrow at 2pm",
-  "Create a Work note titled 'Sprint goals'",
-];
+// Rendered from the catalog so the examples read naturally in each language
+// rather than being English prompts shown to a Chinese speaker.
+const SUGGESTION_KEYS = [
+  "assistant.suggestion1", "assistant.suggestion2",
+  "assistant.suggestion3", "assistant.suggestion4",
+] as const;
 
 export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
+  const { t } = useTranslation();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);   // assistant thinking / transcribing
@@ -80,12 +82,12 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
       setRecording(false);
       if (!rec) return;
       setLoading(true);
-      setStatus("Transcribing…");
+      setStatus(t("assistant.transcribing"));
       try {
         const blob = await rec.stop();
         const text = await transcribe(blob);
         setLoading(false);
-        if (!text) { setError("Didn't catch that — try again."); return; }
+        if (!text) { setError(t("assistant.notHeard")); return; }
         await deliver(text, true); // spoken reply for voice turns
       } catch (e) {
         setLoading(false);
@@ -98,8 +100,7 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
     setError(null);
     if (!isRecordingSupported()) {
       setError(
-        "Voice input isn't available in this environment — the webview doesn't expose microphone access " +
-        "(navigator.mediaDevices / MediaRecorder is missing). Try a packaged build, or check the platform's media permissions.",
+        t("assistant.micUnavailable"),
       );
       return;
     }
@@ -112,7 +113,7 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
       setError(
         e instanceof Error
           ? `Couldn't access the microphone: ${e.message}`
-          : "Couldn't access the microphone. Check the app's microphone permission.",
+          : t("assistant.micDenied"),
       );
     }
   }
@@ -127,14 +128,13 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
       <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
         <Sparkles size={40} className="text-blue-500" />
         <div>
-          <h1 className="text-xl font-bold">AI Assistant</h1>
+          <h1 className="text-xl font-bold">{t("assistant.title")}</h1>
           <p className="mt-1 max-w-sm text-sm text-neutral-500">
-            Add your OpenAI API key in Settings to ask questions about your events, to-dos,
-            reminders, and notes — by typing or by voice.
+{t("assistant.needKey")}
           </p>
         </div>
         <Button variant="primary" onClick={() => goTo("settings")}>
-          <span className="flex items-center gap-1.5"><SettingsIcon size={15} /> Open Settings</span>
+          <span className="flex items-center gap-1.5"><SettingsIcon size={15} /> {t("assistant.openSettings")}</span>
         </Button>
       </div>
     );
@@ -144,18 +144,18 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-neutral-200 px-6 py-3 dark:border-neutral-700">
         <h1 className="flex items-center gap-2 text-lg font-semibold">
-          <Sparkles size={18} className="text-blue-500" /> Assistant
+          <Sparkles size={18} className="text-blue-500" /> {t("assistant.title")}
         </h1>
         <div className="flex items-center gap-3">
           {speaking && (
             <Button variant="ghost" onClick={stopVoice}>
-              <span className="flex items-center gap-1.5"><VolumeX size={14} /> Stop</span>
+              <span className="flex items-center gap-1.5"><VolumeX size={14} /> {t("assistant.stopSpeaking")}</span>
             </Button>
           )}
-          <span className="text-xs text-neutral-400">Asks and edits · works on your data</span>
+          <span className="text-xs text-neutral-400">{t("assistant.tagline")}</span>
           {messages.length > 0 && (
             <Button variant="ghost" onClick={() => { setMessages([]); setError(null); stopVoice(); }}>
-              <span className="flex items-center gap-1.5"><Trash2 size={14} /> Clear</span>
+              <span className="flex items-center gap-1.5"><Trash2 size={14} /> {t("assistant.clear")}</span>
             </Button>
           )}
         </div>
@@ -166,10 +166,10 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
           {messages.length === 0 && (
             <div className="pt-8 text-center">
               <p className="mb-4 text-sm text-neutral-400">
-                Ask me anything about your data — type below or tap the mic to talk. For example:
+{t("assistant.emptyPrompt")}
               </p>
               <div className="mx-auto flex max-w-md flex-col gap-2">
-                {SUGGESTIONS.map((s) => (
+                {SUGGESTION_KEYS.map((k) => t(k)).map((s) => (
                   <button
                     key={s}
                     onClick={() => deliver(s, false)}
@@ -222,7 +222,7 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
         {recording && (
           <div className="mx-auto mb-2 flex max-w-2xl items-center gap-2 text-sm text-red-500">
             <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-red-500" />
-            Listening… tap the mic to stop
+            {t("assistant.listeningHint")}
           </div>
         )}
         <div className="mx-auto flex max-w-2xl items-end gap-2">
@@ -232,8 +232,8 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
             className={`rounded-xl p-2.5 text-white disabled:opacity-40 ${
               recording ? "bg-red-600 hover:bg-red-700" : "bg-neutral-500 hover:bg-neutral-600"
             }`}
-            aria-label={recording ? "Stop recording" : "Start voice input"}
-            title={recording ? "Stop recording" : "Talk to the assistant"}
+            aria-label={recording ? t("assistant.stopRecording") : t("assistant.startVoice")}
+            title={recording ? t("assistant.stopRecording") : t("assistant.talk")}
           >
             {recording ? <Square size={18} /> : <Mic size={18} />}
           </button>
@@ -245,14 +245,14 @@ export default function AssistantView({ goTo }: { goTo: (v: string) => void }) {
             }}
             rows={1}
             disabled={recording}
-            placeholder={recording ? "Listening…" : "Ask about your calendar, tasks, notes…"}
+            placeholder={recording ? t("assistant.listening") : t("assistant.inputPlaceholder")}
             className="max-h-40 flex-1 resize-none rounded-xl border border-neutral-200 px-4 py-2.5 text-sm outline-none focus:border-blue-400 disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800"
           />
           <button
             onClick={submitTyped}
             disabled={busy || !input.trim()}
             className="rounded-xl bg-blue-600 p-2.5 text-white hover:bg-blue-700 disabled:opacity-40"
-            aria-label="Send"
+            aria-label={t("assistant.send")}
           >
             <Send size={18} />
           </button>

@@ -7,6 +7,8 @@ export interface AppSettings {
   openaiModel: string;
   /** Speech-to-text model used for voice input. */
   sttModel: string;
+  /** UI language: "system" to follow the OS, or a code from lib/i18n LANGUAGES. */
+  language: string;
 }
 
 const KEY = "secondbrain.settings";
@@ -15,6 +17,7 @@ const DEFAULTS: AppSettings = {
   openaiApiKey: "",
   openaiModel: "gpt-4o-mini",
   sttModel: "whisper-1",
+  language: "system",
 };
 
 export function getSettings(): AppSettings {

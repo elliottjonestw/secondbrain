@@ -1,30 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 import { Bell, Trash2, Inbox, CalendarClock, Flag, CheckCircle2, LucideIcon } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { ReminderRow, TodoRow } from "../types";
 import {
   listReminders, upsertReminder, toggleReminder, deleteReminder, listTodos, allLinkTargets,
 } from "../db";
-import { Button, Modal, PriorityFlag, PRIORITY_LABELS } from "../components/ui";
+import { Button, Modal, PriorityFlag, priorityKey } from "../components/ui";
 import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/ItemMeta";
 import { fmtDateTime, isOverdue, toLocalInput, fromLocalInput } from "../lib/format";
-import { describeRrule } from "../lib/recurrence";
+import { describeRrule, RRULE_PRESETS } from "../lib/recurrence";
 import { ensureNotificationPermission } from "../lib/notifications";
-
-const RRULE_PRESETS: { label: string; value: string | null }[] = [
-  { label: "Does not repeat", value: null },
-  { label: "Daily", value: "FREQ=DAILY" },
-  { label: "Weekly", value: "FREQ=WEEKLY" },
-  { label: "Monthly", value: "FREQ=MONTHLY" },
-  { label: "Yearly", value: "FREQ=YEARLY" },
-];
 
 type Filter = "all" | "scheduled" | "flagged" | "completed";
 
-const FILTERS: { id: Filter; label: string; icon: LucideIcon }[] = [
-  { id: "all", label: "All", icon: Inbox },
-  { id: "scheduled", label: "Scheduled", icon: CalendarClock },
-  { id: "flagged", label: "Flagged", icon: Flag },
-  { id: "completed", label: "Completed", icon: CheckCircle2 },
+const FILTERS: { id: Filter; icon: LucideIcon }[] = [
+  { id: "all", icon: Inbox },
+  { id: "scheduled", icon: CalendarClock },
+  { id: "flagged", icon: Flag },
+  { id: "completed", icon: CheckCircle2 },
 ];
 
 function matchesFilter(r: ReminderRow, f: Filter): boolean {
@@ -37,6 +30,7 @@ function matchesFilter(r: ReminderRow, f: Filter): boolean {
 }
 
 export default function RemindersView({ onChange }: { onChange: () => void }) {
+  const { t } = useTranslation();
   const [reminders, setReminders] = useState<ReminderRow[]>([]);
   const [editing, setEditing] = useState<ReminderRow | null>(null);
   const [newTitle, setNewTitle] = useState("");
@@ -71,7 +65,7 @@ export default function RemindersView({ onChange }: { onChange: () => void }) {
     <div className="flex h-full">
       {/* Filter sidebar (Apple Reminders-style smart lists) */}
       <aside className="w-48 shrink-0 border-r border-neutral-200 p-3 dark:border-neutral-700">
-        <h3 className="mb-2 text-xs font-semibold uppercase text-neutral-400">Reminders</h3>
+        <h3 className="mb-2 text-xs font-semibold uppercase text-neutral-400">{t("nav.reminders")}</h3>
         {FILTERS.map((f) => {
           const Icon = f.icon;
           return (
@@ -82,7 +76,7 @@ export default function RemindersView({ onChange }: { onChange: () => void }) {
                 filter === f.id ? "bg-blue-100 dark:bg-blue-900/40" : "hover:bg-neutral-100 dark:hover:bg-neutral-700"
               }`}
             >
-              <span className="flex items-center gap-2"><Icon size={16} className="text-neutral-500" /> {f.label}</span>
+              <span className="flex min-w-0 items-center gap-2"><Icon size={16} className="shrink-0 text-neutral-500" /> <span className="truncate">{t(`reminders.filter.${f.id}`)}</span></span>
               <span className="text-xs text-neutral-400">{counts[f.id]}</span>
             </button>
           );
@@ -94,7 +88,7 @@ export default function RemindersView({ onChange }: { onChange: () => void }) {
         <div className="mx-auto max-w-2xl">
           {!notifOk && (
             <div className="mb-3 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-800">
-              Notifications are disabled. Enable them in System Settings to get reminder alerts.
+              {t("reminders.notificationsOff")}
             </div>
           )}
           <div className="mb-4 flex gap-2">
@@ -102,10 +96,10 @@ export default function RemindersView({ onChange }: { onChange: () => void }) {
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && add()}
-              placeholder="Add a reminder…"
+              placeholder={t("reminders.addPlaceholder")}
               className="flex-1 rounded-lg border border-neutral-200 px-3 py-2 outline-none focus:border-blue-400 dark:border-neutral-600 dark:bg-neutral-800"
             />
-            <Button variant="primary" onClick={add}>Add</Button>
+            <Button variant="primary" onClick={add}>{t("common.add")}</Button>
           </div>
 
           <div className="space-y-1">
@@ -116,20 +110,20 @@ export default function RemindersView({ onChange }: { onChange: () => void }) {
                   <div>{r.title}</div>
                   {(r.remind_at || r.due_at) && (
                     <div className={`flex items-center gap-1 text-xs ${isOverdue(r.remind_at || r.due_at) && !r.completed ? "text-red-500" : "text-neutral-400"}`}>
-                      {r.remind_at ? <><Bell size={12} /> {fmtDateTime(r.remind_at)}</> : <>Due {fmtDateTime(r.due_at)}</>}
+                      {r.remind_at ? <><Bell size={12} /> {fmtDateTime(r.remind_at)}</> : <>{t("reminders.due", { when: fmtDateTime(r.due_at) })}</>}
                       {r.rrule && ` · ${describeRrule(r.rrule)}`}
                     </div>
                   )}
                 </button>
                 <PriorityFlag priority={r.priority} />
                 <button
-                  onClick={async (e) => { e.stopPropagation(); if (confirm(`Delete reminder "${r.title}"?`)) { await deleteReminder(r.id); bump(); } }}
+                  onClick={async (e) => { e.stopPropagation(); if (confirm(t("reminders.confirmDelete", { title: r.title }))) { await deleteReminder(r.id); bump(); } }}
                   className="hidden text-neutral-400 hover:text-red-500 group-hover:block"
-                  title="Delete reminder"
+                  title={t("reminders.deleteReminder")}
                 ><Trash2 size={15} /></button>
               </div>
             ))}
-            {visible.length === 0 && <p className="py-8 text-center text-sm text-neutral-400">No reminders here.</p>}
+            {visible.length === 0 && <p className="py-8 text-center text-sm text-neutral-400">{t("reminders.empty")}</p>}
           </div>
         </div>
       </div>
@@ -140,6 +134,7 @@ export default function RemindersView({ onChange }: { onChange: () => void }) {
 }
 
 function ReminderDetail({ reminder, onClose, onSaved }: { reminder: ReminderRow; onClose: () => void; onSaved: () => void }) {
+  const { t } = useTranslation();
   const [title, setTitle] = useState(reminder.title);
   const [notes, setNotes] = useState(reminder.notes ?? "");
   const [due, setDue] = useState(reminder.due_at ? toLocalInput(new Date(reminder.due_at)) : "");
@@ -154,7 +149,7 @@ function ReminderDetail({ reminder, onClose, onSaved }: { reminder: ReminderRow;
 
   async function save() {
     await upsertReminder({
-      id: reminder.id, title: title.trim() || "(untitled)", notes: notes || null,
+      id: reminder.id, title: title.trim() || t("common.untitledParen"), notes: notes || null,
       due_at: due ? fromLocalInput(due) : null,
       remind_at: remind ? fromLocalInput(remind) : null,
       rrule, priority, completed: reminder.completed, completed_at: reminder.completed_at,
@@ -166,45 +161,45 @@ function ReminderDetail({ reminder, onClose, onSaved }: { reminder: ReminderRow;
 
   return (
     <Modal
-      open onClose={onClose} title="Reminder"
+      open onClose={onClose} title={t("itemType.reminder")}
       footer={
         <>
-          <Button variant="danger" onClick={async () => { await deleteReminder(reminder.id); onSaved(); onClose(); }}>Delete</Button>
-          <Button variant="primary" onClick={save}>Save</Button>
+          <Button variant="danger" onClick={async () => { await deleteReminder(reminder.id); onSaved(); onClose(); }}>{t("common.delete")}</Button>
+          <Button variant="primary" onClick={save}>{t("common.save")}</Button>
         </>
       }
     >
       <div className="space-y-3">
         <input value={title} onChange={(e) => setTitle(e.target.value)} className="w-full rounded-lg border border-neutral-200 px-3 py-2 dark:border-neutral-600 dark:bg-neutral-700" />
-        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes…" rows={2} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder={t("todos.notesPlaceholder")} rows={2} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
         <div className="grid grid-cols-2 gap-3">
           <label className="text-sm">
-            <span className="mb-1 block text-xs text-neutral-500">Due</span>
+            <span className="mb-1 block text-xs text-neutral-500">{t("reminders.dueLabel")}</span>
             <input type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700" />
           </label>
           <label className="text-sm">
-            <span className="mb-1 block text-xs text-neutral-500">Alert at</span>
+            <span className="mb-1 block text-xs text-neutral-500">{t("reminders.alertAt")}</span>
             <input type="datetime-local" value={remind} onChange={(e) => setRemind(e.target.value)} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700" />
           </label>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <label className="text-sm">
-            <span className="mb-1 block text-xs text-neutral-500">Priority</span>
+            <span className="mb-1 block text-xs text-neutral-500">{t("todos.priority")}</span>
             <select value={priority} onChange={(e) => setPriority(Number(e.target.value))} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700">
-              {PRIORITY_LABELS.map((l, i) => <option key={i} value={i}>{l}</option>)}
+              {[0, 1, 2, 3].map((i) => <option key={i} value={i}>{t(priorityKey(i))}</option>)}
             </select>
           </label>
           <label className="text-sm">
-            <span className="mb-1 block text-xs text-neutral-500">Repeat</span>
+            <span className="mb-1 block text-xs text-neutral-500">{t("event.repeat")}</span>
             <select value={rrule ?? "__none__"} onChange={(e) => setRrule(e.target.value === "__none__" ? null : e.target.value)} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700">
-              {RRULE_PRESETS.map((p) => <option key={p.label} value={p.value ?? "__none__"}>{p.label}</option>)}
+              {RRULE_PRESETS.map((p) => <option key={p.key} value={p.value ?? "__none__"}>{t(p.key)}</option>)}
             </select>
           </label>
         </div>
         <label className="block text-sm">
-          <span className="mb-1 block text-xs text-neutral-500">Linked to-do</span>
+          <span className="mb-1 block text-xs text-neutral-500">{t("reminders.linkedTodo")}</span>
           <select value={linkedTodo} onChange={(e) => setLinkedTodo(e.target.value)} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700">
-            <option value="">None</option>
+            <option value="">{t("priority.0")}</option>
             {todos.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
           </select>
         </label>

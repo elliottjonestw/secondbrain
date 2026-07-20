@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { Plus, X, Trash2, CalendarPlus } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { TodoRow, ListRow } from "../types";
 import {
   listTodos, listLists, upsertTodo, toggleTodo, deleteTodo,
   upsertList, deleteList, reorderTodos, upsertEvent, allLinkTargets,
 } from "../db";
-import { Button, Modal, PriorityFlag, PRIORITY_LABELS, CATEGORY_COLORS } from "../components/ui";
+import { Button, Modal, PriorityFlag, priorityKey, CATEGORY_COLORS } from "../components/ui";
 import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/ItemMeta";
 import { fmtDateTime, isOverdue, toLocalInput, fromLocalInput } from "../lib/format";
 
 export default function TodosView({ onChange }: { onChange: () => void }) {
+  const { t: tr } = useTranslation();
   const [todos, setTodos] = useState<TodoRow[]>([]);
   const [lists, setLists] = useState<ListRow[]>([]);
   const [activeList, setActiveList] = useState<string>("");
@@ -82,8 +84,8 @@ export default function TodosView({ onChange }: { onChange: () => void }) {
       {/* Lists sidebar */}
       <aside className="w-48 shrink-0 border-r border-neutral-200 p-3 dark:border-neutral-700">
         <div className="mb-2 flex items-center justify-between">
-          <h3 className="text-xs font-semibold uppercase text-neutral-400">Lists</h3>
-          <button onClick={() => setAddingList(true)} className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-blue-500 dark:hover:bg-neutral-700" title="New list">
+          <h3 className="text-xs font-semibold uppercase text-neutral-400">{tr("todos.lists")}</h3>
+          <button onClick={() => setAddingList(true)} className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-blue-500 dark:hover:bg-neutral-700" title={tr("todos.newList")}>
             <Plus size={16} />
           </button>
         </div>
@@ -101,9 +103,9 @@ export default function TodosView({ onChange }: { onChange: () => void }) {
             </span>
             {lists.length > 1 && (
               <button
-                onClick={async (e) => { e.stopPropagation(); if (confirm(`Delete list "${l.name}"? Its tasks move to another list.`)) { await deleteList(l.id); bump(); } }}
+                onClick={async (e) => { e.stopPropagation(); if (confirm(tr("todos.confirmDeleteList", { name: l.name }))) { await deleteList(l.id); bump(); } }}
                 className="hidden text-neutral-400 hover:text-red-500 group-hover:block"
-                title="Delete list"
+                title={tr("todos.deleteList")}
               ><X size={14} /></button>
             )}
           </div>
@@ -115,7 +117,7 @@ export default function TodosView({ onChange }: { onChange: () => void }) {
             onChange={(e) => setNewListName(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") void addList(); if (e.key === "Escape") { setAddingList(false); setNewListName(""); } }}
             onBlur={() => void addList()}
-            placeholder="List name…"
+            placeholder={tr("todos.listNamePlaceholder")}
             className="mt-1 w-full rounded border border-neutral-200 px-2 py-1 text-sm outline-none focus:border-blue-400 dark:border-neutral-600 dark:bg-neutral-700"
           />
         )}
@@ -129,10 +131,10 @@ export default function TodosView({ onChange }: { onChange: () => void }) {
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && addTodo()}
-              placeholder="Add a task…"
+              placeholder={tr("todos.addTaskPlaceholder")}
               className="flex-1 rounded-lg border border-neutral-200 px-3 py-2 outline-none focus:border-blue-400 dark:border-neutral-600 dark:bg-neutral-800"
             />
-            <Button variant="primary" onClick={addTodo}>Add</Button>
+            <Button variant="primary" onClick={addTodo}>{tr("common.add")}</Button>
           </div>
 
           <div className="space-y-1">
@@ -142,7 +144,7 @@ export default function TodosView({ onChange }: { onChange: () => void }) {
                   todo={t}
                   onToggle={async (c) => { await toggleTodo(t.id, c); bump(); }}
                   onOpen={() => setEditing(t)}
-                  onDelete={async () => { if (confirm(`Delete task "${t.title}"? Any subtasks are removed too.`)) { await deleteTodo(t.id); bump(); } }}
+                  onDelete={async () => { if (confirm(tr("todos.confirmDeleteTask", { title: t.title }))) { await deleteTodo(t.id); bump(); } }}
                   draggable
                   onDragStart={() => setDragId(t.id)}
                   onDrop={() => onDrop(t.id)}
@@ -156,14 +158,14 @@ export default function TodosView({ onChange }: { onChange: () => void }) {
                       small
                       onToggle={async (c) => { await toggleTodo(s.id, c); bump(); }}
                       onOpen={() => setEditing(s)}
-                      onDelete={async () => { if (confirm(`Delete subtask "${s.title}"?`)) { await deleteTodo(s.id); bump(); } }}
+                      onDelete={async () => { if (confirm(tr("todos.confirmDeleteSubtask", { title: s.title }))) { await deleteTodo(s.id); bump(); } }}
                     />
                   ))}
                 </div>
               </div>
             ))}
             {topLevel.length === 0 && (
-              <p className="py-8 text-center text-sm text-neutral-400">No tasks in this list yet.</p>
+              <p className="py-8 text-center text-sm text-neutral-400">{tr("todos.empty")}</p>
             )}
           </div>
         </div>
@@ -193,6 +195,7 @@ function TodoItem({
   onDragStart?: () => void;
   onDrop?: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div
       draggable={draggable}
@@ -219,7 +222,7 @@ function TodoItem({
       <button
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
         className="hidden text-neutral-400 hover:text-red-500 group-hover:block"
-        title="Delete task"
+        title={t("todos.deleteTask")}
       ><Trash2 size={15} /></button>
     </div>
   );
@@ -233,6 +236,7 @@ function TodoDetail({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const { t } = useTranslation();
   const [title, setTitle] = useState(todo.title);
   const [notes, setNotes] = useState(todo.notes ?? "");
   const [listId, setListId] = useState(todo.list_id ?? lists[0]?.id ?? "");
@@ -245,7 +249,7 @@ function TodoDetail({
 
   async function save() {
     await upsertTodo({
-      id: todo.id, title: title.trim() || "(untitled)", notes: notes || null,
+      id: todo.id, title: title.trim() || t("common.untitledParen"), notes: notes || null,
       list_id: listId, due_at: due ? fromLocalInput(due) : null, priority,
       completed: todo.completed, completed_at: todo.completed_at,
       parent_todo_id: todo.parent_todo_id, position: todo.position,
@@ -268,57 +272,57 @@ function TodoDetail({
     const start = due ? new Date(due) : new Date();
     const end = new Date(start.getTime() + 60 * 60 * 1000);
     await upsertEvent({
-      summary: title.trim() || "(untitled)", description: notes || null, location: null,
+      summary: title.trim() || t("common.untitledParen"), description: notes || null, location: null,
       dtstart: start.toISOString(), dtend: end.toISOString(), all_day: 0,
       rrule: null, exdates: null, status: "CONFIRMED",
       categories: JSON.stringify(["Task"]), color: "#10b981",
     });
     onSaved();
     onClose();
-    alert("Created a calendar event from this task.");
+    alert(t("todos.convertedToEvent"));
   }
 
   return (
     <Modal
       open
       onClose={onClose}
-      title="Task"
+      title={t("todos.taskTitle")}
       footer={
         <>
-          <Button variant="danger" onClick={async () => { await deleteTodo(todo.id); onSaved(); onClose(); }}>Delete</Button>
-          <Button variant="ghost" onClick={convertToEvent}><span className="flex items-center gap-1.5"><CalendarPlus size={15} /> Convert to event</span></Button>
-          <Button variant="primary" onClick={save}>Save</Button>
+          <Button variant="danger" onClick={async () => { await deleteTodo(todo.id); onSaved(); onClose(); }}>{t("common.delete")}</Button>
+          <Button variant="ghost" onClick={convertToEvent}><span className="flex items-center gap-1.5"><CalendarPlus size={15} /> {t("todos.convertToEvent")}</span></Button>
+          <Button variant="primary" onClick={save}>{t("common.save")}</Button>
         </>
       }
     >
       <div className="space-y-3">
         <input value={title} onChange={(e) => setTitle(e.target.value)} className="w-full rounded-lg border border-neutral-200 px-3 py-2 dark:border-neutral-600 dark:bg-neutral-700" />
-        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes…" rows={3} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder={t("todos.notesPlaceholder")} rows={3} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
         <div className="grid grid-cols-2 gap-3">
           <label className="text-sm">
-            <span className="mb-1 block text-xs text-neutral-500">List</span>
+            <span className="mb-1 block text-xs text-neutral-500">{t("todos.list")}</span>
             <select value={listId} onChange={(e) => setListId(e.target.value)} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700">
               {lists.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
           </label>
           <label className="text-sm">
-            <span className="mb-1 block text-xs text-neutral-500">Priority</span>
+            <span className="mb-1 block text-xs text-neutral-500">{t("todos.priority")}</span>
             <select value={priority} onChange={(e) => setPriority(Number(e.target.value))} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700">
-              {PRIORITY_LABELS.map((l, i) => <option key={i} value={i}>{l}</option>)}
+              {[0, 1, 2, 3].map((i) => <option key={i} value={i}>{t(priorityKey(i))}</option>)}
             </select>
           </label>
         </div>
         <label className="block text-sm">
-          <span className="mb-1 block text-xs text-neutral-500">Due date (shows on calendar)</span>
+          <span className="mb-1 block text-xs text-neutral-500">{t("todos.dueDate")}</span>
           <input type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700" />
         </label>
 
         {!todo.parent_todo_id && (
           <div>
-            <span className="mb-1 block text-xs text-neutral-500">Subtasks</span>
+            <span className="mb-1 block text-xs text-neutral-500">{t("todos.subtasks")}</span>
             <div className="flex gap-2">
-              <input value={subtaskTitle} onChange={(e) => setSubtaskTitle(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addSubtask()} placeholder="Add subtask…" className="flex-1 rounded border border-neutral-200 px-2 py-1 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
-              <Button onClick={addSubtask}>Add</Button>
+              <input value={subtaskTitle} onChange={(e) => setSubtaskTitle(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addSubtask()} placeholder={t("todos.addSubtask")} className="flex-1 rounded border border-neutral-200 px-2 py-1 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
+              <Button onClick={addSubtask}>{t("common.add")}</Button>
             </div>
           </div>
         )}

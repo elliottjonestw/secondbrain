@@ -4,8 +4,9 @@ import {
   Layers, Loader2, CloudOff,
 } from "lucide-react";
 import {
-  addDays, addMonths, addWeeks, differenceInCalendarDays, format,
+  addDays, addMonths, addWeeks, differenceInCalendarDays,
 } from "date-fns";
+import { useTranslation } from "react-i18next";
 import type { TodoRow, EventOccurrence, UnifiedEvent } from "../types";
 import { listTodos } from "../db";
 import {
@@ -14,7 +15,8 @@ import {
 } from "../lib/calendars";
 import {
   startOfMonth, endOfMonth, startOfWeek, endOfWeek, startOfDay, endOfDay,
-  isSameDay, isToday, fmtTime,
+  isSameDay, isToday, fmtTime, fmtHour, fmtDate, fmtMonthYear, fmtFullDate,
+  fmtWeekdayShort, weekdayNames,
 } from "../lib/format";
 import { exportCalendar, importCalendar } from "../lib/ics";
 import { Button } from "../components/ui";
@@ -24,6 +26,7 @@ type ViewMode = "month" | "week" | "day";
 const HOUR_PX = 48;
 
 export default function CalendarView({ onChange, openEventId }: { onChange: () => void; openEventId?: string }) {
+  const { t } = useTranslation();
   const [mode, setMode] = useState<ViewMode>("month");
   const [cursor, setCursor] = useState(new Date());
   const [occurrences, setOccurrences] = useState<EventOccurrence[]>([]);
@@ -80,11 +83,11 @@ export default function CalendarView({ onChange, openEventId }: { onChange: () =
 
   async function doExport() {
     const path = await exportCalendar();
-    setMsg(path ? `Exported to ${path}` : "");
+    setMsg(path ? t("calendar.exportedTo", { path }) : "");
   }
   async function doImport() {
     const n = await importCalendar();
-    setMsg(`Imported ${n} event(s) into the built-in calendar.`);
+    setMsg(t("calendar.imported", { count: n }));
     bump();
   }
 
@@ -95,38 +98,38 @@ export default function CalendarView({ onChange, openEventId }: { onChange: () =
   };
 
   const title =
-    mode === "month" ? format(cursor, "MMMM yyyy")
-    : mode === "week" ? `Week of ${format(startOfWeek(cursor), "MMM d, yyyy")}`
-    : format(cursor, "EEEE, MMMM d, yyyy");
+    mode === "month" ? fmtMonthYear(cursor)
+    : mode === "week" ? t("calendar.weekOf", { date: fmtDate(startOfWeek(cursor)) })
+    : fmtFullDate(cursor);
 
   return (
     <div className="flex h-full flex-col">
       {/* Toolbar */}
       <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3 dark:border-neutral-700">
         <div className="flex items-center gap-2">
-          <Button onClick={() => setCursor(new Date())}>Today</Button>
-          <Button variant="ghost" onClick={() => move(-1)} aria-label="Previous"><ChevronLeft size={18} /></Button>
-          <Button variant="ghost" onClick={() => move(1)} aria-label="Next"><ChevronRight size={18} /></Button>
+          <Button onClick={() => setCursor(new Date())}>{t("nav.today")}</Button>
+          <Button variant="ghost" onClick={() => move(-1)} aria-label={t("calendar.previous")}><ChevronLeft size={18} /></Button>
+          <Button variant="ghost" onClick={() => move(1)} aria-label={t("calendar.next")}><ChevronRight size={18} /></Button>
           <h2 className="ml-2 text-lg font-semibold">{title}</h2>
         </div>
         <div className="flex items-center gap-1">
           {loading && <Loader2 size={15} className="mr-1 animate-spin text-neutral-400" />}
           {(["month", "week", "day"] as ViewMode[]).map((m) => (
             <Button key={m} variant={mode === m ? "primary" : "ghost"} onClick={() => setMode(m)}>
-              {m[0].toUpperCase() + m.slice(1)}
+              {t(`calendar.mode.${m}`)}
             </Button>
           ))}
 
           {/* Per-calendar visibility — view them individually or together. */}
           <div className="relative">
-            <Button variant="ghost" onClick={() => setShowFilter((v) => !v)} aria-label="Calendars">
+            <Button variant="ghost" onClick={() => setShowFilter((v) => !v)} aria-label={t("settings.sections.calendars")}>
               <Layers size={16} />
             </Button>
             {showFilter && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setShowFilter(false)} />
                 <div className="absolute right-0 top-full z-20 mt-1 w-56 rounded-lg border border-neutral-200 bg-white p-2 shadow-lg dark:border-neutral-700 dark:bg-neutral-800">
-                  <div className="px-1 pb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-400">Calendars</div>
+                  <div className="px-1 pb-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-400">{t("settings.sections.calendars")}</div>
                   {calendars.map((cal) => (
                     <label key={cal.id} className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-700/50">
                       <input
@@ -144,7 +147,7 @@ export default function CalendarView({ onChange, openEventId }: { onChange: () =
             )}
           </div>
 
-          <Button variant="primary" className="ml-1" onClick={() => setEditing({ event: null, calendarId: defaultCalendarId(), start: cursor })}><span className="flex items-center gap-1"><Plus size={16} /> Event</span></Button>
+          <Button variant="primary" className="ml-1" onClick={() => setEditing({ event: null, calendarId: defaultCalendarId(), start: cursor })}><span className="flex items-center gap-1"><Plus size={16} /> {t("itemType.event")}</span></Button>
         </div>
       </div>
 
@@ -192,13 +195,13 @@ export default function CalendarView({ onChange, openEventId }: { onChange: () =
               className="flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-400"
               title={errors.join("\n")}
             >
-              <CloudOff size={12} /> Some calendars unavailable
+              <CloudOff size={12} /> {t("calendar.someUnavailable")}
             </span>
           )}
         </div>
         <div className="flex shrink-0 gap-2">
-          <Button onClick={doImport}><span className="flex items-center gap-1.5"><Upload size={15} /> Import .ics</span></Button>
-          <Button onClick={doExport}><span className="flex items-center gap-1.5"><Download size={15} /> Export .ics</span></Button>
+          <Button onClick={doImport}><span className="flex items-center gap-1.5"><Upload size={15} /> {t("calendar.importIcs")}</span></Button>
+          <Button onClick={doExport}><span className="flex items-center gap-1.5"><Download size={15} /> {t("calendar.exportIcs")}</span></Button>
         </div>
       </div>
 
@@ -236,12 +239,13 @@ function MonthGrid({
   onOpen: (occ: EventOccurrence) => void;
   onReschedule: (occ: EventOccurrence, day: Date) => void;
 }) {
+  const { t: tr } = useTranslation();
   const days = eachDay(winStart, addDays(winStart, 41)); // 6 weeks
   const [drag, setDrag] = useState<EventOccurrence | null>(null);
 
   return (
     <div className="grid grid-cols-7 border-t border-neutral-200 dark:border-neutral-700">
-      {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+      {weekdayNames().map((d) => (
         <div key={d} className="border-b border-r border-neutral-200 bg-neutral-50 px-2 py-1 text-center text-xs font-semibold text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800">{d}</div>
       ))}
       {days.map((day) => {
@@ -278,7 +282,7 @@ function MonthGrid({
                 <div
                   key={t.id}
                   className="flex items-center gap-1 truncate rounded border border-dashed border-neutral-400 px-1 py-0.5 text-xs text-neutral-500"
-                  title={`Todo: ${t.title}`}
+                  title={`${tr("itemType.todo")}: ${t.title}`}
                 >
                   <Square size={10} className="shrink-0" /> <span className="truncate">{t.title}</span>
                 </div>
@@ -311,7 +315,7 @@ function TimeGrid({
       <div className="w-14 shrink-0 pt-6">
         {hours.map((h) => (
           <div key={h} style={{ height: HOUR_PX }} className="relative -top-2 pr-1 text-right text-xs text-neutral-400">
-            {h === 0 ? "" : format(new Date(2020, 0, 1, h), "h a")}
+            {h === 0 ? "" : fmtHour(h)}
           </div>
         ))}
       </div>
@@ -325,7 +329,7 @@ function TimeGrid({
             <div key={day.toISOString()} className="flex-1 border-l border-neutral-200 dark:border-neutral-700">
               {/* day header */}
               <div className={`sticky top-0 z-10 border-b border-neutral-200 bg-white py-1 text-center text-sm dark:border-neutral-700 dark:bg-neutral-900 ${isToday(day) ? "text-blue-600" : ""}`}>
-                <div className="font-semibold">{format(day, "EEE")}</div>
+                <div className="font-semibold">{fmtWeekdayShort(day)}</div>
                 <div className="text-lg">{day.getDate()}</div>
                 {(allDayOccs.length > 0 || dayTodos.length > 0) && (
                   <div className="space-y-0.5 px-1 pt-1">

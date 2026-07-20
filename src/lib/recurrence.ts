@@ -7,6 +7,7 @@
 // own VTIMEZONE and are expanded by ical.js instead — see lib/caldav/ical.ts.
 
 import { rrulestr } from "rrule";
+import i18next from "i18next";
 import type { UnifiedEvent, EventOccurrence } from "../types";
 
 function normalizeRule(rrule: string): string {
@@ -86,9 +87,43 @@ export function expandEvents(
     .sort((a, b) => a.start.getTime() - b.start.getTime());
 }
 
-// Human-readable summary of an RRULE for display in forms.
+// ---------------------------------------------------------------------------
+// Repeat presets, shared by the event and reminder editors.
+//
+// These used to be two near-identical arrays in EventForm and RemindersView,
+// which meant every label had to be translated twice and could drift apart.
+// ---------------------------------------------------------------------------
+export type RrulePresetKey =
+  | "recurrence.none" | "recurrence.daily" | "recurrence.weekdays"
+  | "recurrence.weekly" | "recurrence.monthly" | "recurrence.yearly";
+
+export interface RrulePreset { key: RrulePresetKey; value: string | null }
+
+export const RRULE_PRESETS: RrulePreset[] = [
+  { key: "recurrence.none", value: null },
+  { key: "recurrence.daily", value: "FREQ=DAILY" },
+  { key: "recurrence.weekdays", value: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR" },
+  { key: "recurrence.weekly", value: "FREQ=WEEKLY" },
+  { key: "recurrence.monthly", value: "FREQ=MONTHLY" },
+  { key: "recurrence.yearly", value: "FREQ=YEARLY" },
+];
+
+/**
+ * Human-readable summary of an RRULE for display in forms.
+ *
+ * Presets are matched first so the common cases are properly localized. Custom
+ * RFC 5545 rules fall through to rrule's own `toText()`, which is English-only:
+ * its gettext hook substitutes token by token, and Chinese word order differs
+ * enough ("every week on Monday" vs 每週一) that the result reads worse than
+ * leaving it in English. Documented as a limitation.
+ */
 export function describeRrule(rrule: string | null): string {
-  if (!rrule) return "Does not repeat";
+  const t = i18next.t.bind(i18next);
+  if (!rrule) return t("recurrence.none");
+
+  const preset = RRULE_PRESETS.find((p) => p.value === rrule);
+  if (preset) return t(preset.key);
+
   try {
     const rule = rrulestr(normalizeRule(rrule), { dtstart: new Date() });
     return rule.toText().replace(/^\w/, (c) => c.toUpperCase());

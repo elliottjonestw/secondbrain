@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Home, Calendar, Bell, ListChecks, StickyNote, Users, Search, Brain, Sparkles, Settings as SettingsIcon, LucideIcon } from "lucide-react";
+import { Trans, useTranslation } from "react-i18next";
 import TodayView from "./views/TodayView";
 import CalendarView from "./views/CalendarView";
 import RemindersView from "./views/RemindersView";
@@ -20,17 +21,20 @@ type View = "today" | "calendar" | "reminders" | "todos" | "notes" | "people" | 
 // "load demo data" prompt. Keys are matched by physical code so it works
 // regardless of what Shift+8/9 types on the user's layout.
 
-const NAV: { id: View; label: string; icon: LucideIcon }[] = [
-  { id: "today", label: "Today", icon: Home },
-  { id: "calendar", label: "Calendar", icon: Calendar },
-  { id: "reminders", label: "Reminders", icon: Bell },
-  { id: "todos", label: "To-Do", icon: ListChecks },
-  { id: "notes", label: "Notes", icon: StickyNote },
-  { id: "people", label: "People", icon: Users },
-  { id: "assistant", label: "Assistant", icon: Sparkles },
+type NavId = Exclude<View, "search" | "settings">;
+
+const NAV: { id: NavId; icon: LucideIcon }[] = [
+  { id: "today", icon: Home },
+  { id: "calendar", icon: Calendar },
+  { id: "reminders", icon: Bell },
+  { id: "todos", icon: ListChecks },
+  { id: "notes", icon: StickyNote },
+  { id: "people", icon: Users },
+  { id: "assistant", icon: Sparkles },
 ];
 
 export default function App() {
+  const { t } = useTranslation();
   const [view, setView] = useState<View>("today");
   const [search, setSearch] = useState("");
   const [ready, setReady] = useState(false);
@@ -110,14 +114,14 @@ export default function App() {
     return (
       <div className="flex h-full items-center justify-center p-8 text-center text-red-600">
         <div>
-          <p className="font-semibold">Failed to open the database.</p>
+          <p className="font-semibold">{t("app.dbError")}</p>
           <p className="mt-2 text-sm text-neutral-500">{error}</p>
         </div>
       </div>
     );
   }
   if (!ready) {
-    return <div className="flex h-full items-center justify-center text-neutral-400">Loading…</div>;
+    return <div className="flex h-full items-center justify-center text-neutral-400">{t("common.loading")}</div>;
   }
 
   return (
@@ -125,7 +129,8 @@ export default function App() {
       {/* Sidebar */}
       <nav className="flex w-52 shrink-0 flex-col border-r border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900">
         <div className="flex items-center gap-2 px-4 py-4 text-lg font-bold">
-          <Brain size={22} className="text-blue-600" /> Second Brain
+          <Brain size={22} className="shrink-0 text-blue-600" />
+          <span className="min-w-0 truncate">{t("app.name")}</span>
         </div>
         <div className="px-2">
           <div className="relative mb-3">
@@ -133,7 +138,7 @@ export default function App() {
             <input
               value={search}
               onChange={(e) => { setNoteTarget(null); setCalTarget(null); setSearch(e.target.value); setView(e.target.value ? "search" : "today"); }}
-              placeholder="Search everything…"
+              placeholder={t("app.searchPlaceholder")}
               className="w-full rounded-lg border border-neutral-200 py-1.5 pl-8 pr-3 text-sm outline-none focus:border-blue-400 dark:border-neutral-600 dark:bg-neutral-800"
             />
           </div>
@@ -149,7 +154,8 @@ export default function App() {
                   view === n.id ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800"
                 }`}
               >
-                <Icon size={18} /> {n.label}
+                <Icon size={18} className="shrink-0" />
+                <span className="min-w-0 truncate">{t(`nav.${n.id}`)}</span>
               </button>
             );
           })}
@@ -161,7 +167,8 @@ export default function App() {
               view === "settings" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800"
             }`}
           >
-            <SettingsIcon size={18} /> Settings
+            <SettingsIcon size={18} className="shrink-0" />
+            <span className="min-w-0 truncate">{t("nav.settings")}</span>
           </button>
         </div>
       </nav>
@@ -182,24 +189,24 @@ export default function App() {
       <Modal
         open={showDemoPrompt}
         onClose={() => !seeding && setShowDemoPrompt(false)}
-        title="Load demo data?"
+        title={t("demo.title")}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setShowDemoPrompt(false)}>Cancel</Button>
+            <Button variant="ghost" onClick={() => setShowDemoPrompt(false)}>{t("common.cancel")}</Button>
             <Button variant="danger" onClick={loadDemo}>
               <span className="flex items-center gap-1.5">
-                <Sparkles size={15} /> {seeding ? "Loading…" : "Reset & load demo"}
+                <Sparkles size={15} /> {seeding ? t("common.loading") : t("demo.confirm")}
               </span>
             </Button>
           </>
         }
       >
+        {/* <Trans> keeps the <strong> inline rather than splitting the sentence
+            into fragments a translator can't reorder. */}
         <p className="text-sm text-neutral-600 dark:text-neutral-300">
-          You found the secret! This will <strong>permanently delete all of your current
-          events, reminders, to-dos, notes, lists, tags, and links</strong>, then fill the
-          app with a sample dataset to explore.
+          <Trans i18nKey="demo.body" components={{ strong: <strong /> }} />
         </p>
-        <p className="mt-2 text-sm text-neutral-500">This cannot be undone.</p>
+        <p className="mt-2 text-sm text-neutral-500">{t("demo.irreversible")}</p>
       </Modal>
     </div>
   );

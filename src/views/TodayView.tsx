@@ -1,14 +1,19 @@
 import { useEffect, useState } from "react";
 import { Bell, Pin, Cake } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { EventOccurrence, TodoRow, ReminderRow, NoteRow, PersonRow } from "../types";
 import { listTodos, listReminders, listNotes, listPeople, toggleTodo, toggleReminder } from "../db";
 import { getOccurrences } from "../lib/calendars";
-import { startOfDay, endOfDay, format, fmtTime, fmtDateTime, isOverdue, isToday } from "../lib/format";
+import {
+  startOfDay, endOfDay, fmtTime, fmtDateTime, fmtMonthDay, fmtFullDate,
+  fmtRelativeDays, isOverdue, isToday,
+} from "../lib/format";
 import { PriorityFlag } from "../components/ui";
 
 type GoTo = (v: string, target?: { noteId?: string; eventId?: string }) => void;
 
 export default function TodayView({ onChange, goTo }: { onChange: () => void; goTo: GoTo }) {
+  const { t: tr } = useTranslation();
   const [occs, setOccs] = useState<EventOccurrence[]>([]);
   const [todos, setTodos] = useState<TodoRow[]>([]);
   const [reminders, setReminders] = useState<ReminderRow[]>([]);
@@ -42,34 +47,34 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
   return (
     <div className="mx-auto h-full max-w-4xl overflow-y-auto p-6">
       <div className="mb-4">
-        <h1 className="text-2xl font-bold">Today</h1>
-        <p className="text-sm text-neutral-400">{new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</p>
+        <h1 className="text-2xl font-bold">{tr("nav.today")}</h1>
+        <p className="text-sm text-neutral-400">{fmtFullDate(new Date())}</p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <Card title="Schedule" onHeaderClick={() => goTo("calendar")}>
-          {occs.length === 0 ? <Empty>No events today.</Empty> : occs.map((o, i) => (
+        <Card title={tr("today.schedule")} onHeaderClick={() => goTo("calendar")}>
+          {occs.length === 0 ? <Empty>{tr("today.noEvents")}</Empty> : occs.map((o, i) => (
             <button
               key={i}
               onClick={() => goTo("calendar", { eventId: o.event.id })}
               className="flex w-full items-center gap-2 rounded py-1.5 text-left hover:bg-neutral-50 dark:hover:bg-neutral-700/50"
             >
               <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: o.event.color ?? "#3b82f6" }} />
-              <span className="w-20 shrink-0 text-xs text-neutral-400">{o.event.all_day ? "All day" : fmtTime(o.start)}</span>
+              <span className="w-24 shrink-0 truncate text-xs text-neutral-400">{o.event.all_day ? tr("event.allDay") : fmtTime(o.start)}</span>
               <span className="truncate">{o.event.summary}</span>
             </button>
           ))}
         </Card>
 
-        <Card title="Due today & overdue" onHeaderClick={() => goTo("todos")}>
-          {dueTodos.length === 0 && dueReminders.length === 0 ? <Empty>Nothing due.</Empty> : (
+        <Card title={tr("today.dueToday")} onHeaderClick={() => goTo("todos")}>
+          {dueTodos.length === 0 && dueReminders.length === 0 ? <Empty>{tr("today.nothingDue")}</Empty> : (
             <>
               {dueReminders.map((r) => (
                 <div key={r.id} className="flex items-center gap-2 py-1">
                   <input type="checkbox" className="accent-blue-600" onChange={async () => { await toggleReminder(r.id, true); bump(); }} />
                   <Bell size={14} className="shrink-0 text-neutral-400" />
                   <span className="truncate">{r.title}</span>
-                  {isOverdue(r.remind_at || r.due_at) && <span className="text-xs text-red-500">overdue</span>}
+                  {isOverdue(r.remind_at || r.due_at) && <span className="text-xs text-red-500">{tr("today.overdue")}</span>}
                 </div>
               ))}
               {dueTodos.map((t) => (
@@ -77,35 +82,35 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
                   <input type="checkbox" className="accent-blue-600" onChange={async () => { await toggleTodo(t.id, true); bump(); }} />
                   <span className="truncate">{t.title}</span>
                   <PriorityFlag priority={t.priority} />
-                  {isOverdue(t.due_at) && <span className="text-xs text-red-500">overdue</span>}
+                  {isOverdue(t.due_at) && <span className="text-xs text-red-500">{tr("today.overdue")}</span>}
                 </div>
               ))}
             </>
           )}
         </Card>
 
-        <Card title="Pinned notes" onHeaderClick={() => goTo("notes")}>
-          {pinnedNotes.length === 0 ? <Empty>No pinned notes.</Empty> : pinnedNotes.map((n) => (
+        <Card title={tr("today.pinnedNotes")} onHeaderClick={() => goTo("notes")}>
+          {pinnedNotes.length === 0 ? <Empty>{tr("today.noPinned")}</Empty> : pinnedNotes.map((n) => (
             <button key={n.id} onClick={() => goTo("notes", { noteId: n.id })} className="flex w-full items-center gap-1.5 rounded py-1 text-left hover:bg-neutral-50 dark:hover:bg-neutral-700/50">
-              <Pin size={13} className="shrink-0 text-blue-500" fill="currentColor" /> <span className="truncate">{n.title || "Untitled"}</span>
+              <Pin size={13} className="shrink-0 text-blue-500" fill="currentColor" /> <span className="truncate">{n.title || tr("common.untitled")}</span>
             </button>
           ))}
         </Card>
 
-        <Card title="Recent notes" onHeaderClick={() => goTo("notes")}>
-          {recentNotes.length === 0 ? <Empty>No notes yet.</Empty> : recentNotes.map((n) => (
+        <Card title={tr("today.recentNotes")} onHeaderClick={() => goTo("notes")}>
+          {recentNotes.length === 0 ? <Empty>{tr("today.noNotes")}</Empty> : recentNotes.map((n) => (
             <button key={n.id} onClick={() => goTo("notes", { noteId: n.id })} className="flex w-full items-center justify-between gap-2 rounded py-1 text-left hover:bg-neutral-50 dark:hover:bg-neutral-700/50">
-              <span className="truncate">{n.title || "Untitled"}</span>
+              <span className="truncate">{n.title || tr("common.untitled")}</span>
               <span className="shrink-0 text-xs text-neutral-400">{fmtDateTime(n.updated_at)}</span>
             </button>
           ))}
         </Card>
 
-        <Card title="Upcoming birthdays">
-          {birthdays.length === 0 ? <Empty>No birthdays in the next 30 days.</Empty> : birthdays.map((b) => (
+        <Card title={tr("today.birthdays")}>
+          {birthdays.length === 0 ? <Empty>{tr("today.noBirthdays")}</Empty> : birthdays.map((b) => (
             <div key={b.person.id} className="flex items-center gap-2 py-1">
               <Cake size={14} className="shrink-0 text-pink-500" />
-              <span className="flex-1 truncate">{b.person.full_name || "New contact"}</span>
+              <span className="flex-1 truncate">{b.person.full_name || tr("people.newContact")}</span>
               <span className="shrink-0 text-xs text-neutral-400">{b.dateLabel}</span>
               <span className={`shrink-0 text-xs ${b.days === 0 ? "font-medium text-pink-500" : "text-neutral-400"}`}>{b.awayLabel}</span>
             </div>
@@ -138,8 +143,8 @@ function upcomingBirthdays(people: PersonRow[], within: number): UpcomingBirthda
     out.push({
       person,
       days,
-      dateLabel: format(new Date(2000, month - 1, day), "MMM d"),
-      awayLabel: days === 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`,
+      dateLabel: fmtMonthDay(new Date(2000, month - 1, day)),
+      awayLabel: fmtRelativeDays(days),
     });
   }
   return out.sort((a, b) => a.days - b.days);
