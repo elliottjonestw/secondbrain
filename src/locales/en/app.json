@@ -461,6 +461,11 @@
       "imageAlt": "image",
       "imageError": "That image couldn't be added.",
       "imageMissing": "Image not found",
+      "video": "Embed video",
+      "videoPlaceholder": "YouTube link or embed code",
+      "videoHint": "Paste a YouTube link or its embed code — it shows in preview.",
+      "videoPlay": "Watch on YouTube",
+      "videoInvalid": "That doesn't look like a YouTube link.",
       "dictate": "Dictate",
       "dictating": "Dictating…"
     }

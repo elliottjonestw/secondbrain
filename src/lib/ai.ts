@@ -1690,6 +1690,8 @@ const SYSTEM_PROMPT =
   "- Note bodies may contain image references written as ![alt](sbimg:<id>). Those ids point at stored image " +
   "data — never invent one, and when rewriting a note with update_note, keep any existing reference exactly as " +
   "it is or the image is lost from the note. Read the alt text if it helps; don't read the reference aloud.\n" +
+  "- A bare YouTube URL on its own line in a note body is an embedded video. Keep it on its own line and " +
+  "unaltered when rewriting a note — turning it into [a labelled link](url) stops it playing.\n" +
   "- Never assume or invent data. To update, tag, link, or delete an " +
   "existing item, find its id with a search tool before calling the write/delete tool. To add one entry to a " +
   "person's array field (email/phone/custom field), fetch them with get_item first, then send the full merged list " +

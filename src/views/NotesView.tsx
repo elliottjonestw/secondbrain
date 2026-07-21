@@ -9,6 +9,7 @@ import { Button } from "../components/ui";
 import MarkdownToolbar, { mdActions, MdEdit } from "../components/MarkdownToolbar";
 import DictateButton from "../components/DictateButton";
 import NoteImage, { SBIMG, primeNoteImage, releaseNoteImages, noteUrlTransform } from "../components/NoteImage";
+import { NoteLink, normalizeEmbeds, youTubeId, youTubeUrl } from "../components/YouTubeEmbed";
 import { encodeNoteImage } from "../lib/images";
 import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/ItemMeta";
 import { fmtDateTime } from "../lib/format";
@@ -231,9 +232,40 @@ function NoteEditor({
     scheduleSave({ body: next });
   }
 
-  /** Pasting a screenshot inserts it; every other paste falls through to the
-   *  textarea's own handling. */
+  /** Insert text on its own line at the caret, leaving the caret after it.
+   *  A newline is added on either side only when there isn't one already — so
+   *  inserting into empty space doesn't push blank lines into the note. */
+  function insertLine(text: string) {
+    const el = textareaRef.current;
+    const at = el ? [el.selectionStart, el.selectionEnd] : [body.length, body.length];
+    const before = body.slice(0, at[0]);
+    const after = body.slice(at[1]);
+    const lead = before === "" || before.endsWith("\n") ? "" : "\n";
+    const trail = after === "" || after.startsWith("\n") ? "" : "\n";
+    const inserted = lead + text + trail;
+    const caret = at[0] + lead.length + text.length;
+    applyEdit({ body: before + inserted + after, start: caret, end: caret });
+  }
+
+  /** A YouTube embed snippet, pasted straight from the Share ▸ Embed button,
+   *  goes in as its plain watch URL — which is what the preview renders as a
+   *  player. Raw HTML in a body renders as nothing at all. */
+  function insertVideo(id: string) {
+    insertLine(youTubeUrl(id));
+  }
+
+  /** Pasting a screenshot inserts it, and pasting a YouTube embed inserts the
+   *  video; every other paste falls through to the textarea's own handling. */
   function onBodyPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const text = e.clipboardData.getData("text/plain");
+    if (/<iframe\b/i.test(text)) {
+      const id = youTubeId(text);
+      if (id) {
+        e.preventDefault();
+        insertVideo(id);
+        return;
+      }
+    }
     const file = Array.from(e.clipboardData.files).find((f) => f.type.startsWith("image/"));
     if (!file) return;
     e.preventDefault();
@@ -287,13 +319,15 @@ function NoteEditor({
       {preview ? (
         <div className="prose prose-sm max-w-none rounded-lg border border-neutral-200 p-4 dark:prose-invert dark:border-neutral-700">
           {/* `img` is overridden so `sbimg:` references resolve to stored rows,
-              and the URL sanitizer is widened to let that scheme survive. */}
+              and the URL sanitizer is widened to let that scheme survive.
+              `a` turns a bare YouTube URL into a player; `normalizeEmbeds`
+              catches embed `<iframe>`s that reached the body some other way. */}
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
-            components={{ img: NoteImage }}
+            components={{ img: NoteImage, a: NoteLink }}
             urlTransform={noteUrlTransform}
           >
-            {body || t("notes.noContent")}
+            {body ? normalizeEmbeds(body) : t("notes.noContent")}
           </ReactMarkdown>
         </div>
       ) : (
@@ -303,6 +337,7 @@ function NoteEditor({
             body={body}
             onEdit={applyEdit}
             onInsertImage={(file) => { setImageError(false); void insertImage(file); }}
+            onInsertVideo={insertVideo}
           />
           {/* Relative so the mic can sit in the corner of the field itself; the
               textarea's extra bottom padding keeps long text out from under it. */}

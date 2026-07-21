@@ -89,6 +89,9 @@ npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
 - **Don't add a `key={version}` that bumps on mutations** — it remounts the view and wipes in-progress edits (this broke Notes typing). `resetNonce` is only for demo resets.
 - **The note editor debounces writes (400ms)**, flushing on unmount. Don't revert to save-per-keystroke.
 - **`ReactMarkdown` needs BOTH `components={{ img: NoteImage }}` and `urlTransform={noteUrlTransform}`** wherever note bodies render — `defaultUrlTransform` blanks any protocol outside http/https/mailto/xmpp/irc, so an `sbimg:` ref arrives as `src=""` and draws a broken-image box that reads as a load failure. Keep the override narrow (img `src` only) so `javascript:` is still killed.
+- **A YouTube video can never be an inline `<iframe>` here.** YouTube's embed needs a valid HTTP `Referer`; a packaged Tauri app serves the UI from `tauri://localhost` and has none, so every embed returns **"Error 153: Video player configuration error"** ([tauri#14422](https://github.com/tauri-apps/tauri/issues/14422) — `referrerpolicy`, `?origin=`, `withGlobalTauri` all tried, none work; the only cure, `tauri-plugin-localhost`, kills IPC). An in-app webview window doesn't rescue it either — measured: `/embed/` as that window's *top-level* document still returned 153, so the referrer check isn't about being framed. `YouTubeEmbed` therefore renders a thumbnail that opens the watch page in the **user's own browser** (`openUrl`, the opener plugin already wired up). It plays inline perfectly in `npm run dev` — that's the trap. Never "simplify" it back to an iframe without testing the packaged build.
+- **YouTube embeds are a bare URL in the body, never raw HTML.** `rehype-raw` stays out: note bodies can be written by the assistant, so widening the renderer to arbitrary HTML for one feature is the wrong trade. A bare YouTube link (remark-gfm autolinks it, so link text === href) becomes a video card via the `a: NoteLink` override; `[labelled](url)` stays a link. `normalizeEmbeds` rewrites a pasted `<iframe>` **in the preview string only**, never in what's stored — react-markdown drops raw HTML silently, so without it the video just vanishes. The card's wrapper is a `<span class="block">`; a `<div>` inside the `<p>` react-markdown emits is invalid nesting.
+- **Toolbar/paste inserts go in through `insertLine`**, which adds a newline on either side only when there isn't one — hard-coding `\n\n` leaves blank lines all through a note.
 - **Image inserts drop a placeholder token first, then swap it** — encode + write are async while the user types, so resolving the caret after the await misplaces the image. The swap matches `(token)` with parens: bare `pending-1` also matches inside `pending-11`.
 - **Icons: `lucide-react` only, no emoji.**
 - **Deep-linking into a view = `NavTarget` key + a prop consumed on mount** (`navigate` in `App.tsx`). Todos/Reminders/People guard with an `opened` ref so closing the detail can't re-open it.
@@ -161,7 +164,8 @@ src/
   lib/  i18n · format · calendars · recurrence · ics · ai · voice · weather ·
         images · browserDb · notifications · settings · demo
         caldav/  client · discovery · events · ical    # network client, not SQLite
-  components/  ui · Avatar · ItemMeta · ItemCard · EventForm · MarkdownToolbar · NoteImage
+  components/  ui · Avatar · ItemMeta · ItemCard · EventForm · MarkdownToolbar · NoteImage ·
+        YouTubeEmbed
         today/   registry · types · CardShell · CardBoundary · useAsync · dayData ·
                  derive · <Name>Widget    # one file per Today card
         assistant/  useAssistantChat · MessageList · Composer · AssistantPopup

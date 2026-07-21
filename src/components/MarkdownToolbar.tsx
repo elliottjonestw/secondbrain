@@ -1,10 +1,12 @@
-import { RefObject, useRef } from "react";
+import { RefObject, useRef, useState } from "react";
 import {
   Bold, Italic, Strikethrough, Heading1, Heading2, Heading3,
-  List, ListOrdered, ListChecks, Link as LinkIcon, Code, Quote, Image as ImageIcon,
+  List, ListOrdered, ListChecks, Link as LinkIcon, Code, Quote, Image as ImageIcon, SquarePlay,
 } from "lucide-react";
 import { IMAGE_ACCEPT } from "../lib/images";
 import { useTranslation } from "react-i18next";
+import { youTubeId } from "./YouTubeEmbed";
+import { Button, Modal } from "./ui";
 
 /** The result of a toolbar action: the new body plus where the caret should land. */
 export type MdEdit = { body: string; start: number; end: number };
@@ -79,6 +81,8 @@ type Props = {
   /** Insert a picked image file at the caret. Owned by the editor, which knows
    *  the note id the image has to be stored against. */
   onInsertImage: (file: File) => void;
+  /** Insert a YouTube video at the caret, by id. */
+  onInsertVideo: (id: string) => void;
 };
 
 /** Builds the action set once so the buttons and the keyboard shortcuts in
@@ -100,9 +104,21 @@ export function mdActions(body: string, start: number, end: number, labels: { te
   };
 }
 
-export default function MarkdownToolbar({ textareaRef, body, onEdit, onInsertImage }: Props) {
+export default function MarkdownToolbar({ textareaRef, body, onEdit, onInsertImage, onInsertVideo }: Props) {
   const { t } = useTranslation();
   const fileInput = useRef<HTMLInputElement>(null);
+  // `window.prompt()` is a silent no-op in WKWebView, so asking for the video
+  // takes a real dialog.
+  const [videoOpen, setVideoOpen] = useState(false);
+  const [videoInput, setVideoInput] = useState("");
+  const videoId = youTubeId(videoInput);
+
+  function addVideo() {
+    if (!videoId) return;
+    setVideoOpen(false);
+    setVideoInput("");
+    onInsertVideo(videoId);
+  }
 
   function run(pick: (a: ReturnType<typeof mdActions>) => MdEdit) {
     const el = textareaRef.current;
@@ -128,6 +144,7 @@ export default function MarkdownToolbar({ textareaRef, body, onEdit, onInsertIma
     { key: "code", icon: Code, label: t("notes.md.code"), run: () => run((a) => a.code()), group: 3 },
     { key: "quote", icon: Quote, label: t("notes.md.quote"), run: () => run((a) => a.quote()), group: 3 },
     { key: "image", icon: ImageIcon, label: t("notes.md.image"), run: () => fileInput.current?.click(), group: 4 },
+    { key: "video", icon: SquarePlay, label: t("notes.md.video"), run: () => setVideoOpen(true), group: 4 },
   ];
 
   return (
@@ -165,6 +182,31 @@ export default function MarkdownToolbar({ textareaRef, body, onEdit, onInsertIma
           e.target.value = ""; // so re-picking the same file fires again
         }}
       />
+      <Modal
+        open={videoOpen}
+        onClose={() => setVideoOpen(false)}
+        title={t("notes.md.video")}
+        footer={
+          <>
+            <Button onClick={() => setVideoOpen(false)}>{t("common.cancel")}</Button>
+            <Button variant="primary" disabled={!videoId} onClick={addVideo}>{t("common.add")}</Button>
+          </>
+        }
+      >
+        <input
+          autoFocus
+          value={videoInput}
+          onChange={(e) => setVideoInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && addVideo()}
+          placeholder={t("notes.md.videoPlaceholder")}
+          className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-blue-400 dark:border-neutral-600 dark:bg-neutral-700"
+        />
+        {/* Only complain once there's something to complain about — the field
+            starts empty and shouldn't open showing an error. */}
+        <p className="mt-2 text-xs text-neutral-400">
+          {videoInput.trim() && !videoId ? t("notes.md.videoInvalid") : t("notes.md.videoHint")}
+        </p>
+      </Modal>
     </div>
   );
 }
