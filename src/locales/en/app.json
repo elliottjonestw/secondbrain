@@ -466,6 +466,15 @@
       "videoHint": "Paste a YouTube link or its embed code — it shows in preview.",
       "videoPlay": "Watch on YouTube",
       "videoInvalid": "That doesn't look like a YouTube link.",
+      "table": "Insert table",
+      "tableSize": "{{cols}} × {{rows}} — plus a header row",
+      "tableColumns": "Columns",
+      "tableRows": "Rows",
+      "tableAlign": "Align",
+      "alignLeft": "Align left",
+      "alignCenter": "Align centre",
+      "alignRight": "Align right",
+      "tableHeader": "Header",
       "dictate": "Dictate",
       "dictating": "Dictating…"
     }

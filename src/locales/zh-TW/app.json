@@ -464,6 +464,15 @@
       "videoHint": "貼上 YouTube 連結或嵌入碼，即可顯示在預覽中。",
       "videoPlay": "在 YouTube 觀看",
       "videoInvalid": "這看起來不像 YouTube 連結。",
+      "table": "插入表格",
+      "tableSize": "{{cols}} × {{rows}}，另有標題列",
+      "tableColumns": "欄",
+      "tableRows": "列",
+      "tableAlign": "對齊",
+      "alignLeft": "靠左對齊",
+      "alignCenter": "置中對齊",
+      "alignRight": "靠右對齊",
+      "tableHeader": "標題",
       "dictate": "語音輸入",
       "dictating": "聽寫中…"
     }

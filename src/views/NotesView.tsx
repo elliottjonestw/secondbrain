@@ -338,6 +338,7 @@ function NoteEditor({
             onEdit={applyEdit}
             onInsertImage={(file) => { setImageError(false); void insertImage(file); }}
             onInsertVideo={insertVideo}
+            onInsertTable={insertLine}
           />
           {/* Relative so the mic can sit in the corner of the field itself; the
               textarea's extra bottom padding keeps long text out from under it. */}
