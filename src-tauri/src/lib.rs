@@ -50,7 +50,8 @@ pub fn run() {
         },
     ];
 
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
@@ -60,7 +61,18 @@ pub fn run() {
             tauri_plugin_sql::Builder::default()
                 .add_migrations("sqlite:secondbrain.db", migrations)
                 .build(),
-        )
+        );
+
+    // E2E only, and only when the `wdio` feature is named on the build command.
+    // These expose an automation surface; they must never be in a shipped app.
+    #[cfg(feature = "wdio")]
+    {
+        builder = builder
+            .plugin(tauri_plugin_wdio::init())
+            .plugin(tauri_plugin_wdio_webdriver::init());
+    }
+
+    builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

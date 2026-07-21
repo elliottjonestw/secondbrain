@@ -28,3 +28,13 @@ tauri-plugin-http = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# E2E testing only. Opt-in feature rather than `debug_assertions`, because these
+# embed a WebDriver server that listens on a local port — with a debug gate,
+# `npm run tauri dev` would run one during ordinary development. Nothing here is
+# compiled unless the feature is named explicitly (see `npm run test:e2e`).
+tauri-plugin-wdio = { version = "1", optional = true }
+tauri-plugin-wdio-webdriver = { version = "1", optional = true }
+
+[features]
+wdio = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
+

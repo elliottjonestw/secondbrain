@@ -19,12 +19,39 @@ import type {
   ItemType,
 } from "./types";
 
-let _db: Database | null = null;
+/** The slice of `tauri-plugin-sql`'s Database this module actually uses. Both
+ *  the native backend and the browser dev backend satisfy it. */
+export interface SqlDb {
+  select<T>(query: string, params?: unknown[]): Promise<T>;
+  execute(query: string, params?: unknown[]): Promise<{ rowsAffected: number; lastInsertId: number }>;
+}
 
-/** Lazily open the DB. Migrations run automatically on first load. */
-export async function db(): Promise<Database> {
+let _db: SqlDb | null = null;
+
+/** True inside the Tauri webview; false under `npm run dev` in a browser. */
+export function isTauri(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+/**
+ * Lazily open the DB. Migrations run automatically on first load.
+ *
+ * Outside Tauri there is no plugin to call, so a wasm SQLite stands in — see
+ * `lib/browserDb.ts`. It exists so the UI can be exercised in a browser; it is
+ * seeded with demo data and never persists.
+ */
+export async function db(): Promise<SqlDb> {
   if (!_db) {
-    _db = await Database.load("sqlite:secondbrain.db");
+    if (isTauri()) {
+      _db = (await Database.load("sqlite:secondbrain.db")) as SqlDb;
+    } else {
+      const { loadBrowserDb } = await import("./lib/browserDb");
+      _db = await loadBrowserDb();
+      // Seed only after `_db` is set: the seeder calls db() itself, and doing
+      // this inside loadBrowserDb() would re-enter this branch forever.
+      const { resetAndSeedDemo } = await import("./lib/demo");
+      await resetAndSeedDemo();
+    }
   }
   return _db;
 }

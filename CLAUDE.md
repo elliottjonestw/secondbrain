@@ -2,13 +2,13 @@
 
 Local-first life-management desktop app (Calendar, Reminders, To-Do, Notes, People) + optional AI assistant. Single user, offline, no accounts. Tauri v2 + React 19 + TypeScript + Vite + Tailwind + SQLite.
 
-**Golden rule: update [README.md](README.md) in the same session as any change to features, architecture, data model, permissions, or the AI toolset.** "Code changed but README didn't" = incomplete.
+**Golden rule: update [README.md](README.md) in the same session as any change to features, architecture, data model, permissions, or the AI toolset.**
 
 ## Commands
 
 ```bash
 npm run tauri dev      # native app (compiles Rust; first run slow)
-npm run dev            # frontend only in a browser (DB calls no-op outside Tauri)
+npm run dev            # whole app in a browser — see Testing
 npx tsc --noEmit       # after every change
 npx vite build         # after every change
 cd src-tauri && cargo check    # after touching Rust
@@ -19,113 +19,138 @@ Finish with `tsc` + `vite build` (+ `cargo check`), then the packaged build — 
 
 Runtime DB: `~/Library/Application Support/com.elliottjones.secondbrain/secondbrain.db`.
 
+## Testing
+
+Use the browser for anything the UI can show; E2E only for what needs the real runtime.
+
+**Browser — `npm run dev`.** Outside Tauri there's no sql plugin, so `db()` falls back to `lib/browserDb.ts`: SQLite as wasm, in memory, demo-seeded each load. The full UI works — click, type, paste, screenshot.
+- Runs the real `src-tauri/migrations/*.sql`, so schema can't drift and new migrations need no wiring.
+- `globalThis.__sbdb.select(sql, params)` inspects what a click wrote. Dev/browser only.
+- Nothing persists; a reload reseeds.
+- Keep `@sqlite.org/sqlite-wasm` in `optimizeDeps.exclude` — otherwise Vite breaks the module's path to the `.wasm` and the fetch "succeeds" with `index.html`.
+- Use the official build, not `sql.js`, which has no FTS5 (005 also needs trigram, SQLite ≥ 3.45).
+- **Proves SQL and UI, never runtime behaviour** — different SQLite, different bindings. It cannot catch a plugin-bridge bug.
+
+**E2E — the real app, real `tauri-plugin-sql`, real DB.**
+```bash
+npm run test:e2e:build   # tauri build --features wdio (slow; required first)
+npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
+```
+- The embedded WebDriver server is behind an **opt-in `wdio` cargo feature**, not `debug_assertions`, so ordinary `tauri dev` never opens an automation port. It must never ship in a release build.
+- `wdio.conf.ts` targets the executable *inside* the bundle (`…/Contents/MacOS/tauri-app`); spawning the `.app` gives EACCES.
+- Rebuild before running or you silently test a stale binary — the symptom is "WebDriver server did not become ready".
+- Reserve for what only the runtime answers (the plugin's JSON bridge, packaged-only APIs).
+- `tsconfig.json` includes only `src`, so `wdio.conf.ts` and `e2e/**` are **not** typechecked.
+
 ## Architecture (do not violate)
 
-1. **Thin Rust.** `lib.rs` only wires plugins + registers migrations. All logic is TypeScript, so a browser/Windows build stays a packaging change.
-2. **`src/db.ts` is the only module that touches SQLite.** (`ai.ts` runs some filtered read SQL by design — keep new query logic there or in `db.ts`, never in views.)
-3. **All event access goes through `src/lib/calendars.ts`** — it merges the SQLite calendar with CalDAV ones and routes writes. Views and `ai.ts` must never call `db.ts` event helpers or the CalDAV client directly.
-4. **Keep domain tables separate; connect via `links` + `item_tags`.** Don't collapse them into one generic table.
+1. **Thin Rust.** `lib.rs` only wires plugins + registers migrations; all logic is TypeScript, so a browser/Windows build stays a packaging change.
+2. **`src/db.ts` is the only module that touches SQLite.** (`ai.ts` runs filtered read SQL by design — keep query logic there or in `db.ts`, never in views.)
+3. **All event access goes through `src/lib/calendars.ts`**, which merges the SQLite calendar with CalDAV ones and routes writes. Views and `ai.ts` must never call `db.ts` event helpers or the CalDAV client directly.
+4. **Keep domain tables separate; connect via `links` + `item_tags`.**
 5. **Schema is CalDAV/CardDAV-ready:** UUID PKs double as iCal/vCard UIDs; syncable rows carry `created_at`, `updated_at`, `sequence`. Preserve when adding fields.
 
 ## Traps (each of these has bitten us)
 
 **Data**
-- **Never edit an applied migration** — sqlx checksums them. Add `00N_*.sql`, register in `lib.rs`, and test 001→N against a temp DB with `sqlite3` first.
-- **Notes FTS uses `trigram remove_diacritics 1`** (005), not `unicode61` — the default indexes a whole space-free CJK sentence as ONE token, and the `LIKE` fallback never fired because FTS5 accepts any codepoint >127 and "succeeds" with zero rows. **Trigram can't answer queries under 3 chars** (most Chinese words are 2), so `searchNotes` routes those to `LIKE`. Keep both paths and keep their multi-term semantics identical (both AND the terms).
-- **Note images live in `note_images`, never inline in `notes.body`.** The body holds `![alt](sbimg:<id>)` and nothing more. A data URI there hits two things at once: `listNotes` is `SELECT *` and runs on every keystroke in the search box, and `notes_fts` is a **trigram** index — measured, one 300KB image inline costs a 638KB index and a 300KB body read, versus 331 bytes and 30 bytes when split out. `NoteImage.tsx` resolves refs through a module-scoped object-URL cache.
-- **No foreign keys anywhere in this schema** — the `PRAGMA foreign_keys = ON` in 001 applies to the *migration* connection, not the runtime one, so `ON DELETE CASCADE` would silently never fire. Delete children explicitly in `db.ts` (`deleteTodo` does it for subtasks, `deleteNote` for images).
-- **NFC-normalize identity keys** (`normalizeKey`). macOS IMEs emit NFD, SQLite compares byte-wise, `tags.name` is UNIQUE — otherwise one visible tag becomes two rows.
-- **Sort text client-side with `Intl.Collator`.** SQLite has no `COLLATE UNICODE` without ICU; `NOCASE` folds ASCII only.
+- **Never edit an applied migration** — sqlx checksums them. Add `00N_*.sql`, register in `lib.rs`, test 001→N against a temp DB first.
+- **Notes FTS uses `trigram remove_diacritics 1`** (005): `unicode61` indexes a space-free CJK sentence as one token, and FTS5 accepts any codepoint >127 so the query "succeeds" with zero rows. Trigram can't answer queries under 3 chars (most Chinese words are 2), so `searchNotes` routes those to `LIKE`. Keep both paths; both must AND the terms.
+- **Note images live in `note_images`, never inline in `notes.body`** (body holds `![alt](sbimg:<id>)`). A data URI there hits `listNotes` — `SELECT *` on every search keystroke — *and* the trigram index: measured, one 300KB image costs a 638KB index inline vs 331 bytes split out. Base64 `TEXT` through the plugin bridge is not the bottleneck people assume — 400KB round-trips intact in ~3ms write / ~1ms read (`e2e/noteImages.spec.ts`).
+- **No foreign keys anywhere in this schema.** `PRAGMA foreign_keys = ON` in 001 applies to the *migration* connection, so `ON DELETE CASCADE` silently never fires. Delete children explicitly in `db.ts` (`deleteTodo` for subtasks, `deleteNote` for images).
+- **NFC-normalize identity keys** (`normalizeKey`) — macOS IMEs emit NFD, SQLite compares byte-wise, `tags.name` is UNIQUE, so one visible tag becomes two rows.
+- **Sort text client-side with `Intl.Collator`** — no `COLLATE UNICODE` without ICU; `NOCASE` folds ASCII only.
 
 **Calendars**
-- **Remote events are never stored in SQLite** — live fetch is the design, which is why CalDAV needed no migration. Don't add a remote-events table; offline caching is a separate project (`ctag`/`sync-token` + migration).
+- **Remote events are never stored in SQLite** — live fetch is the design, which is why CalDAV needed no migration. Offline caching is a separate project (`ctag`/`sync-token` + migration).
 - **Remote events have no local row**, so tags/links/people don't apply. Don't fake one.
-- **Two expansion paths on purpose:** local events use `rrule`; remote use **ical.js** because they carry `TZID` + `VTIMEZONE` that only ical.js resolves. Unifying them silently breaks cross-timezone events.
+- **Two expansion paths on purpose:** local uses `rrule`, remote uses **ical.js** for the `TZID` + `VTIMEZONE` only it resolves. Unifying them breaks cross-timezone events.
 - **Writes are ETag-guarded** (`If-Match`, `If-None-Match: *`). A 412 is a real conflict — surface it, never blind-retry.
-- **Reads fail soft:** `getOccurrences` returns `{ occurrences, errors }`. A dead iCloud must never break the local calendar.
-- **Writes emit UTC `DTSTART`, not `TZID`** (v1). Consequence: re-saving a recurring Apple event drifts an hour across DST. Fixing it means emitting `VTIMEZONE` too — dropping the UTC conversion alone produces floating times, which is worse.
+- **Reads fail soft:** `getOccurrences` returns `{ occurrences, errors }`; a dead iCloud must never break the local calendar.
+- **Writes emit UTC `DTSTART`, not `TZID`** (v1), so re-saving a recurring Apple event drifts an hour across DST. Fixing it needs `VTIMEZONE` too — dropping the UTC conversion alone gives floating times, which is worse.
 
 **Platform**
-- **External APIs must use `@tauri-apps/plugin-http`'s `fetch`**, not the webview's (CORS from `tauri://`), and the URL must be scoped in `capabilities/default.json`. Parsing the response in JS is fine.
-- **`reqwest` drops `Authorization` on cross-host redirects** and iCloud always redirects to a per-user shard, so `davRequest` sets `maxRedirections: 0` and re-attaches auth per hop. Simplifying that gives a 401 that looks like bad credentials.
+- **External APIs use `@tauri-apps/plugin-http`'s `fetch`**, not the webview's (CORS from `tauri://`), and the URL must be scoped in `capabilities/default.json`.
+- **`reqwest` drops `Authorization` on cross-host redirects** and iCloud always redirects to a per-user shard, so `davRequest` sets `maxRedirections: 0` and re-attaches auth per hop. Simplifying it gives a 401 that looks like bad credentials.
 - **`window.prompt()` is a silent no-op in WKWebView.** `confirm`/`alert` work.
 - **Mic needs `NSMicrophoneUsageDescription`** in `Info.plist` — packaged builds only.
 - **New plugin = 3 steps:** crate in `Cargo.toml`, `.plugin()` in `lib.rs`, permission in `capabilities/default.json`.
 
+**Today page**
+- **A widget is one file exporting one `TodayWidget`** (`components/today/`), registered in `registry.ts` and nowhere else; it fetches its own data and renders its own card.
+- **Every widget renders inside `CardBoundary`** — otherwise one card's throw blanks the page.
+- **Shared reads go through `dayData.ts`**, whose promise cache stops five widgets making the same query. Its revision counter is module-scoped and monotonic on purpose: a per-mount `useState(0)` collides with a cache left at revision 0 and serves stale rows.
+- **`useAsync` keeps the previous value during a reload** — blanking it flashes a skeleton on every checkbox tick. Same reason there's no Suspense.
+- **Rules two widgets share live in `derive.ts`** (day-scoping, overdue, birthdays) — the card shows them and the summary describes them, so two copies drift.
+- **Order/visibility live in `settings.todayLayout`, read via `mergeTodayLayout`** — stored ids are a *preference*, not an inventory, so new widgets must be appended and removed ones dropped. Renaming an id resets that card's position for everyone.
+- **Hiding a card stops its fetch, not just its render** (the summary is billed, the forecast is a free service). Keep fetches inside widgets; hoisting one to `TodayView` makes hidden cards pay again.
+
 **UI**
-- **A Today widget is one file exporting one `TodayWidget`** (`components/today/`), registered in `registry.ts` and nowhere else. It fetches its own data and renders its own card, so adding one touches no existing widget. `TodayView` only lays them out.
-- **Every widget renders inside `CardBoundary`.** Without it one card's throw blanks the whole page — which is exactly what a stale weather cache did. A *render* bug loses that tile only; a failed fetch isn't a throw, it comes back through `useAsync`'s `error` and stays inside the card.
-- **Shared reads go through `dayData.ts`, never straight to `db.ts`.** Its promise cache is what stops "widgets fetch independently" from becoming five copies of the same query. The revision counter is module-scoped and monotonic on purpose: a per-mount `useState(0)` would collide with a cache left at revision 0 by an earlier visit and serve rows the user has since edited.
-- **`useAsync` keeps the previous value during a reload** — blanking it flashes a skeleton on every checkbox tick. Same reason the page has no Suspense: keeping stale content visible through a refetch would need `startTransition` discipline in every widget.
-- **Rules two widgets share live in `derive.ts`** (day-scoping, overdue, birthdays). The due card shows them and the summary describes them; two copies drift and the briefing starts describing a day the card doesn't show.
-- **Order/visibility live in `settings.todayLayout`** and MUST be read through `mergeTodayLayout` — stored ids are a *preference*, not an inventory, so a widget added later has to be appended for anyone who already customised their page, and a removed one dropped. Widget ids are persisted: renaming one resets that card's position for every existing user.
-- **No drag-and-drop. HTML5 drag does not work in this WKWebView** — confirmed broken in all four places it was used (Today cards, to-do reorder, custom-field reorder, calendar reschedule). `dataTransfer.setData` + `-webkit-user-drag: element` + `user-select: none`, the fix that's supposed to work, changed nothing. Reordering is ▲/▼ buttons (also keyboard-reachable); calendar rescheduling is edit-the-event. Don't add `draggable` back — it compiles, looks right, and does nothing in the packaged app, which is why it survived this long.
-- **Hiding a Today card stops its fetch, not just its render** — the summary is billed and the forecast is someone else's free service. This is now automatic: a hidden widget isn't rendered, so it never asks. Keep fetching inside the widget and it stays that way; hoist a fetch up to `TodayView` and hidden cards start paying again.
-- **Don't add a `key={version}` that bumps on mutations** — it remounts the view and wipes in-progress edits (this broke Notes typing). `resetNonce` exists only for demo resets.
+- **No drag-and-drop. HTML5 drag does not work in this WKWebView** — confirmed broken in all four places it was used; the `dataTransfer.setData` + `-webkit-user-drag` + `user-select: none` fix changed nothing. Reordering is ▲/▼ buttons; rescheduling is edit-the-event. Don't add `draggable` back: it compiles, looks right, does nothing.
+- **Don't add a `key={version}` that bumps on mutations** — it remounts the view and wipes in-progress edits (this broke Notes typing). `resetNonce` is only for demo resets.
 - **The note editor debounces writes (400ms)**, flushing on unmount. Don't revert to save-per-keystroke.
-- **`ReactMarkdown` needs `urlTransform={noteUrlTransform}` wherever note bodies render.** Its `defaultUrlTransform` blanks every protocol outside http/https/mailto/xmpp/irc, so a `sbimg:` ref arrives as `src=""` and the browser draws its broken-image box — which looks like the image failed to load, not like the URL was stripped. `components={{ img: NoteImage }}` alone is NOT enough; both props are required. The override stays narrow (img `src` only) so `javascript:` in a note is still killed.
-- **Image inserts drop a placeholder token first, then swap it.** Encoding + the DB write are async and the user keeps typing, so resolving the caret *after* the await lands the image wherever the cursor wandered to. The swap matches `(token)` including the parens — bare `pending-1` also matches inside `pending-11`.
+- **`ReactMarkdown` needs BOTH `components={{ img: NoteImage }}` and `urlTransform={noteUrlTransform}`** wherever note bodies render — `defaultUrlTransform` blanks any protocol outside http/https/mailto/xmpp/irc, so an `sbimg:` ref arrives as `src=""` and draws a broken-image box that reads as a load failure. Keep the override narrow (img `src` only) so `javascript:` is still killed.
+- **Image inserts drop a placeholder token first, then swap it** — encode + write are async while the user types, so resolving the caret after the await misplaces the image. The swap matches `(token)` with parens: bare `pending-1` also matches inside `pending-11`.
 - **Icons: `lucide-react` only, no emoji.**
-- **The assistant's turn/voice lifecycle lives in `useAssistantChat`, not in a component.** Two surfaces run a conversation — the Assistant page and the floating popup — and `deliver`/the mic lifecycle/the speech hold-back are too delicate to exist twice. The surfaces are views over the hook; don't reimplement `deliver` in a component.
-- **Popup and page are never mounted at once** (`App` hides the popup on the assistant page). That's what keeps the hook's window-level hold-to-talk listener from registering twice — if you ever render both, scope that listener first.
-- **The popup renders in `App.tsx`, outside `<main>`.** Inside a view it would unmount on every navigation, which defeats the point: clicking an item card must navigate *and* leave the chat open.
-- **Closing the popup doesn't unmount it** (it collapses to the button), so the hook's unmount cleanup never runs — `cancelInput()` on close is what stops a hot mic sitting behind a closed window. Any new "dismissed but mounted" surface needs the same call.
-- **Hold-Space is gated on `spaceEnabled`.** The popup passes its open state: with it always-on, holding Space on any page would start an invisible recording.
-- **The calendar's bottom bar keeps its right side clear** (`pr-20`, buttons on the left) — the popup's button owns the bottom-right corner of every page. Anything new pinned bottom-right will collide with it.
-- **The assistant conversation lives in `App.tsx`, not `AssistantView`.** Item cards navigate away, which unmounts the view — owning `messages` locally silently wiped the chat on every card click. `resetNonce` still remounts the view, so a demo reset clears `chat` explicitly.
-- **Deep-linking into a view = `NavTarget` key + a prop the view consumes on mount** (`navigate` in `App.tsx`). Every type supports it; Todos/Reminders/People guard with an `opened` ref so closing the detail can't re-open it.
+- **Deep-linking into a view = `NavTarget` key + a prop consumed on mount** (`navigate` in `App.tsx`). Todos/Reminders/People guard with an `opened` ref so closing the detail can't re-open it.
+
+**Assistant surfaces**
+- **The turn/voice lifecycle lives in `useAssistantChat`, not a component** — two surfaces run a conversation (page, popup) and `deliver`/the mic lifecycle/the speech hold-back are too delicate to exist twice.
+- **The conversation itself lives in `App.tsx`, not `AssistantView`** — item cards navigate away and unmount the view, which wiped the chat on every card click. The popup also renders in `App.tsx`, outside `<main>`, so navigation doesn't close it.
+- **Popup and page are never mounted at once** (`App` hides the popup on the assistant page) — that's what stops the hook's window-level hold-to-talk listener registering twice.
+- **Closing the popup doesn't unmount it**, so unmount cleanup never runs; `cancelInput()` on close is what stops a hot mic behind a closed window. Any new "dismissed but mounted" surface needs it.
+- **Hold-Space is gated on `spaceEnabled`** — always-on, holding Space anywhere starts an invisible recording.
+- **The calendar's bottom bar keeps its right side clear** (`pr-20`) — the popup's button owns every page's bottom-right corner.
 
 ## i18n (`src/lib/i18n.ts`)
 
-- **Every user-facing string goes through `t()`.** English (`src/locales/en/app.json`) is the source of truth — `src/@types/i18next.d.ts` derives the key union from it, so a missing key is a compile error and both catalogs must stay in sync.
+- **Every user-facing string goes through `t()`.** English (`src/locales/en/app.json`) is the source of truth — `@types/i18next.d.ts` derives the key union from it, so a missing key is a compile error and both catalogs must stay in sync.
 - **Model-facing text stays English:** `SYSTEM_PROMPT`, `TOOLS` descriptions, tool `{ error }` results. `ai.ts` imports the *unlocalized* date-fns `format` for the same reason.
-- **`t` gets shadowed** by rows named `t` (`todos.map((t) => …)`). Alias the hook there: `const { t: tr } = useTranslation()`. `tsc` catches it.
-- **Use the `lib/format.ts` helpers, never raw date-fns patterns.** They go through `Intl.DateTimeFormat` because `"MMM d"` renders `7月 20` in Chinese (correct: `7月20日`) and `"h a"` gives `1 下午` (correct: `下午1時`). date-fns still decides `weekStartsOn`. The active locale lives in `format.ts`, so helpers take one arg — don't thread a locale through call sites.
-- **`<html lang>` is set at runtime.** CJK codepoints are Han-unified; a wrong `lang` shows a Traditional reader Japanese glyphs, and it drives the default TTS voice.
+- **`t` gets shadowed** by rows named `t` (`todos.map((t) => …)`) — alias the hook: `const { t: tr } = useTranslation()`.
+- **Use `lib/format.ts` helpers, never raw date-fns patterns** — they go through `Intl.DateTimeFormat` because `"MMM d"` gives `7月 20` in Chinese (correct: `7月20日`) and `"h a"` gives `1 下午` (correct: `下午1時`). date-fns still decides `weekStartsOn`. The locale lives in `format.ts`; don't thread one through call sites.
+- **`<html lang>` is set at runtime** — CJK is Han-unified, so a wrong `lang` shows a Traditional reader Japanese glyphs, and it drives the default TTS voice.
 - **Adding a language:** catalog in `src/locales/<code>/`, entry in `LANGUAGES`, case in `matchSystemLanguage`, locale in `DATE_LOCALES`.
 
 ## AI assistant (`src/lib/ai.ts`)
 
-- **Tool-calling, not context-stuffing** — agentic loop capped at `MAX_TOOL_ROUNDS`.
-- **Read tools are filtered + paginated** (`limit` default 25 / max 100, returning `total` + `truncated`). Push filters into SQL/FTS.
-- **Every text search matches TERMS, never the whole query as one substring.** `%lunch with Alex meeting%` matches nothing when the event is "Lunch with Alex" — the user's phrasing is never the stored title word-for-word, and the assistant then reports the item doesn't exist. `matchQuery` ANDs the terms and, if that finds nothing, falls back to ranked partial matches with `partial_match` set so the model confirms before acting (this is what protects deletes). `queryTerms` is shared with `db.ts` so all searches agree. SQL tools prefilter with `anyTermClause` — SQL still narrows, JS ranks.
-- **`search_events` defaults its window to `startOfDay(now)`, not `now`.** Defaulting to the current instant hid everything earlier the same day, so a 12:30 lunch became invisible at 2pm. The window still doesn't look back past today — finding older items needs an explicit `start`.
+- **Tool-calling, not context-stuffing** — agentic loop capped at `MAX_TOOL_ROUNDS`. Read tools are filtered + paginated (`limit` default 25 / max 100, returning `total` + `truncated`); push filters into SQL/FTS.
+- **Every text search matches TERMS, never the whole query as one substring** — `%lunch with Alex meeting%` finds nothing when the event is "Lunch with Alex", and the assistant then says it doesn't exist. `matchQuery` ANDs the terms, then falls back to ranked partial matches with `partial_match` set so the model confirms before acting (this protects deletes). `queryTerms` is shared with `db.ts`; SQL prefilters with `anyTermClause`, JS ranks.
+- **`search_events` defaults its window to `startOfDay(now)`** — the current instant hid a 12:30 lunch at 2pm. It won't look back past today; older items need an explicit `start`.
 - **Write tools partial-merge** (`"field" in args` distinguishes clear-to-null from leave-alone) and reuse `db.ts` upserts so `sequence`/timestamps stay right.
-- **Deletion is permanent** and there's no UI confirmation — the prompt makes the model confirm first. Adding a dialog is a deliberate change (update README).
+- **Deletion is permanent** with no UI confirmation — the prompt makes the model confirm. Adding a dialog is a deliberate change (update README).
 - **Calendar tools are multi-calendar:** `search_events` merges local + remote and returns `calendar_id`; `create_event` takes a calendar *name*, else `defaultCalendarId()`; update/delete/`get_item` take an optional `calendar_id` and otherwise scan by UID.
-- **The model doesn't believe the date unless you make it.** `dateContext` sits at the **top** of the system prompt and is repeated as a system message after the last user turn. Buried at the bottom and worded only as a scheduling rule, it was obeyed for `create_event` and ignored for arithmetic — asked a contact born in 1986's age, gpt-4o-mini answered from its training cutoff ("36"). Anything the model would otherwise *compute* from a date gets computed in TS instead: `birthdayFacts` returns `age`/`next_birthday` in the person tool results (`ageFromBirthday`/`nextBirthday` in `format.ts`, locale-free so `ai.ts` can import them).
-- **The model must emit local-offset ISO (`+08:00`), never `Z`** — `ai.ts` injects the current local time + timezone for this. A `Z` saves events at the wrong hour.
-- **Reply style is prompt-governed, not UI-governed.** The "How to answer" block in `SYSTEM_PROMPT` is what keeps replies to one or two sentences of speakable prose with no tables/lists/`**Time:**` labels — because the voice feature reads them aloud. `temperature` is 0.6 for the same reason (0.2 made the prose stiff). Tone regressions are fixed there, not in `AssistantView`.
-- **`show_items` must be told to run BEFORE the reply, as its own round.** An assistant message carrying `tool_calls` effectively never also carries user-facing `content`, so asking the model to show items "in the same turn as your answer" is unsatisfiable — it writes the prose and narrates the intent instead ("Let me show you the details."), and no cards appear. The agentic loop already expects round N = `show_items`, round N+1 = prose; keep the prompt and the tool description matching that.
-- **Prompt wording alone doesn't make `show_items` reliable** — writing prose and calling a tool compete for the same step, so the model skips it perhaps half the time. `recoverItemCards` is the backstop: when a turn ends with `sawItems && !showedItems`, it re-asks with *only* the `show_items` schema at `temperature: 0`. It requests **refs only and never regenerates the reply**, so it can't degrade prose, and it swallows its own errors — cards must never cost a good answer. Don't "simplify" it into a normal extra round.
-- **Cards come from `show_items`, nothing else.** The model explicitly lists the items it's discussing; `executeTool` takes an `emitItems` callback that only that tool uses, surfacing refs through `AskOptions.onItems`. It's a callback, not a return value, so refs still reach the UI if a later round throws. Refs are **identity only** (`ItemRef`) — `ItemCard.tsx` loads each row itself, so a card never shows what the model *said* about an item.
-- **Shown cards become follow-up context.** `ChatMessage.items` is stripped from what the model sees, but `askAssistant` injects a `shownItemsNote` system message after each assistant turn that showed cards, listing each item's id/calendar_id/occurrence_start. That's what lets "delete it" / "the lunch one" resolve without a re-search. Labels are best-effort **local** lookups (`getItemLabel`) — deliberately no network on this per-turn path; a remote event shows "(untitled)" but still carries the identity the model acts on.
-- **Key event cards on `id + occurrenceStart`.** A recurring series returns one id with many `start`s; keying on id alone collapses every occurrence into one card.
-- **`show_items` resolves the occurrence for recurring events; don't trust the model to pass `occurrence_start`.** Omitting it made the card fall back to the series' stored `dtstart` (a weekday standup showed the day the series *began*, not today). `fillOccurrenceStarts` fills the upcoming occurrence from start-of-today (local via rrule, remote via one shared ical.js fetch). The card's `occurrenceStart ?? ev.dtstart` fallback is now only a last resort.
-- **Recurring reminders have the same trap, fixed card-side.** Reminders store the series' base time and nothing in the app expanded it, so a daily 8am reminder rendered yesterday's date flagged overdue. `ItemCard` resolves the current occurrence via `nextOccurrenceFrom` (reminders are local, so plain rrule is right) and **never** flags a recurring reminder overdue — it recurs by design. Reminder rrule is otherwise display-only (`describeRrule`); there's still no reminder occurrence expansion elsewhere (SearchView/RemindersView show the base date).
-- **The prompt tells the model to preserve `sbimg:` refs verbatim.** `search_notes` returns bodies containing them, and an `update_note` that "tidies" the markdown drops the image out of the note for good — the row survives, but nothing references it.
+- **The model doesn't believe the date unless you make it.** `dateContext` sits at the **top** of the prompt and repeats after the last user turn; buried at the bottom it was obeyed for `create_event` and ignored for arithmetic. Anything it would otherwise *compute* from a date is computed in TS (`birthdayFacts` returns `age`/`next_birthday`).
+- **The model must emit local-offset ISO (`+08:00`), never `Z`** — a `Z` saves events at the wrong hour.
+- **Reply style is prompt-governed, not UI-governed.** The "How to answer" block keeps replies to one or two sentences of speakable prose with no tables/lists/`**Time:**` labels, because voice reads them aloud; `temperature` is 0.6 for the same reason. Fix tone regressions there, not in `AssistantView`.
+- **`show_items` must run BEFORE the reply, as its own round** — a message carrying `tool_calls` effectively never also carries content, so asking for cards "in the same turn" is unsatisfiable and the model just narrates intent. Keep prompt and tool description matching round N = `show_items`, N+1 = prose.
+- **Prompt wording alone doesn't make it reliable** — prose and tool calls compete for the same step. `recoverItemCards` is the backstop: on `sawItems && !showedItems` it re-asks with *only* that schema at `temperature: 0`, requesting **refs only, never regenerating the reply**, swallowing its own errors. Don't "simplify" it into a normal extra round.
+- **Cards come from `show_items`, nothing else.** `emitItems` is a callback, not a return value, so refs still reach the UI if a later round throws. Refs are **identity only** (`ItemRef`); `ItemCard.tsx` loads each row itself, so a card never shows what the model *said*.
+- **Shown cards become follow-up context** — `askAssistant` injects a `shownItemsNote` (id/calendar_id/occurrence_start) after each turn that showed cards, which is what lets "delete it" resolve without a re-search. Labels are best-effort **local** lookups; no network on this path.
+- **Key event cards on `id + occurrenceStart`** — one recurring id has many `start`s; keying on id alone collapses them into one card.
+- **`show_items` resolves the occurrence; don't trust the model to pass `occurrence_start`** — omitting it made a weekday standup show the day the series *began*. `fillOccurrenceStarts` fills it from start-of-today.
+- **Recurring reminders have the same trap, fixed card-side** — they store the series' base time, so a daily 8am reminder rendered yesterday flagged overdue. `ItemCard` resolves via `nextOccurrenceFrom` and **never** flags a recurring reminder overdue. Elsewhere reminder rrule is display-only.
+- **The prompt tells the model to preserve `sbimg:` refs verbatim** — an `update_note` that "tidies" the markdown orphans the image for good.
 - **Adding a tool:** `TOOLS` entry + `executeTool` case + `statusFor` string.
 - Settings live in `localStorage` (`settings.ts`), not SQLite, so a demo reset doesn't wipe the API key or calendar account.
 
 ## Weather (`src/lib/weather.ts`)
 
-- **Open-Meteo, chosen because it needs no key and no account.** Don't swap in a provider that requires registration — "nothing to sign up for" is the constraint, not an accident. Attribution (CC-BY) is in Settings + README.
-- **Never stored in SQLite**, same rule as remote calendar events: fetched live, cached in `localStorage` for 30 min. A forecast is stale within the hour, so persisting it just means showing yesterday's weather confidently.
-- **`current` only describes now**, so feels-like/humidity/wind/AQI are today-only; other days fall back to the daily apparent max and wind max, and skip air quality entirely. Don't render a `current` field on a day that isn't today.
-- **The forecast cache outlives the code that wrote it.** `DayWeather` is stored in `localStorage`, so *any* change to that interface must bump `CACHE_KEY` — adding `hours` without bumping shipped a `TypeError` off an unexpired entry from the previous build. `readCache` now also drops entries failing `isCurrentShape`, so the next shape change refetches instead of crashing.
-- **Air quality is a second endpoint** (`air-quality-api.open-meteo.com`, also keyless, own capability entry). It's fetched alongside the forecast with `Promise.all` and fails independently — no AQI must never mean no weather card.
-- **Bound the day range client-side** (`isForecastable`, ~90 back / 14 ahead). Out of range, the API answers `200` with `{ error: true, reason }` — not an HTTP error — so a request outside the window is a wasted round trip that also *looks* like success.
-- **`getDayWeather` never throws**; `searchPlaces` does. The tile is an enhancement on a page that works without it, but a search box that silently returns nothing is indistinguishable from "no such place".
-- **Use local `yyyy-MM-dd`, never `toISOString().slice(0,10)`** — that shifts the day westward and asks for the wrong date.
-- **The AI day summary waits on the forecast** (`weatherSettled`). Letting weather land after the briefing was written changes the summary's signature and pays for a second one. Condition text for the model is English (`englishCondition`), like everything else in `ai.ts`.
+- **Open-Meteo, because it needs no key and no account** — don't swap in a provider requiring registration. Attribution (CC-BY) is in Settings + README.
+- **Never stored in SQLite** — fetched live, cached in `localStorage` for 30 min.
+- **`current` only describes now**, so feels-like/humidity/wind/AQI are today-only; other days fall back to daily maxes and skip air quality. Don't render a `current` field on another day.
+- **Any change to `DayWeather` must bump `CACHE_KEY`** — the cache outlives the code that wrote it, and adding `hours` without bumping shipped a `TypeError`. `readCache` also drops entries failing `isCurrentShape`.
+- **Air quality is a second endpoint** (`air-quality-api.open-meteo.com`, own capability entry), fetched via `Promise.all` and failing independently — no AQI must never mean no weather card.
+- **Bound the day range client-side** (`isForecastable`, ~90 back / 14 ahead) — out of range the API answers `200` with `{ error: true }`, so it looks like success.
+- **`getDayWeather` never throws; `searchPlaces` does** — a silent empty search box is indistinguishable from "no such place".
+- **Use local `yyyy-MM-dd`, never `toISOString().slice(0,10)`** — that shifts the day westward.
+- **The AI day summary waits on the forecast** (`weatherSettled`), or the summary changes signature and pays twice. Condition text for the model is English (`englishCondition`).
 
 ## Voice (`src/lib/voice.ts`)
 
 - Pure I/O layer around `askAssistant()` — don't couple it to agent logic. Push-to-talk only.
 - **Rule (no setting):** spoke → speak the reply; typed → text only. `deliver(text, spoken)` carries this.
-- **TTS must set `utterance.lang` and pick a voice explicitly.** An unset `lang` inherits `<html lang>`, so a Chinese reply on an English voice is *silent* — a failure with no error. Normalize `_`→`-` (macOS reports `zh_TW`) and wait for `voiceschanged` (WebKit returns `[]` first call).
-- **Whisper gets a `prompt`, never a `language`** — `language` forces one and breaks bilingual speech ("提醒我 3pm 開會").
-- **Two ways to record, one lifecycle (`AssistantView`):** the mic button toggles `startMic`/`stopMic`; holding Space does the same (keydown→start, keyup→stop), skipped when an input/button/link is focused so Space still types/activates there. `startingRef`/`stopPendingRef` guard the release-before-mic-opened race — a tap that ends before `startRecording()` resolves discards the recording instead of leaving one running with no way to stop it. Don't collapse `start`/`stop` back into a single `recording`-state toggle; the state is stale during that race.
+- **TTS must set `utterance.lang` and pick a voice explicitly** — an unset `lang` inherits `<html lang>`, so a Chinese reply on an English voice is *silent*, a failure with no error. Normalize `_`→`-` (macOS reports `zh_TW`) and wait for `voiceschanged` (WebKit returns `[]` first call).
+- **Whisper gets a `prompt`, never a `language`** — `language` forces one and breaks bilingual speech.
+- **Two ways to record, one lifecycle:** mic button toggles `startMic`/`stopMic`; Space does the same, skipped when an input/button/link is focused. `startingRef`/`stopPendingRef` guard the release-before-mic-opened race. Don't collapse `start`/`stop` into one `recording` toggle; the state is stale during that race.
 
 ## Layout
 
@@ -133,17 +158,20 @@ Runtime DB: `~/Library/Application Support/com.elliottjones.secondbrain/secondbr
 src/
   db.ts        # ONLY module touching SQLite      types.ts  # + UnifiedEvent
   locales/     # en, zh-TW catalogs               @types/   # typed t() keys
-  lib/  i18n · format · calendars · recurrence · ics · ai · voice · weather · notifications · settings · demo
+  lib/  i18n · format · calendars · recurrence · ics · ai · voice · weather ·
+        images · browserDb · notifications · settings · demo
         caldav/  client · discovery · events · ical    # network client, not SQLite
-  components/  ui · Avatar · ItemMeta · ItemCard · EventForm
+  components/  ui · Avatar · ItemMeta · ItemCard · EventForm · MarkdownToolbar · NoteImage
         today/   registry · types · CardShell · CardBoundary · useAsync · dayData ·
                  derive · <Name>Widget    # one file per Today card
         assistant/  useAssistantChat · MessageList · Composer · AssistantPopup
   views/       Today · Calendar · Reminders · Todos · Notes · People · Assistant · Settings · Search
+e2e/           # WebDriver specs (real app only; not in tsconfig)
 src-tauri/
   src/lib.rs                 # plugin wiring + migrations (keep thin)
-  migrations/00N_*.sql       # 001 init · 002 lists · 003 people · 004 custom fields · 005 FTS trigram
-  capabilities/default.json  # http scope: api.openai.com + *.icloud.com + *.open-meteo.com (forecast/geocoding/air-quality) + localhost (Ollama)
+  migrations/00N_*.sql       # 001 init · 002 lists · 003 people · 004 custom fields ·
+                             #   005 FTS trigram · 006 note images
+  capabilities/default.json  # http scope: api.openai.com + *.icloud.com + *.open-meteo.com + localhost (Ollama)
 ```
 
 ## Conventions & don'ts
