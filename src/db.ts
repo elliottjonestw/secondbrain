@@ -256,6 +256,15 @@ export async function listLists(): Promise<ListRow[]> {
 export async function upsertList(input: Partial<ListRow> & { name: string }): Promise<string> {
   const d = await db();
   const name = normalizeKey(input.name);
+  // Case-insensitive uniqueness is enforced at the DB (idx_lists_name_nocase);
+  // this pre-check gives a readable error instead of a raw constraint failure
+  // and lets callers distinguish "name taken" from other failures. The id<>?
+  // guard permits renaming a list to its own name (a no-op update).
+  const clash = await d.select<{ id: string }[]>(
+    `SELECT id FROM lists WHERE name=? COLLATE NOCASE${input.id ? " AND id<>?" : ""}`,
+    input.id ? [name, input.id] : [name],
+  );
+  if (clash[0]) throw new Error(`A list named "${name}" already exists.`);
   if (input.id) {
     await d.execute("UPDATE lists SET name=?, color=? WHERE id=?", [
       name, input.color ?? null, input.id,

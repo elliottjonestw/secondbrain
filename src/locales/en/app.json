@@ -286,6 +286,7 @@
     "deleteList": "Delete list",
     "confirmDeleteList": "Delete list \"{{name}}\"? Its tasks move to another list.",
     "listNamePlaceholder": "List name…",
+    "listAlreadyExists": "A list named \"{{name}}\" already exists.",
     "addTaskPlaceholder": "Add a task…",
     "confirmDeleteTask": "Delete task \"{{title}}\"? Any subtasks are removed too.",
     "confirmDeleteSubtask": "Delete subtask \"{{title}}\"?",

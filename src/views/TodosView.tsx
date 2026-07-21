@@ -72,7 +72,17 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
     const name = newListName.trim();
     if (!name) { setAddingList(false); return; }
     const color = CATEGORY_COLORS[lists.length % CATEGORY_COLORS.length];
-    const id = await upsertList({ name, color });
+    let id: string;
+    try {
+      id = await upsertList({ name, color });
+    } catch (err) {
+      // Name already taken (lists.name is unique). Keep the input open so the
+      // user can rename rather than silently losing what they typed.
+      alert(err instanceof Error && /already exists/.test(err.message)
+        ? tr("todos.listAlreadyExists", { name })
+        : err instanceof Error ? err.message : String(err));
+      return;
+    }
     setNewListName("");
     setAddingList(false);
     await reload();

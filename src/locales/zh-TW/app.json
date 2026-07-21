@@ -284,6 +284,7 @@
     "deleteList": "刪除清單",
     "confirmDeleteList": "要刪除清單「{{name}}」嗎？其中的任務會移至其他清單。",
     "listNamePlaceholder": "清單名稱…",
+    "listAlreadyExists": "名為「{{name}}」的清單已經存在。",
     "addTaskPlaceholder": "新增任務…",
     "confirmDeleteTask": "要刪除任務「{{title}}」嗎？其子任務也會一併移除。",
     "confirmDeleteSubtask": "要刪除子任務「{{title}}」嗎？",

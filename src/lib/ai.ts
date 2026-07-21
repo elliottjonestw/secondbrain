@@ -574,7 +574,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "create_list",
-      description: "Create a new to-do list.",
+      description: "Create a new to-do list. List names must be unique (case-insensitive) — if a name is taken this returns an error; prefer updating the existing list instead of creating a duplicate.",
       parameters: {
         type: "object",
         properties: {
@@ -1365,8 +1365,15 @@ async function toolUpdateNote(args: Record<string, unknown>) {
 
 async function toolCreateList(args: Record<string, unknown>) {
   if (typeof args.name !== "string" || !args.name.trim()) return { error: "name is required." };
-  const id = await upsertList({ name: args.name.trim(), color: typeof args.color === "string" ? args.color : null });
-  return { ok: true, id };
+  try {
+    const id = await upsertList({ name: args.name.trim(), color: typeof args.color === "string" ? args.color : null });
+    return { ok: true, id };
+  } catch (e) {
+    // Most likely: a list with this name already exists (lists.name is unique,
+    // case-insensitive). Surface the message so the model can update the
+    // existing list instead of retrying the create.
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 async function toolAddTag(args: Record<string, unknown>) {

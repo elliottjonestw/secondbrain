@@ -43,8 +43,11 @@ export async function resetAndSeedDemo(): Promise<void> {
   await clearAllData();
 
   // ---- Lists ----
-  const personal = await upsertList({ name: "Personal", color: "#3b82f6" });
-  const work = await upsertList({ name: "Work", color: "#ef4444" });
+  // clearAllData() above already seeded 'personal'/'work' via ensureDefaultLists;
+  // pass those stable ids so this updates them in place instead of inserting
+  // duplicate-named rows (lists.name is now unique, see migration 007).
+  const personal = await upsertList({ id: "personal", name: "Personal", color: "#3b82f6" });
+  const work = await upsertList({ id: "work", name: "Work", color: "#ef4444" });
   const projects = await upsertList({ name: "Projects", color: "#8b5cf6" });
 
   // ---- Events (incl. recurring) ----
