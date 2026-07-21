@@ -2114,9 +2114,26 @@ export interface DaySummaryInput {
   todos: { title: string; due: string | null; priority: string; overdue: boolean }[];
   /** Birthdays today and soon. `age` is the age they turn, computed in TS. */
   birthdays: { name: string; date: string; in_days: number; age: number | null }[];
+  /**
+   * That day's forecast, if a weather location is set and the day is within the
+   * forecastable window. Condition text is English (see `englishCondition`) —
+   * it goes to the model, not the screen.
+   */
+  weather?: {
+    place: string;
+    condition: string;
+    high: number;
+    low: number;
+    unit: string;
+    precipitation: number | null;
+  } | null;
 }
 
-/** Does this day have anything at all worth summarising? */
+/**
+ * Does this day have anything at all worth summarising? Weather deliberately
+ * doesn't count: the forecast has its own tile, and a briefing that exists only
+ * to restate it would be a paid request to say what's already on screen.
+ */
 export function hasDayContent(input: DaySummaryInput): boolean {
   return (
     input.events.length > 0 || input.reminders.length > 0 ||
@@ -2161,6 +2178,14 @@ function dayDigest(input: DaySummaryInput): string {
       return `- ${b.name}, ${when}${b.age === null ? "" : `, turning ${b.age}`}`;
     }).join("\n"));
   }
+  if (input.weather) {
+    const w = input.weather;
+    parts.push(
+      `WEATHER in ${w.place}: ${w.condition}, high ${Math.round(w.high)}${w.unit}, ` +
+      `low ${Math.round(w.low)}${w.unit}` +
+      (w.precipitation === null ? "" : `, ${w.precipitation}% chance of precipitation`),
+    );
+  }
   return parts.join("\n\n");
 }
 
@@ -2173,6 +2198,9 @@ const DAY_SUMMARY_PROMPT =
   "- Lead with the shape of the day, then what matters most: what's first, what clashes, what's overdue, " +
   "whose birthday it is. Don't recite every item — the tiles below already list them.\n" +
   "- Keep times and numbers as readable digits (9:30am, 3 to-dos), never spelled out as words.\n" +
+  "- If weather is given, mention it ONLY when it would change what they do — rain or snow, a storm, a " +
+  "notably hot or cold day, or plans that look outdoor. Tie it to the day (\"take a coat for that 6pm " +
+  "walk\") instead of reciting a forecast, and say nothing about ordinary weather; it has its own tile.\n" +
   "- Address the user as \"you\". No preamble like \"Here is your summary\" and no sign-off.\n" +
   "- Only use what's in the data. Never invent an item, a time, or a person.";
 

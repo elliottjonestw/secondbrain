@@ -52,6 +52,27 @@ export interface AppSettings {
   preferredVoices: Record<string, string>;
   /** UI language: "system" to follow the OS, or a code from lib/i18n LANGUAGES. */
   language: string;
+  /**
+   * Where to show the weather for, or null for "don't". Resolved once by the
+   * Settings place search and stored whole: the Today tile then needs no
+   * geocoding lookup, so a place that has been chosen keeps working offline
+   * right up to the forecast call itself.
+   */
+  weatherLocation: WeatherLocation | null;
+  /** Temperature unit for the weather tile. Open-Meteo converts server-side. */
+  temperatureUnit: TemperatureUnit;
+}
+
+export type TemperatureUnit = "celsius" | "fahrenheit";
+
+/** A place chosen in Settings, as returned by the geocoding search. */
+export interface WeatherLocation {
+  /** Display name, e.g. "Taipei". */
+  name: string;
+  /** Region/country for disambiguation in the UI, e.g. "Taiwan". */
+  country: string;
+  latitude: number;
+  longitude: number;
 }
 
 const KEY = "secondbrain.settings";
@@ -76,6 +97,8 @@ const DEFAULTS: AppSettings = {
   speechRate: 1,
   preferredVoices: {},
   language: "system",
+  weatherLocation: null,
+  temperatureUnit: "celsius",
 };
 
 export function getSettings(): AppSettings {

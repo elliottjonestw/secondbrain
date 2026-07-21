@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Bell, Pin, Cake, Sparkles, RotateCw, ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  Bell, Pin, Cake, Sparkles, RotateCw, ChevronLeft, ChevronRight,
+  Sun, Cloud, CloudSun, CloudFog, CloudDrizzle, CloudRain, CloudSnow, CloudLightning,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { EventOccurrence, TodoRow, ReminderRow, NoteRow, PersonRow, GoTo } from "../types";
 import { listTodos, listReminders, listNotes, listPeople, toggleTodo, toggleReminder } from "../db";
@@ -10,7 +13,10 @@ import {
 } from "../lib/format";
 import { nextOccurrenceFrom } from "../lib/recurrence";
 import { summarizeDay, hasDayContent, type DaySummaryInput } from "../lib/ai";
-import { isAssistantConfigured } from "../lib/settings";
+import {
+  getDayWeather, isForecastable, weatherCondition, englishCondition, type DayWeather,
+} from "../lib/weather";
+import { isAssistantConfigured, getSettings } from "../lib/settings";
 import { currentLanguage } from "../lib/i18n";
 import { PriorityFlag } from "../components/ui";
 
@@ -119,6 +125,40 @@ function useDaySummary(input: DaySummaryInput, ready: boolean) {
   return { show, text, loading, failed, refresh: () => setNonce((n) => n + 1) };
 }
 
+/**
+ * The day's forecast, or null when there's no location set, the day is outside
+ * the window the service serves, or it simply couldn't be reached. `settled`
+ * says the answer is final — the summary waits for it so the briefing is
+ * written once, with the weather in hand, rather than twice.
+ */
+function useDayWeather(day: Date) {
+  const [weather, setWeather] = useState<DayWeather | null>(null);
+  const [settled, setSettled] = useState(false);
+  const { weatherLocation: location, temperatureUnit: unit } = getSettings();
+  // Settings are a plain object from localStorage, so a fresh identity every
+  // render — key the effect on the values instead.
+  const locKey = location ? `${location.latitude},${location.longitude},${location.name}` : "";
+
+  useEffect(() => {
+    if (!location || !isForecastable(day)) {
+      setWeather(null);
+      setSettled(true);
+      return;
+    }
+    const ctl = new AbortController();
+    let live = true;
+    setSettled(false);
+    void getDayWeather(location, day, unit, ctl.signal).then((w) => {
+      if (!live) return;
+      setWeather(w);
+      setSettled(true);
+    });
+    return () => { live = false; ctl.abort(); };
+  }, [locKey, unit, day.getTime()]);
+
+  return { weather, settled, location };
+}
+
 export default function TodayView({ onChange, goTo }: { onChange: () => void; goTo: GoTo }) {
   const { t: tr } = useTranslation();
   const [occs, setOccs] = useState<EventOccurrence[]>([]);
@@ -175,6 +215,7 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
   // Counted forward from the day on show, so stepping to next Friday lists the
   // birthdays coming up from there rather than from today.
   const birthdays = upcomingBirthdays(people, 30, day);
+  const { weather, settled: weatherSettled, location: weatherPlace } = useDayWeather(day);
 
   // Every fact the briefing may state is resolved here — occurrence times,
   // overdue flags, the age each person turns — so the model only has to write
@@ -216,8 +257,21 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
         age,
       };
     }),
+    // English condition text, like every other string the model reads.
+    weather: weather && weatherPlace
+      ? {
+          place: weatherPlace.name,
+          condition: englishCondition(weather.code),
+          high: weather.high,
+          low: weather.low,
+          unit: weather.unit,
+          precipitation: weather.precipitation,
+        }
+      : null,
   };
-  const summary = useDaySummary(summaryInput, loaded);
+  // Waits on the forecast too: letting it arrive after the briefing was written
+  // would change the signature and pay for a second one saying nearly the same.
+  const summary = useDaySummary(summaryInput, loaded && weatherSettled);
 
   return (
     <div className="mx-auto h-full max-w-4xl overflow-y-auto p-6">
@@ -327,6 +381,25 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
           )}
         </Card>
 
+        {/* Only when a location is set — an empty weather tile would just be a
+            standing advert for a setting. */}
+        {weatherPlace && (
+          <Card title={tr("today.weather", { place: weatherPlace.name })}>
+            {!weatherSettled ? (
+              <div className="space-y-2 py-1" aria-busy="true">
+                <div className="h-3 w-2/3 animate-pulse rounded bg-neutral-200 dark:bg-neutral-700" />
+                <div className="h-3 w-1/2 animate-pulse rounded bg-neutral-200 dark:bg-neutral-700" />
+              </div>
+            ) : !weather ? (
+              <Empty>
+                {isForecastable(day) ? tr("today.weatherUnavailable") : tr("today.weatherOutOfRange")}
+              </Empty>
+            ) : (
+              <WeatherBody weather={weather} />
+            )}
+          </Card>
+        )}
+
         <Card title={tr("today.pinnedNotes")} onHeaderClick={() => goTo("notes")}>
           {pinnedNotes.length === 0 ? <Empty>{tr("today.noPinned")}</Empty> : pinnedNotes.map((n) => (
             <button key={n.id} onClick={() => goTo("notes", { noteId: n.id })} className="flex w-full items-center gap-1.5 rounded py-1 text-left hover:bg-neutral-50 dark:hover:bg-neutral-700/50">
@@ -394,6 +467,45 @@ function upcomingBirthdays(people: PersonRow[], within: number, from: Date): Upc
     });
   }
   return out.sort((a, b) => a.days - b.days);
+}
+
+/** lucide components for the icon names `weatherCondition` returns. */
+const WEATHER_ICONS = {
+  "sun": Sun,
+  "cloud-sun": CloudSun,
+  "cloud": Cloud,
+  "cloud-fog": CloudFog,
+  "cloud-drizzle": CloudDrizzle,
+  "cloud-rain": CloudRain,
+  "cloud-snow": CloudSnow,
+  "cloud-lightning": CloudLightning,
+} as const;
+
+function WeatherBody({ weather }: { weather: DayWeather }) {
+  const { t: tr } = useTranslation();
+  const condition = weatherCondition(weather.code);
+  const Icon = WEATHER_ICONS[condition.icon];
+  // Whole degrees: the service's tenth of a degree is noise at tile size.
+  const deg = (v: number) => `${Math.round(v)}${weather.unit}`;
+  return (
+    <div className="flex items-center gap-3 py-1">
+      <Icon size={32} className="shrink-0 text-blue-500" />
+      <div className="min-w-0">
+        <div className="flex items-baseline gap-2">
+          {/* "Now" only exists on today; other days lead with the high. */}
+          <span className="text-2xl font-semibold">{deg(weather.now ?? weather.high)}</span>
+          <span className="truncate text-sm text-neutral-400">
+            {tr(`weather.conditions.${condition.label}` as "weather.conditions.clear")}
+          </span>
+        </div>
+        <div className="text-xs text-neutral-400">
+          {tr("today.weatherRange", { high: deg(weather.high), low: deg(weather.low) })}
+          {weather.precipitation !== null && weather.precipitation > 0 &&
+            ` · ${tr("today.weatherPrecipitation", { percent: weather.precipitation })}`}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function Card({ title, children, onHeaderClick }: { title: string; children: React.ReactNode; onHeaderClick?: () => void }) {

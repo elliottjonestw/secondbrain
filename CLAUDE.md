@@ -88,6 +88,15 @@ Runtime DB: `~/Library/Application Support/com.elliottjones.secondbrain/secondbr
 - **Adding a tool:** `TOOLS` entry + `executeTool` case + `statusFor` string.
 - Settings live in `localStorage` (`settings.ts`), not SQLite, so a demo reset doesn't wipe the API key or calendar account.
 
+## Weather (`src/lib/weather.ts`)
+
+- **Open-Meteo, chosen because it needs no key and no account.** Don't swap in a provider that requires registration — "nothing to sign up for" is the constraint, not an accident. Attribution (CC-BY) is in Settings + README.
+- **Never stored in SQLite**, same rule as remote calendar events: fetched live, cached in `localStorage` for 30 min. A forecast is stale within the hour, so persisting it just means showing yesterday's weather confidently.
+- **Bound the day range client-side** (`isForecastable`, ~90 back / 14 ahead). Out of range, the API answers `200` with `{ error: true, reason }` — not an HTTP error — so a request outside the window is a wasted round trip that also *looks* like success.
+- **`getDayWeather` never throws**; `searchPlaces` does. The tile is an enhancement on a page that works without it, but a search box that silently returns nothing is indistinguishable from "no such place".
+- **Use local `yyyy-MM-dd`, never `toISOString().slice(0,10)`** — that shifts the day westward and asks for the wrong date.
+- **The AI day summary waits on the forecast** (`weatherSettled`). Letting weather land after the briefing was written changes the summary's signature and pays for a second one. Condition text for the model is English (`englishCondition`), like everything else in `ai.ts`.
+
 ## Voice (`src/lib/voice.ts`)
 
 - Pure I/O layer around `askAssistant()` — don't couple it to agent logic. Push-to-talk only.
@@ -102,14 +111,14 @@ Runtime DB: `~/Library/Application Support/com.elliottjones.secondbrain/secondbr
 src/
   db.ts        # ONLY module touching SQLite      types.ts  # + UnifiedEvent
   locales/     # en, zh-TW catalogs               @types/   # typed t() keys
-  lib/  i18n · format · calendars · recurrence · ics · ai · voice · notifications · settings · demo
+  lib/  i18n · format · calendars · recurrence · ics · ai · voice · weather · notifications · settings · demo
         caldav/  client · discovery · events · ical    # network client, not SQLite
   components/  ui · Avatar · ItemMeta · ItemCard · EventForm
   views/       Today · Calendar · Reminders · Todos · Notes · People · Assistant · Settings · Search
 src-tauri/
   src/lib.rs                 # plugin wiring + migrations (keep thin)
   migrations/00N_*.sql       # 001 init · 002 lists · 003 people · 004 custom fields · 005 FTS trigram
-  capabilities/default.json  # http scope: api.openai.com + *.icloud.com + localhost (Ollama)
+  capabilities/default.json  # http scope: api.openai.com + *.icloud.com + *.open-meteo.com + localhost (Ollama)
 ```
 
 ## Conventions & don'ts

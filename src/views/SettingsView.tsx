@@ -2,7 +2,7 @@ import { ReactNode, useEffect, useState } from "react";
 import {
   Eye, EyeOff, Check, CalendarDays, ExternalLink, Loader2, AlertCircle,
   Sparkles, Mic, Languages, Database, Download, Upload, LucideIcon,
-  Cloud, Server, RefreshCw, Trash2, Volume2,
+  Cloud, Server, RefreshCw, Trash2, Volume2, MapPin, X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -11,11 +11,13 @@ import {
   DEFAULT_OLLAMA_URL,
   MIN_SPEECH_RATE, MAX_SPEECH_RATE, clampSpeechRate,
   type AppSettings, type AssistantProvider, type CalDavAccount, type TtsEngine,
+  type TemperatureUnit, type WeatherLocation,
 } from "../lib/settings";
 import { listOllamaModels } from "../lib/ai";
 import {
-  LANGUAGES, SYSTEM_LANGUAGE, changeLanguage, matchSystemLanguage,
+  LANGUAGES, SYSTEM_LANGUAGE, changeLanguage, matchSystemLanguage, currentLanguage,
 } from "../lib/i18n";
+import { searchPlaces, type PlaceResult } from "../lib/weather";
 import {
   hasVoiceFor, listVoices, previewVoice, previewNaturalVoice, getLastNaturalError,
   type VoiceOption,
@@ -205,6 +207,8 @@ interface PaneProps {
 function GeneralSettings() {
   const { t } = useTranslation();
   const [language, setLanguage] = useState(getSettings().language);
+  const [location, setLocation] = useState(getSettings().weatherLocation);
+  const [unit, setUnit] = useState(getSettings().temperatureUnit);
 
   // Applied immediately rather than on a Save button: the whole point of a
   // language picker is seeing the result, and there's nothing to validate.
@@ -236,7 +240,120 @@ function GeneralSettings() {
           ))}
         </select>
       </Field>
+
+      <Field label={t("settings.general.weatherLocation")} hint={t("settings.general.weatherHint")}>
+        <WeatherLocationPicker
+          location={location}
+          onPick={(loc) => { setLocation(loc); saveSettings({ weatherLocation: loc }); }}
+        />
+      </Field>
+
+      {/* Only worth asking once there's weather to show. */}
+      {location && (
+        <Field label={t("settings.general.temperatureUnit")}>
+          <select
+            value={unit}
+            onChange={(e) => {
+              const next = e.target.value as TemperatureUnit;
+              setUnit(next);
+              saveSettings({ temperatureUnit: next });
+            }}
+            className={INPUT_CLASS}
+          >
+            <option value="celsius">{t("settings.general.celsius")}</option>
+            <option value="fahrenheit">{t("settings.general.fahrenheit")}</option>
+          </select>
+        </Field>
+      )}
     </>
+  );
+}
+
+/**
+ * Place search for the weather tile. Resolves a typed name to coordinates once,
+ * here, so the Today tile never geocodes — it just has a latitude and longitude.
+ *
+ * Search is explicit (button or Enter) rather than as-you-type: this is a
+ * third-party service being asked a question, and firing one per keystroke to
+ * set a value once is rude to it and pointless for us.
+ */
+function WeatherLocationPicker({
+  location, onPick,
+}: { location: WeatherLocation | null; onPick: (loc: WeatherLocation | null) => void }) {
+  const { t } = useTranslation();
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<PlaceResult[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  async function search() {
+    if (!query.trim()) return;
+    setBusy(true);
+    setFailed(false);
+    try {
+      setResults(await searchPlaces(query, currentLanguage()));
+    } catch {
+      setResults(null);
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** "Taipei, Taiwan" / "Springfield, Illinois, United States". */
+  const describe = (p: PlaceResult) => [p.name, p.admin, p.country].filter(Boolean).join(", ");
+
+  if (location) {
+    return (
+      <div className="flex items-center gap-2 rounded-lg border border-neutral-200 px-3 py-2 dark:border-neutral-600">
+        <MapPin size={15} className="shrink-0 text-blue-500" />
+        <span className="flex-1 truncate text-sm">
+          {[location.name, location.country].filter(Boolean).join(", ")}
+        </span>
+        <button
+          onClick={() => { onPick(null); setResults(null); setQuery(""); }}
+          className="text-neutral-400 hover:text-red-500"
+          aria-label={t("settings.general.clearLocation")}
+          title={t("settings.general.clearLocation")}
+        >
+          <X size={15} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="flex gap-2">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") void search(); }}
+          placeholder={t("settings.general.weatherPlaceholder")}
+          className={INPUT_CLASS}
+        />
+        <Button onClick={() => void search()} disabled={busy || !query.trim()}>
+          {busy ? t("common.loading") : t("settings.general.searchPlace")}
+        </Button>
+      </div>
+
+      {failed && <div className="mt-2"><Notice tone="error">{t("settings.general.placeSearchFailed")}</Notice></div>}
+      {results?.length === 0 && <p className="mt-2 text-xs text-neutral-400">{t("settings.general.noPlaces")}</p>}
+      {!!results?.length && (
+        <ul className="mt-2 overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-600">
+          {results.map((p) => (
+            <li key={`${p.latitude},${p.longitude}`}>
+              <button
+                onClick={() => onPick({ name: p.name, country: p.country, latitude: p.latitude, longitude: p.longitude })}
+                className="w-full px-3 py-2 text-left text-sm hover:bg-neutral-50 dark:hover:bg-neutral-700/50"
+              >
+                {describe(p)}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

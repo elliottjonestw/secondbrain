@@ -153,7 +153,17 @@
       "description": "Choose how the app is displayed. Your language preference is stored on this device.",
       "language": "Language",
       "systemOption": "Use system language ({{language}})",
-      "languageHint": "Dates, times and the first day of the week follow the selected language. Demo data is only available in English."
+      "languageHint": "Dates, times and the first day of the week follow the selected language. Demo data is only available in English.",
+      "weatherLocation": "Weather location",
+      "weatherHint": "Shows the forecast on your Today page. Weather data by Open-Meteo.com — no account needed, and the location is only sent when a forecast is fetched. Leave empty to turn the weather off.",
+      "weatherPlaceholder": "Search for a town or city…",
+      "searchPlace": "Search",
+      "clearLocation": "Clear location",
+      "noPlaces": "No matching places.",
+      "placeSearchFailed": "Couldn't search for places just now. Check your connection and try again.",
+      "temperatureUnit": "Temperature",
+      "celsius": "Celsius (°C)",
+      "fahrenheit": "Fahrenheit (°F)"
     },
     "voice": {
       "description": "Talk to the assistant and it replies aloud; type and it replies in text. Voice uses the same tools as the chat, so it can answer questions and make changes.",
@@ -344,7 +354,32 @@
     "recentNotes": "Recent notes",
     "noNotes": "No notes yet.",
     "birthdays": "Upcoming birthdays",
-    "noBirthdays": "No birthdays in the next 30 days."
+    "noBirthdays": "No birthdays in the next 30 days.",
+    "weather": "Weather · {{place}}",
+    "weatherRange": "High {{high}} · Low {{low}}",
+    "weatherPrecipitation": "{{percent}}% chance of rain",
+    "weatherUnavailable": "Couldn't reach the forecast.",
+    "weatherOutOfRange": "No forecast this far out."
+  },
+  "weather": {
+    "conditions": {
+      "clear": "Clear",
+      "mainlyClear": "Mainly clear",
+      "partlyCloudy": "Partly cloudy",
+      "overcast": "Overcast",
+      "fog": "Fog",
+      "drizzle": "Drizzle",
+      "freezingDrizzle": "Freezing drizzle",
+      "rain": "Rain",
+      "freezingRain": "Freezing rain",
+      "snow": "Snow",
+      "snowGrains": "Snow grains",
+      "rainShowers": "Rain showers",
+      "snowShowers": "Snow showers",
+      "thunderstorm": "Thunderstorm",
+      "thunderstormHail": "Thunderstorm with hail",
+      "unknown": "Unsettled"
+    }
   },
   "search": {
     "resultsFor": "Search results for “{{query}}”",

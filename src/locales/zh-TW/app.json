@@ -152,7 +152,17 @@
       "description": "選擇應用程式的顯示方式。語言偏好設定會儲存在此裝置上。",
       "language": "語言",
       "systemOption": "使用系統語言（{{language}}）",
-      "languageHint": "日期、時間與每週的第一天會依所選語言顯示。示範資料僅提供英文版本。"
+      "languageHint": "日期、時間與每週的第一天會依所選語言顯示。示範資料僅提供英文版本。",
+      "weatherLocation": "天氣地點",
+      "weatherHint": "在「今天」頁面顯示天氣預報。天氣資料由 Open-Meteo.com 提供，不需要帳號，地點只會在取得預報時送出。留空即可關閉天氣功能。",
+      "weatherPlaceholder": "搜尋城市或鄉鎮…",
+      "searchPlace": "搜尋",
+      "clearLocation": "清除地點",
+      "noPlaces": "找不到符合的地點。",
+      "placeSearchFailed": "目前無法搜尋地點，請檢查網路連線後再試一次。",
+      "temperatureUnit": "溫度單位",
+      "celsius": "攝氏 (°C)",
+      "fahrenheit": "華氏 (°F)"
     },
     "voice": {
       "description": "用說的跟助理對話，它會朗讀回覆；用打字的則以文字回覆。語音與聊天使用相同的工具，因此同樣可以查詢與修改資料。",
@@ -341,8 +351,33 @@
     "noPinned": "沒有釘選的備忘錄。",
     "recentNotes": "最近的備忘錄",
     "noNotes": "尚無備忘錄。",
+    "weather": "天氣 · {{place}}",
+    "weatherRange": "最高 {{high}} · 最低 {{low}}",
+    "weatherPrecipitation": "降雨機率 {{percent}}%",
+    "weatherUnavailable": "無法取得天氣預報。",
+    "weatherOutOfRange": "這麼久之後的天氣無法預報。",
     "birthdays": "即將到來的生日",
     "noBirthdays": "未來 30 天內沒有生日。"
+  },
+  "weather": {
+    "conditions": {
+      "clear": "晴朗",
+      "mainlyClear": "大致晴朗",
+      "partlyCloudy": "多雲時晴",
+      "overcast": "陰天",
+      "fog": "有霧",
+      "drizzle": "毛毛雨",
+      "freezingDrizzle": "凍毛雨",
+      "rain": "下雨",
+      "freezingRain": "凍雨",
+      "snow": "下雪",
+      "snowGrains": "米雪",
+      "rainShowers": "陣雨",
+      "snowShowers": "陣雪",
+      "thunderstorm": "雷雨",
+      "thunderstormHail": "雷雨伴冰雹",
+      "unknown": "天氣不穩"
+    }
   },
   "search": {
     "resultsFor": "「{{query}}」的搜尋結果",
