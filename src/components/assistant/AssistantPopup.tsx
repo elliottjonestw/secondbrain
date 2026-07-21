@@ -5,15 +5,16 @@
 // card navigates to that item and the popup must survive it, and it has to
 // float above every view rather than inside one view's scroll container.
 //
-// It shares App's `chat` state with AssistantView, so "Open in Assistant" is
-// just navigation — there is no conversation to hand over. The two are never
-// mounted at once (App hides this one on the assistant page), which is what
-// keeps the hook's window-level hold-to-talk listener from doubling up.
+// It shares App's `chat` — the transcript *and* the running turn — with
+// AssistantView, so "Open in Assistant" is just navigation: nothing is handed
+// over, because nothing moved. The hook must stay in App; owning it here meant
+// this component's unmount (App hides the popup on the assistant page) aborted
+// whatever turn was in flight and took the user's message with it.
 
 import { Component, useEffect, type ErrorInfo, type ReactNode } from "react";
 import { Sparkles, X, Maximize2, Trash2, VolumeX, AlertTriangle } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useAssistantChat, UiMessage } from "./useAssistantChat";
+import type { AssistantChat } from "./useAssistantChat";
 import MessageList from "./MessageList";
 import Composer from "./Composer";
 import type { GoTo } from "../../types";
@@ -41,24 +42,21 @@ class PopupBoundary extends Component<{ message: string; children: ReactNode }, 
 }
 
 export default function AssistantPopup({
-  messages, setMessages, goTo, open, setOpen,
+  chat, goTo, open, setOpen,
 }: {
-  messages: UiMessage[];
-  setMessages: (m: UiMessage[]) => void;
+  /** Owned by App: the transcript and the turn lifecycle, shared with the page. */
+  chat: AssistantChat;
   goTo: GoTo;
   open: boolean;
   setOpen: (v: boolean) => void;
 }) {
   const { t } = useTranslation();
-  // Hold-to-talk is only live while the window is open — otherwise holding
-  // Space on any page would start a recording with nothing on screen to show
-  // for it, and no way to tell it had started.
-  const chat = useAssistantChat({ messages, setMessages, spaceEnabled: open });
+  const messages = chat.messages;
 
-  // Closing collapses the window but keeps this component mounted, so the
-  // hook's unmount cleanup never runs: a recording started before the close
-  // would keep the mic open with no visible way to stop it, and a spoken reply
-  // would carry on with its Stop button gone.
+  // Closing collapses the window without unmounting anything (and the hook
+  // outlives this component anyway), so nothing else releases the mic: a
+  // recording started before the close would keep it open with no visible way
+  // to stop it, and a spoken reply would carry on with its Stop button gone.
   useEffect(() => { if (!open) chat.cancelInput(); }, [open]);
 
   // Escape closes, but cancels first if something is running: the key should

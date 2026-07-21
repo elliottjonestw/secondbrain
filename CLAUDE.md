@@ -101,8 +101,9 @@ npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
 
 **Assistant surfaces**
 - **The turn/voice lifecycle lives in `useAssistantChat`, not a component** — two surfaces run a conversation (page, popup) and `deliver`/the mic lifecycle/the speech hold-back are too delicate to exist twice.
+- **`useAssistantChat` is called ONCE, in `App.tsx`**, and the object passed to whichever surface is on screen. Per-surface instances aborted their own turn on unmount, and `deliver` **drops the cancelled user message** — so "Open in Assistant" straight after sending (the popup unmounts on that page) deleted what you'd just typed and read as the chat resetting. Anything that unmounts a surface mid-turn has this bug; keep the hook above them. It also makes the window-level hold-to-talk listener structurally single-instance instead of relying on the surfaces never overlapping.
 - **The conversation itself lives in `App.tsx`, not `AssistantView`** — item cards navigate away and unmount the view, which wiped the chat on every card click. The popup also renders in `App.tsx`, outside `<main>`, so navigation doesn't close it.
-- **Popup and page are never mounted at once** (`App` hides the popup on the assistant page) — that's what stops the hook's window-level hold-to-talk listener registering twice.
+- **`spaceEnabled` is computed in `App`** (`configured && (on the assistant page || popup open)`) — the surfaces no longer own it.
 - **Closing the popup doesn't unmount it**, so unmount cleanup never runs; `cancelInput()` on close is what stops a hot mic behind a closed window. Any new "dismissed but mounted" surface needs it.
 - **Hold-Space is gated on `spaceEnabled`** — always-on, holding Space anywhere starts an invisible recording.
 - **The calendar's bottom bar keeps its right side clear** (`pr-20`) — the popup's button owns every page's bottom-right corner.

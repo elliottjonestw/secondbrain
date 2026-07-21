@@ -10,7 +10,7 @@ import PeopleView from "./views/PeopleView";
 import SearchView from "./views/SearchView";
 import AssistantView from "./views/AssistantView";
 import AssistantPopup from "./components/assistant/AssistantPopup";
-import type { UiMessage } from "./components/assistant/useAssistantChat";
+import { useAssistantChat, type UiMessage } from "./components/assistant/useAssistantChat";
 import SettingsView from "./views/SettingsView";
 import type { NavTarget } from "./types";
 import { startReminderPoller, resetNotificationState } from "./lib/notifications";
@@ -60,10 +60,23 @@ export default function App() {
   const [personTarget, setPersonTarget] = useState<string | null>(null);
   // The assistant conversation lives here, not in AssistantView: clicking an
   // item card navigates away, which would otherwise unmount the chat and lose it.
-  const [chat, setChat] = useState<UiMessage[]>([]);
+  const [chatMessages, setChatMessages] = useState<UiMessage[]>([]);
   // Whether the floating chat window is expanded. Deliberately not persisted:
   // a chat window that reopens itself on every launch is worse than one click.
   const [popupOpen, setPopupOpen] = useState(false);
+  // The turn/voice lifecycle lives here for the same reason the transcript
+  // does, only more so: the popup unmounts when you navigate to the assistant
+  // page, and a hook instance owned by the popup took its in-flight turn with
+  // it — the unmount cleanup aborted the request, and deliver() drops the
+  // cancelled user message, so "Open in Assistant" right after sending wiped
+  // what you'd just typed. One instance in App means the handoff is pure
+  // navigation: the message, the thinking indicator and the reply all survive.
+  // Space-to-talk follows whichever surface is actually on screen.
+  const chat = useAssistantChat({
+    messages: chatMessages,
+    setMessages: setChatMessages,
+    spaceEnabled: isAssistantConfigured() && (view === "assistant" || popupOpen),
+  });
 
   // Each view reloads its own data after mutations and on mount; switching
   // views remounts the next one, so no global refresh signal is needed.
@@ -130,8 +143,10 @@ export default function App() {
       setSearch("");
       setView("today");
       // The chat outlives view remounts now, so the reset has to clear it —
-      // it would otherwise reference items that no longer exist.
-      setChat([]);
+      // it would otherwise reference items that no longer exist. clear() rather
+      // than setChatMessages([]) so a reply held back for speech can't land in
+      // the emptied transcript.
+      chat.clear();
       // Same reasoning for the reminder poller's "already fired" memory: the
       // ids it remembers now refer to deleted/replaced rows.
       resetNotificationState();
@@ -216,8 +231,7 @@ export default function App() {
         {view === "assistant" && (
           <AssistantView
             key={resetNonce}
-            messages={chat}
-            setMessages={setChat}
+            chat={chat}
             goTo={(v, target) => navigate(v as View, target)}
           />
         )}
@@ -234,8 +248,7 @@ export default function App() {
           state; a view change after adding a key is enough to reveal it. */}
       {view !== "assistant" && isAssistantConfigured() && (
         <AssistantPopup
-          messages={chat}
-          setMessages={setChat}
+          chat={chat}
           goTo={(v, target) => navigate(v as View, target)}
           open={popupOpen}
           setOpen={setPopupOpen}

@@ -7,8 +7,13 @@
 // and a second copy would drift. The surfaces are views over this state; none
 // of them should reimplement deliver().
 //
-// Only one surface is ever mounted at a time (the popup hides itself on the
-// assistant page), so the window-level hold-to-talk listener can't double up.
+// It is called ONCE, in App, and the resulting object is passed to whichever
+// surface is on screen. Calling it per-surface meant navigating from the popup
+// to the assistant page unmounted the running turn: the cleanup below aborted
+// it and deliver() drops the cancelled user message, so "Open in Assistant"
+// right after sending looked like the chat had reset. A single instance also
+// makes the window-level hold-to-talk listener structurally unable to double
+// up, rather than relying on the two surfaces never overlapping.
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -74,10 +79,12 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
 
   const voiceOutput = isSpeechSupported();
 
-  // Stop any speech and release the mic when the surface goes away. Without
-  // this, navigating away mid-recording (e.g. clicking a cited card) leaves the
-  // MediaRecorder + getUserMedia stream alive and the mic indicator stuck on.
-  // Aborting the in-flight turn also prevents a reply landing after unmount.
+  // Stop any speech and release the mic when the app tears down (this lives in
+  // App, so it no longer fires on navigation). Without it, a reload mid-
+  // recording leaves the MediaRecorder + getUserMedia stream alive and the mic
+  // indicator stuck on. Note the abort: any surface that ever calls this hook
+  // itself will cancel its own in-flight turn on unmount — that's the bug that
+  // put the hook up in App.
   useEffect(() => () => {
     stopSpeaking();
     // discard the held-back reply (if any) without printing it — the surface is
@@ -345,9 +352,15 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
   }
 
   return {
+    // Re-exported so a surface needs only the `chat` object: the transcript and
+    // the lifecycle that produces it always come from the same instance.
+    messages,
     input, setInput,
     loading, status, recording, speaking, heldBySpace, error, setError, busy,
     voiceOutput,
     deliver, submitTyped, stopAssistant, toggleMic, stopVoice, cancelInput, clear,
   };
 }
+
+/** What the surfaces receive. One instance, created in App. */
+export type AssistantChat = ReturnType<typeof useAssistantChat>;

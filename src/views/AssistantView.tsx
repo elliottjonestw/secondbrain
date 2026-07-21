@@ -3,7 +3,7 @@ import { Sparkles, Trash2, Settings as SettingsIcon, VolumeX } from "lucide-reac
 import { useTranslation } from "react-i18next";
 import { isAssistantConfigured } from "../lib/settings";
 import { Button } from "../components/ui";
-import { useAssistantChat, UiMessage } from "../components/assistant/useAssistantChat";
+import type { AssistantChat, UiMessage } from "../components/assistant/useAssistantChat";
 import MessageList from "../components/assistant/MessageList";
 import Composer from "../components/assistant/Composer";
 import type { GoTo } from "../types";
@@ -18,19 +18,17 @@ const SUGGESTION_KEYS = [
 export type { UiMessage };
 
 export default function AssistantView({
-  messages, setMessages, goTo,
+  chat, goTo,
 }: {
-  // Owned by App so navigating to an item and back doesn't wipe the conversation.
-  messages: UiMessage[];
-  setMessages: (m: UiMessage[]) => void;
+  // Owned by App — both the transcript and the in-flight turn — so navigating
+  // to an item and back, or arriving here from the popup mid-answer, doesn't
+  // wipe the conversation.
+  chat: AssistantChat;
   goTo: GoTo;
 }) {
   const { t } = useTranslation();
   const [keyed, setKeyed] = useState(isAssistantConfigured());
-  // Hold-to-talk only makes sense once a key is configured — without one the
-  // chat can't run, and the listener would otherwise eat Space-scroll on the
-  // "need key" screen for nothing.
-  const chat = useAssistantChat({ messages, setMessages, spaceEnabled: keyed });
+  const messages = chat.messages;
 
   useEffect(() => { setKeyed(isAssistantConfigured()); }, []);
 
