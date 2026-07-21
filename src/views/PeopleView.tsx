@@ -405,7 +405,9 @@ function TypedValueRows({
       {rows.map((r, i) => (
         <div key={i} className="flex items-center gap-2">
           <select value={r.type} onChange={(e) => update(i, { type: e.target.value })} className={selectCls}>
-            {typeOptions.map((t) => <option key={t} value={t}>{t}</option>)}
+            {typeOptions.map((o) => (
+              <option key={o} value={o}>{t(`people.typeValue.${o}`, { defaultValue: o })}</option>
+            ))}
           </select>
           <input value={r.value} onChange={(e) => update(i, { value: e.target.value })} placeholder={placeholder} className={`flex-1 ${inputBase}`} />
           <button

@@ -121,7 +121,7 @@ export default function RemindersView({ onChange, initialId }: { onChange: () =>
                 <button onClick={() => setEditing(r)} className={`flex-1 text-left ${r.completed ? "text-neutral-400 line-through" : ""}`}>
                   <div>{r.title}</div>
                   {(r.remind_at || r.due_at) && (
-                    <div className={`flex items-center gap-1 text-xs ${isOverdue(r.remind_at || r.due_at) && !r.completed ? "text-red-500" : "text-neutral-400"}`}>
+                    <div className={`flex items-center gap-1 text-xs ${isOverdue(r.remind_at || r.due_at) && !r.completed && !r.rrule ? "text-red-500" : "text-neutral-400"}`}>
                       {r.remind_at ? <><Bell size={12} /> {fmtDateTime(r.remind_at)}</> : <>{t("reminders.due", { when: fmtDateTime(r.due_at) })}</>}
                       {r.rrule && ` · ${describeRrule(r.rrule)}`}
                     </div>

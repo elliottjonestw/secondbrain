@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ItemType } from "../types";
-import { db, searchNotes, searchPeople } from "../db";
+import { db, searchNotes, searchPeople, escapeLike } from "../db";
 import { fmtDateTime } from "../lib/format";
 import { ItemCard, VIEW_FOR, targetFor } from "../components/ItemCard";
 import type { GoTo } from "../types";
@@ -16,11 +16,11 @@ export default function SearchView({ query, goTo }: { query: string; goTo: GoTo 
     const q = query.trim();
     if (!q) { setHits([]); return; }
     void (async () => {
-      const like = `%${q}%`;
+      const like = `%${escapeLike(q)}%`;
       const d = await db();
-      const events = await d.select<any[]>("SELECT id, summary, dtstart FROM events WHERE summary LIKE ? OR description LIKE ? OR location LIKE ?", [like, like, like]);
-      const reminders = await d.select<any[]>("SELECT id, title, due_at FROM reminders WHERE title LIKE ? OR notes LIKE ?", [like, like]);
-      const todos = await d.select<any[]>("SELECT id, title, due_at FROM todos WHERE title LIKE ? OR notes LIKE ?", [like, like]);
+      const events = await d.select<any[]>("SELECT id, summary, dtstart FROM events WHERE summary LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR location LIKE ? ESCAPE '\\'", [like, like, like]);
+      const reminders = await d.select<any[]>("SELECT id, title, due_at FROM reminders WHERE title LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\'", [like, like]);
+      const todos = await d.select<any[]>("SELECT id, title, due_at FROM todos WHERE title LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\'", [like, like]);
       const notes = await searchNotes(q);
       const people = await searchPeople(q);
 
@@ -29,7 +29,7 @@ export default function SearchView({ query, goTo }: { query: string; goTo: GoTo 
         ...reminders.map((r) => ({ type: "reminder" as ItemType, id: r.id, label: r.title, sub: r.due_at ? t("card.due", { when: fmtDateTime(r.due_at) }) : "" })),
         ...todos.map((td) => ({ type: "todo" as ItemType, id: td.id, label: td.title, sub: td.due_at ? t("card.due", { when: fmtDateTime(td.due_at) }) : "" })),
         ...notes.map((n) => ({ type: "note" as ItemType, id: n.id, label: n.title || t("common.untitled"), sub: (n.body ?? "").slice(0, 60) })),
-        ...people.map((p) => ({ type: "person" as ItemType, id: p.id, label: p.full_name || "New contact", sub: p.organization || p.nickname || "" })),
+        ...people.map((p) => ({ type: "person" as ItemType, id: p.id, label: p.full_name || t("people.newContact"), sub: p.organization || p.nickname || "" })),
       ]);
     })();
   }, [query]);

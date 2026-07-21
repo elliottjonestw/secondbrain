@@ -77,7 +77,7 @@ function extFor(mime: string): string {
 }
 
 /** Transcribe recorded audio to text. Returns "" if nothing was heard. */
-export async function transcribe(blob: Blob): Promise<string> {
+export async function transcribe(blob: Blob, signal?: AbortSignal): Promise<string> {
   const { openaiApiKey, sttModel } = getSettings();
   const key = openaiApiKey.trim();
   if (!key) throw new Error(i18next.t("errors.noApiKey"));
@@ -101,6 +101,7 @@ export async function transcribe(blob: Blob): Promise<string> {
     method: "POST",
     headers: { Authorization: `Bearer ${key}` },
     body: form,
+    signal,
   });
 
   if (!res.ok) {

@@ -721,7 +721,7 @@ function DataSettings() {
         <p className="mb-4 text-xs leading-relaxed text-neutral-400">
           {t("settings.data.exportHint")}
         </p>
-        <Button variant="primary" onClick={() => void doExport()}>
+        <Button variant="primary" disabled={busy !== null} onClick={() => void doExport()}>
           {busy === "export" ? (
             <span className="flex items-center gap-1.5">
               <Loader2 size={15} className="animate-spin" /> {t("settings.data.exporting")}
@@ -744,7 +744,7 @@ function DataSettings() {
         <p className="mb-4 text-xs leading-relaxed text-neutral-400">
           {t("settings.data.importHint")}
         </p>
-        <Button onClick={() => void doImport()}>
+        <Button disabled={busy !== null} onClick={() => void doImport()}>
           {busy === "import" ? (
             <span className="flex items-center gap-1.5">
               <Loader2 size={15} className="animate-spin" /> {t("settings.data.importing")}
@@ -762,7 +762,7 @@ function DataSettings() {
         <p className="mb-4 text-xs leading-relaxed text-neutral-400">
           {t("settings.data.resetHint")}
         </p>
-        <Button variant="danger" onClick={() => void doReset()}>
+        <Button variant="danger" disabled={busy !== null} onClick={() => void doReset()}>
           {busy === "reset" ? (
             <span className="flex items-center gap-1.5">
               <Loader2 size={15} className="animate-spin" /> {t("settings.data.resetting")}

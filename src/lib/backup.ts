@@ -94,8 +94,15 @@ export async function applyBackup(text: string): Promise<ImportResult> {
     throw new Error(i18next.t("settings.data.errorInvalid"));
   }
   const backup = parsed as Partial<BackupFile>;
-  if (!backup || backup.app !== "secondbrain" || typeof backup.tables !== "object") {
+  if (!backup || backup.app !== "secondbrain" || typeof backup.tables !== "object" ||
+      typeof backup.version !== "number") {
     throw new Error(i18next.t("settings.data.errorInvalid"));
+  }
+  // Refuse backups from a newer app: importTables would silently drop columns
+  // and tables it doesn't recognize, losing data the user can't see is missing.
+  // Same-version and older-version backups apply normally.
+  if (backup.version > BACKUP_VERSION) {
+    throw new Error(i18next.t("settings.data.errorNewer"));
   }
 
   // Keep only known tables; anything else in the file is ignored. importTables

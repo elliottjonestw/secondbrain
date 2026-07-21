@@ -43,6 +43,9 @@ export default function AssistantView({
   const recRef = useRef<Recording | null>(null);
   const startingRef = useRef(false);     // startRecording() is in flight
   const stopPendingRef = useRef(false);  // released before recording began
+  // AbortController for the in-flight assistant turn, so the user can stop a
+  // runaway model (or a hung Ollama load) instead of waiting on MAX_TOOL_ROUNDS.
+  const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const voiceOutput = isSpeechSupported();
@@ -51,8 +54,16 @@ export default function AssistantView({
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, loading]);
-  // Stop any speech when leaving the page.
-  useEffect(() => () => stopSpeaking(), []);
+  // Stop any speech and release the mic when leaving the page. Without this,
+  // navigating away mid-recording (e.g. clicking a cited card) leaves the
+  // MediaRecorder + getUserMedia stream alive and the mic indicator stuck on.
+  // Aborting the in-flight turn also prevents a reply landing after unmount.
+  useEffect(() => () => {
+    stopSpeaking();
+    abortRef.current?.abort();
+    recRef.current?.cancel();
+    recRef.current = null;
+  }, []);
 
   // Hold-to-talk: press and hold Space to record, release to send. Refs keep
   // the listener stable while always calling the latest closures (so stopMic
@@ -108,6 +119,10 @@ export default function AssistantView({
     setInput("");
     setLoading(true);
     setStatus(t("status.thinking"));
+    // A fresh controller per turn. Aborting it cancels the in-flight fetch and
+    // any pending round before it starts.
+    const controller = new AbortController();
+    abortRef.current = controller;
     // show_items can fire more than once in a turn (and once more from the
     // card-recovery round), so collect, de-dupe, and attach the whole set to
     // the reply once it arrives. Same key the cards render with.
@@ -116,6 +131,7 @@ export default function AssistantView({
     try {
       const reply = await askAssistant(next, {
         onStatus: setStatus,
+        signal: controller.signal,
         onItems: (items) => {
           for (const it of items) {
             const key = `${it.type}:${it.id}:${it.occurrenceStart ?? ""}`;
@@ -135,10 +151,22 @@ export default function AssistantView({
         }, 300);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // A user cancel is not an error to surface — they asked for it.
+      if ((e as Error)?.name === "AbortError" || controller.signal.aborted) {
+        // Drop the cancelled user turn so it doesn't sit there with no reply.
+        setMessages(next.slice(0, -1));
+      } else {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
+      abortRef.current = null;
       setLoading(false);
     }
+  }
+
+  /** Cancel an in-flight assistant turn (Stop button). No-op if nothing running. */
+  function stopAssistant() {
+    abortRef.current?.abort();
   }
 
   function submitTyped() {
@@ -186,15 +214,24 @@ export default function AssistantView({
     setRecording(false);
     setLoading(true);
     setStatus(t("assistant.transcribing"));
+    // The controller covers the transcription fetch; deliver() creates its own
+    // for the chat phase. One ref so Stop works in both.
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const blob = await rec.stop();
-      const text = await transcribe(blob);
+      const text = await transcribe(blob, controller.signal);
+      abortRef.current = null;
       setLoading(false);
       if (!text) { setError(t("assistant.notHeard")); return; }
       await deliver(text, true);
     } catch (e) {
+      abortRef.current = null;
       setLoading(false);
-      setError(e instanceof Error ? e.message : String(e));
+      // User cancelled the transcription: don't surface it as an error.
+      if (!((e as Error)?.name === "AbortError" || controller.signal.aborted)) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     }
   }
 
@@ -304,10 +341,11 @@ export default function AssistantView({
           ))}
 
           {loading && (
-            <div className="flex justify-start">
+            <div className="flex items-center gap-2">
               <div className="flex items-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm text-neutral-400 shadow-sm ring-1 ring-neutral-200 dark:bg-neutral-800 dark:ring-neutral-700">
                 <Sparkles size={14} className="animate-pulse text-blue-400" /> {status}
               </div>
+              <Button variant="ghost" onClick={stopAssistant}>{t("common.cancel")}</Button>
             </div>
           )}
 

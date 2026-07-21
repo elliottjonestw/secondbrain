@@ -155,7 +155,7 @@ function NoteEditor({
 
       {preview ? (
         <div className="prose prose-sm max-w-none rounded-lg border border-neutral-200 p-4 dark:prose-invert dark:border-neutral-700">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{body || "*Nothing here yet.*"}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{body || t("notes.noContent")}</ReactMarkdown>
         </div>
       ) : (
         <textarea

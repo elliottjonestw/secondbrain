@@ -250,6 +250,22 @@ export async function deleteList(id: string): Promise<void> {
   await d.execute("DELETE FROM lists WHERE id=?", [id]);
 }
 
+/**
+ * Seed the default Personal/Work lists if none exist. The app invariant is
+ * "always at least one list" (deleteList refuses the last one, and todos need a
+ * list_id), but clearAllData wipes `lists` and migration 002 only runs once —
+ * so after a reset (or a restore of a backup with no lists) the invariant is
+ * broken unless we re-seed here. OR IGNORE keeps it a no-op when rows exist or
+ * the ids already came back from a restore.
+ */
+export async function ensureDefaultLists(): Promise<void> {
+  const d = await db();
+  await d.execute(
+    "INSERT OR IGNORE INTO lists (id, name, color) VALUES (?,?,?), (?,?,?)",
+    ["personal", "Personal", "#3b82f6", "work", "Work", "#ef4444"],
+  );
+}
+
 export async function listTodos(): Promise<TodoRow[]> {
   return (await db()).select<TodoRow[]>(
     "SELECT * FROM todos ORDER BY position IS NULL, position ASC, created_at ASC",
@@ -384,6 +400,16 @@ export function queryTerms(query: string): string[] {
 }
 
 /**
+ * Escape the LIKE wildcard characters so a user's `%` or `_` is matched
+ * literally. Pair with `ESCAPE '\'` on the LIKE clause. Backslash is the
+ * escape char, so it must be escaped first. `\` itself is not special to
+ * SQLite patterns otherwise.
+ */
+export function escapeLike(s: string): string {
+  return s.replace(/[\\%_]/g, (c) => "\\" + c);
+}
+
+/**
  * Full-text search over notes.
  *
  * Two paths on purpose: FTS5 (ranked) when the trigram index can answer the
@@ -403,8 +429,8 @@ export async function searchNotes(query: string): Promise<NoteRow[]> {
   const likeSearch = () => {
     const terms = queryTerms(q);
     if (terms.length === 0) return Promise.resolve([] as NoteRow[]);
-    const clause = terms.map(() => "(title LIKE ? OR body LIKE ?)").join(" AND ");
-    const params = terms.flatMap((t) => [`%${t}%`, `%${t}%`]);
+    const clause = terms.map(() => "(title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')").join(" AND ");
+    const params = terms.flatMap((t) => [`%${escapeLike(t)}%`, `%${escapeLike(t)}%`]);
     return d.select<NoteRow[]>(
       `SELECT * FROM notes WHERE ${clause} ORDER BY updated_at DESC`,
       params,
@@ -461,8 +487,10 @@ export async function searchPeople(query: string): Promise<PersonRow[]> {
   const terms = queryTerms(q);
   if (terms.length === 0) return listPeople();
   const FIELDS = ["full_name", "nickname", "organization", "emails", "phones"];
-  const clause = terms.map(() => `(${FIELDS.map((f) => `${f} LIKE ?`).join(" OR ")})`).join(" AND ");
-  const params = terms.flatMap((t) => FIELDS.map(() => `%${t}%`));
+  const clause = terms
+    .map(() => `(${FIELDS.map((f) => `${f} LIKE ? ESCAPE '\\'`).join(" OR ")})`)
+    .join(" AND ");
+  const params = terms.flatMap((t) => FIELDS.map(() => `%${escapeLike(t)}%`));
   const rows = await (await db()).select<PersonRow[]>(
     `SELECT * FROM people WHERE ${clause}`,
     params,
@@ -551,9 +579,14 @@ export async function deletePerson(id: string): Promise<void> {
 export interface CustomFieldDef { id: string; label: string; position: number }
 
 export async function listCustomFields(): Promise<CustomFieldDef[]> {
-  return (await db()).select<CustomFieldDef[]>(
-    "SELECT * FROM person_custom_fields ORDER BY position ASC, label COLLATE NOCASE ASC",
+  const rows = await (await db()).select<CustomFieldDef[]>(
+    "SELECT * FROM person_custom_fields ORDER BY position ASC",
   );
+  // Secondary sort key is the label. COLLATE NOCASE folds ASCII only, so it
+  // misorders accented and CJK labels — sort the tiebreak locale-aware instead,
+  // matching listTags/listPeople (position still wins as the primary key).
+  const c = collator();
+  return [...rows].sort((a, b) => a.position - b.position || c.compare(a.label, b.label));
 }
 
 /** Add a global custom-field label if it doesn't already exist (case-insensitive). */
@@ -571,16 +604,27 @@ export async function ensureCustomField(label: string): Promise<CustomFieldDef> 
   return { id, label: trimmed, position };
 }
 
-/** Delete a global custom field and strip its values from every person. */
+/**
+ * Delete a global custom field and strip its values from every person.
+ *
+ * tauri-plugin-sql exposes no JS-side transaction (its `execute` runs each call
+ * on an arbitrary pooled connection), so this can't be made atomic the way a
+ * real BEGIN/COMMIT would. To keep a crash in the most recoverable state, the
+ * per-person values are stripped FIRST and the def is deleted LAST: an
+ * interrupted call then leaves the def present with empty values (the editor
+ * still shows the field) rather than a def gone with orphaned values.
+ */
 export async function deleteCustomFieldDef(id: string): Promise<void> {
   const d = await db();
   const rows = await d.select<CustomFieldDef[]>("SELECT * FROM person_custom_fields WHERE id = ?", [id]);
   const def = rows[0];
   if (!def) return;
-  await d.execute("DELETE FROM person_custom_fields WHERE id = ?", [id]);
+
+  // Strip the value from every person first.
   const people = await d.select<{ id: string; custom_fields: string | null }[]>(
     "SELECT id, custom_fields FROM people WHERE custom_fields IS NOT NULL",
   );
+  const now = nowIso();
   for (const p of people) {
     let arr: PersonCustomField[];
     try { arr = JSON.parse(p.custom_fields!); } catch { continue; }
@@ -589,10 +633,13 @@ export async function deleteCustomFieldDef(id: string): Promise<void> {
     if (next.length !== arr.length) {
       await d.execute(
         "UPDATE people SET custom_fields = ?, sequence = sequence + 1, updated_at = ? WHERE id = ?",
-        [next.length ? JSON.stringify(next) : null, nowIso(), p.id],
+        [next.length ? JSON.stringify(next) : null, now, p.id],
       );
     }
   }
+  // Then drop the shared def. Doing this last means an interruption leaves the
+  // def in place (editor shows an empty field) instead of orphaning values.
+  await d.execute("DELETE FROM person_custom_fields WHERE id = ?", [id]);
 }
 
 export async function reorderCustomFields(ids: string[]): Promise<void> {
@@ -636,11 +683,14 @@ export async function untagItem(tagId: string, type: ItemType, itemId: string): 
 }
 
 export async function tagsForItem(type: ItemType, itemId: string): Promise<TagRow[]> {
-  return (await db()).select<TagRow[]>(
+  const rows = await (await db()).select<TagRow[]>(
     `SELECT t.* FROM tags t JOIN item_tags it ON it.tag_id = t.id
-     WHERE it.item_type=? AND it.item_id=? ORDER BY t.name`,
+     WHERE it.item_type=? AND it.item_id=?`,
     [type, itemId],
   );
+  // ORDER BY t.name is codepoint order; sort locale-aware to match listTags, so
+  // the tags inline on a card aren't ordered differently from the Tags list.
+  return byName(rows, (t) => t.name);
 }
 
 // ---------------------------------------------------------------------------
@@ -742,21 +792,88 @@ export async function exportTables(): Promise<Record<DataTable, Row[]>> {
  * Only columns that actually exist on each table are inserted — a stray or
  * renamed column in the file is dropped rather than throwing, and the column
  * whitelist also stops arbitrary JSON keys reaching the SQL string.
+ *
+ * Atomicity: tauri-plugin-sql multiplexes calls across a pool of connections,
+ * so a `BEGIN` in one `execute` and a `COMMIT` in another can land on different
+ * connections and leak a dangling transaction. We therefore don't rely on a
+ * cross-call transaction — instead we snapshot the current data first and, if
+ * any table's swap throws, restore the snapshot so the user is never left with
+ * a half-empty DB. Every row is validated up front (each must be a plain
+ * object) so a malformed file is rejected before anything is deleted.
+ *
+ * Identity keys (tags.name, lists.name, person_custom_fields.label) are
+ * NFC-normalized on insert, so a backup produced elsewhere can't reintroduce
+ * the NFD/NFC duplicate bug that normalizeKey exists to prevent.
  */
 export async function importTables(
   tables: Partial<Record<DataTable, Row[]>>,
 ): Promise<void> {
   const d = await db();
-  for (const t of DATA_TABLES) await d.execute(`DELETE FROM ${t}`);
-  for (const t of DATA_TABLES) {
-    const rows = tables[t];
-    if (!rows?.length) continue;
-    const allowed = await columnsOf(t);
+
+  // Validate + normalize every row BEFORE touching the DB, so a malformed file
+  // is rejected with nothing deleted.
+  const allowedByTable = new Map<DataTable, Set<string>>();
+  for (const t of DATA_TABLES) allowedByTable.set(t, await columnsOf(t));
+  const cleanedByTable = new Map<DataTable, { cols: string[]; params: unknown[] }[]>();
+  for (const table of DATA_TABLES) {
+    const rows = tables[table] ?? [];
+    if (!rows.length) continue;
+    const allowed = allowedByTable.get(table)!;
+    const identityCol = IDENTITY_KEY_COLS[table];
+    const cleaned: { cols: string[]; params: unknown[] }[] = [];
     for (const row of rows) {
+      if (!row || typeof row !== "object" || Array.isArray(row)) {
+        throw new Error(`Invalid row in backup table "${table}"`);
+      }
+      const cols = Object.keys(row).filter((c) => allowed.has(c));
+      if (!cols.length) continue;
+      cleaned.push({
+        cols,
+        params: cols.map((c) =>
+          c === identityCol ? normalizeKey(String(row[c])) : row[c],
+        ),
+      });
+    }
+    if (cleaned.length) cleanedByTable.set(table, cleaned);
+  }
+
+  // Snapshot the current data so we can fully roll back if any table swap fails.
+  const snapshot = await exportTables();
+
+  try {
+    for (const table of DATA_TABLES) {
+      await d.execute(`DELETE FROM ${table}`);
+      const cleaned = cleanedByTable.get(table);
+      if (!cleaned) continue;
+      for (const { cols, params } of cleaned) {
+        const placeholders = cols.map(() => "?").join(",");
+        await d.execute(
+          `INSERT INTO ${table} (${cols.join(",")}) VALUES (${placeholders})`,
+          params,
+        );
+      }
+    }
+  } catch (err) {
+    // Roll the whole DB back to the pre-import state.
+    await restoreSnapshot(snapshot).catch(() => { /* best-effort; the original error wins */ });
+    throw err;
+  }
+  // A backup with no lists (or one that omitted the lists table) must not leave
+  // the app unable to hold a todo — re-seed the defaults if the wipe left none.
+  await ensureDefaultLists();
+}
+
+/** Re-apply a snapshot from exportTables. Used to roll back a failed import. */
+async function restoreSnapshot(snapshot: Record<DataTable, Row[]>): Promise<void> {
+  const d = await db();
+  for (const table of DATA_TABLES) {
+    await d.execute(`DELETE FROM ${table}`);
+    const allowed = await columnsOf(table);
+    for (const row of snapshot[table] ?? []) {
       const cols = Object.keys(row).filter((c) => allowed.has(c));
       if (!cols.length) continue;
       await d.execute(
-        `INSERT INTO ${t} (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
+        `INSERT INTO ${table} (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
         cols.map((c) => row[c]),
       );
     }
@@ -768,6 +885,17 @@ async function columnsOf(table: DataTable): Promise<Set<string>> {
   const info = await (await db()).select<{ name: string }[]>(`PRAGMA table_info(${table})`);
   return new Set(info.map((c) => c.name));
 }
+
+/**
+ * Columns whose value is an identity key compared under binary collation, so
+ * they must be NFC-normalized on restore exactly like the TS write paths do.
+ * Absent from the map => no normalization.
+ */
+const IDENTITY_KEY_COLS: Partial<Record<DataTable, string>> = {
+  tags: "name",
+  lists: "name",
+  person_custom_fields: "label",
+};
 
 /** Remove tags + links referencing an item that is being deleted. */
 async function removeItemRelations(type: ItemType, id: string): Promise<void> {

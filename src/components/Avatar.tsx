@@ -27,8 +27,11 @@ export function initials(name: string): string {
 
   const first = [...parts[0]][0];
   const last = [...parts[parts.length - 1]][0];
-  // A mixed or CJK name still reads best as single characters, uncased.
-  if (CJK.test(name)) return first + last;
+  // A CJK name has no casing; render its initials as-is. Test the chosen
+  // initials, not the whole name: "Alice 王 Smith" is mixed, and testing the
+  // whole string would wrongly lowercase the Latin "A". If either initial is
+  // CJK we keep both characters uncased; otherwise uppercase (Latin convention).
+  if (CJK.test(first) || CJK.test(last)) return first + last;
   return (first + last).toUpperCase();
 }
 

@@ -19,7 +19,7 @@ import i18next from "i18next";
 import { format, startOfDay } from "date-fns";
 import type { EventRow, ItemRef, ItemType, UnifiedEvent } from "../types";
 import {
-  db, listLists, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
+  db, listLists, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms, escapeLike,
   upsertTodo, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
   deleteTodo, deleteReminder, deleteNote, deleteList,
   listPeople, searchPeople, upsertPerson, deletePerson, createLink, deleteLink,
@@ -178,13 +178,28 @@ const PARTIAL_MATCH_NOTE =
   "No item matched every word of the query; these matched some of it, closest first. " +
   "Confirm which one the user means before acting on it.";
 
+/**
+ * Parse an event's `categories` (stored as a JSON string like '["Work"]') into
+ * the plain labels, for text search. Returns null when there's nothing usable,
+ * so matchQuery skips it like it does summary/description.
+ */
+function categoryLabels(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return null;
+    const labels = arr.filter((c): c is string => typeof c === "string");
+    return labels.length ? labels.join(" ") : null;
+  } catch { return null; }
+}
+
 /** SQL prefilter matching ANY term, so the JS ranking above has candidates to
  *  work with without loading the whole table. */
 function anyTermClause(terms: string[], columns: string[]): { clause: string; params: string[] } {
-  const one = `(${columns.map((c) => `${c} LIKE ?`).join(" OR ")})`;
+  const one = `(${columns.map((c) => `${c} LIKE ? ESCAPE '\\'`).join(" OR ")})`;
   return {
     clause: `(${terms.map(() => one).join(" OR ")})`,
-    params: terms.flatMap((t) => columns.map(() => `%${t}%`)),
+    params: terms.flatMap((t) => columns.map(() => `%${escapeLike(t)}%`)),
   };
 }
 
@@ -861,7 +876,7 @@ async function toolSearchEvents(args: Record<string, unknown>) {
   let partial = false;
   if (typeof args.query === "string" && args.query.trim()) {
     const m = matchQuery(occs, args.query, (o) => [
-      o.event.summary, o.event.description, o.event.location, o.event.categories,
+      o.event.summary, o.event.description, o.event.location, categoryLabels(o.event.categories),
     ]);
     occs = m.rows;
     partial = m.partial;
@@ -1716,7 +1731,7 @@ async function callChat(
   messages: OAIMessage[],
   // The card-recovery round narrows the toolset and cools the temperature; it's
   // a pure tool call, where sampling variety is the problem rather than the point.
-  opts: { tools?: unknown; temperature?: number } = {},
+  opts: { tools?: unknown; temperature?: number; signal?: AbortSignal } = {},
 ) {
   if (ep.provider === "ollama") return callOllama(ep, messages, opts);
 
@@ -1732,6 +1747,7 @@ async function callChat(
       // asks for natural spoken-sounding prose, which 0.2 renders stiff and formulaic.
       temperature: opts.temperature ?? 0.6,
     }),
+    signal: opts.signal,
   });
   if (!res.ok) {
     let detail = "";
@@ -1793,7 +1809,7 @@ function fromNativeMessage(msg: any): OAIMessage {
 async function callOllama(
   ep: ChatEndpoint,
   messages: OAIMessage[],
-  opts: { tools?: unknown; temperature?: number },
+  opts: { tools?: unknown; temperature?: number; signal?: AbortSignal },
 ) {
   let res: Response;
   try {
@@ -1807,8 +1823,12 @@ async function callOllama(
         stream: false,
         options: { num_ctx: OLLAMA_NUM_CTX, temperature: opts.temperature ?? 0.6 },
       }),
+      signal: opts.signal,
     });
-  } catch {
+  } catch (e) {
+    // An explicit abort surfaces a DOMException named "AbortError" — let it
+    // through untouched so the caller can tell a cancel apart from a dead server.
+    if ((e as Error)?.name === "AbortError") throw e;
     // Not running / wrong port: the fetch is rejected outright rather than
     // returning a status, so name the likely cause instead of a raw error.
     throw new Error(i18next.t("errors.ollamaUnreachable", { url: ep.base ?? ep.url }));
@@ -1871,6 +1891,7 @@ async function recoverItemCards(
   ep: ChatEndpoint,
   messages: OAIMessage[],
   emit: (items: ItemRef[]) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const ask: OAIMessage[] = [
     ...messages,
@@ -1883,7 +1904,7 @@ async function recoverItemCards(
     },
   ];
   try {
-    const data = await callChat(ep, ask, { tools: SHOW_ITEMS_TOOL, temperature: 0 });
+    const data = await callChat(ep, ask, { tools: SHOW_ITEMS_TOOL, temperature: 0, signal });
     const msg = data?.choices?.[0]?.message as OAIMessage | undefined;
     // The prompt asks the model to reply "NONE" when the answer referred to no
     // specific item — which arrives as plain content with no tool_calls, so the
@@ -1908,6 +1929,8 @@ export interface AskOptions {
    * May fire more than once per turn; treat each batch as an addition.
    */
   onItems?: (items: ItemRef[]) => void;
+  /** Abort the in-flight turn. Checked between rounds and passed to fetch. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -1974,7 +1997,10 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
   let sawItems = false;    // some tool surfaced an item worth showing
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const data = await callChat(ep, messages);
+    // A user cancel between rounds aborts cleanly rather than starting another
+    // network call that will be thrown away.
+    if (opts.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const data = await callChat(ep, messages, { signal: opts.signal });
     const msg = data?.choices?.[0]?.message as OAIMessage | undefined;
     if (!msg) throw new Error(i18next.t("errors.emptyResponse"));
 
@@ -1987,7 +2013,7 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
       // them. Ask once for just the refs, leaving the reply text alone.
       if (!showedItems && sawItems && opts.onItems) {
         opts.onStatus?.(statusFor("show_items", {}));
-        await recoverItemCards(ep, messages, opts.onItems);
+        await recoverItemCards(ep, messages, opts.onItems, opts.signal);
       }
       return msg.content;
     }

@@ -5,17 +5,20 @@
 
 import {
   db, nowIso,
+  DATA_TABLES, ensureDefaultLists,
   upsertList, upsertEvent, upsertTodo, upsertReminder, upsertNote, upsertPerson,
   ensureCustomField, tagItem, createLink,
 } from "../db";
 
-/** Remove every row from every user table (order respects nothing thanks to
- * no FK cascade, so we just clear them all). */
+/** Remove every row from every user table, then re-seed the default lists so
+ *  the "always ≥1 list" invariant survives a reset. DATA_TABLES is the single
+ *  source of truth for "every user table". */
 export async function clearAllData(): Promise<void> {
   const d = await db();
-  for (const table of ["item_tags", "links", "tags", "events", "reminders", "todos", "notes", "people", "person_custom_fields", "lists"]) {
+  for (const table of DATA_TABLES) {
     await d.execute(`DELETE FROM ${table}`);
   }
+  await ensureDefaultLists();
 }
 
 /** Build a vCard-style birthday (yyyy-mm-dd) from a day offset + year. */

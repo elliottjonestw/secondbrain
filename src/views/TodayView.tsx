@@ -8,7 +8,21 @@ import {
   startOfDay, endOfDay, fmtTime, fmtDateTime, fmtMonthDay, fmtFullDate,
   fmtRelativeDays, isOverdue, isToday,
 } from "../lib/format";
+import { nextOccurrenceFrom } from "../lib/recurrence";
 import { PriorityFlag } from "../components/ui";
+
+/**
+ * Effective due time for a reminder: the current occurrence for a recurring
+ * series (from start of today), or the stored base otherwise. Mirrors ItemCard
+ * so a daily 8am reminder shows today's 8am, not the day it was created.
+ * Returns null if the reminder has no time at all.
+ */
+function reminderWhen(r: ReminderRow): Date | null {
+  const base = r.remind_at || r.due_at;
+  if (!base) return null;
+  if (r.rrule) return nextOccurrenceFrom(base, r.rrule, startOfDay(new Date()));
+  return new Date(base);
+}
 
 export default function TodayView({ onChange, goTo }: { onChange: () => void; goTo: GoTo }) {
   const { t: tr } = useTranslation();
@@ -34,10 +48,16 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
   const dueTodos = todos.filter(
     (t) => !t.completed && t.due_at && (isToday(new Date(t.due_at)) || isOverdue(t.due_at)),
   );
-  const dueReminders = reminders.filter(
-    (r) => !r.completed && (r.remind_at || r.due_at) &&
-      (isToday(new Date(r.remind_at || r.due_at!)) || isOverdue(r.remind_at || r.due_at)),
-  );
+  const dueReminders = reminders.filter((r) => {
+    if (r.completed) return false;
+    const when = reminderWhen(r);
+    if (!when) return false;
+    // Recurring reminders recur by design — never treat them as overdue. They
+    // show when their current occurrence is today; a one-off past reminder shows
+    // because it's genuinely overdue. Matches ItemCard's reminder branch.
+    if (r.rrule) return isToday(when);
+    return isToday(when) || isOverdue(when.toISOString());
+  });
   const pinnedNotes = notes.filter((n) => n.pinned).slice(0, 5);
   const recentNotes = notes.filter((n) => !n.pinned).slice(0, 5);
   const birthdays = upcomingBirthdays(people, 30);
@@ -67,14 +87,17 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
         <Card title={tr("today.dueToday")} onHeaderClick={() => goTo("todos")}>
           {dueTodos.length === 0 && dueReminders.length === 0 ? <Empty>{tr("today.nothingDue")}</Empty> : (
             <>
-              {dueReminders.map((r) => (
-                <div key={r.id} className="flex items-center gap-2 py-1">
-                  <input type="checkbox" className="accent-blue-600" onChange={async () => { await toggleReminder(r.id, true); bump(); }} />
-                  <Bell size={14} className="shrink-0 text-neutral-400" />
-                  <span className="truncate">{r.title}</span>
-                  {isOverdue(r.remind_at || r.due_at) && <span className="text-xs text-red-500">{tr("today.overdue")}</span>}
-                </div>
-              ))}
+              {dueReminders.map((r) => {
+                const when = reminderWhen(r);
+                return (
+                  <div key={r.id} className="flex items-center gap-2 py-1">
+                    <input type="checkbox" className="accent-blue-600" onChange={async () => { await toggleReminder(r.id, true); bump(); }} />
+                    <Bell size={14} className="shrink-0 text-neutral-400" />
+                    <span className="truncate">{r.title}</span>
+                    {!r.rrule && when && isOverdue(when.toISOString()) && <span className="text-xs text-red-500">{tr("today.overdue")}</span>}
+                  </div>
+                );
+              })}
               {dueTodos.map((t) => (
                 <div key={t.id} className="flex items-center gap-2 py-1">
                   <input type="checkbox" className="accent-blue-600" onChange={async () => { await toggleTodo(t.id, true); bump(); }} />
@@ -134,8 +157,15 @@ function upcomingBirthdays(people: PersonRow[], within: number): UpcomingBirthda
     const month = Number(m[2]);
     const day = Number(m[3]);
     if (month < 1 || month > 12 || day < 1 || day > 31) continue;
-    let next = new Date(today.getFullYear(), month - 1, day);
-    if (next < today) next = new Date(today.getFullYear() + 1, month - 1, day);
+    // A Feb 29 birthday on a non-leap year would otherwise roll over to Mar 1
+    // (JS Date overflows the day-of-month). Cap to the last day of the month so
+    // it lands on Feb 28 that year — the usual convention.
+    const inYear = (year: number): Date => {
+      const lastDay = new Date(year, month, 0).getDate(); // day 0 of next month
+      return new Date(year, month - 1, Math.min(day, lastDay));
+    };
+    let next = inYear(today.getFullYear());
+    if (next < today) next = inYear(today.getFullYear() + 1);
     const days = Math.round((next.getTime() - today.getTime()) / 86400000);
     if (days > within) continue;
     out.push({

@@ -57,6 +57,14 @@
   },
   "people": {
     "newContact": "New contact",
+    "typeValue": {
+      "home": "Home",
+      "work": "Work",
+      "other": "Other",
+      "cell": "Mobile",
+      "homepage": "Homepage",
+      "social": "Social"
+    },
     "searchPlaceholder": "Search people…",
     "noneFound": "No people found.",
     "fullName": "Full name",
@@ -212,6 +220,7 @@
       "importTitle": "Import Second Brain data",
       "confirmImport": "Importing will replace ALL current data in the app with the contents of the backup file. This cannot be undone. Continue?",
       "errorInvalid": "That file isn't a valid Second Brain backup.",
+      "errorNewer": "This backup was made by a newer version of Second Brain. Update the app before restoring it.",
       "resetHeading": "Reset",
       "resetHint": "Permanently delete all your events, reminders, to-dos, notes, people, lists, tags and links. Your OpenAI key and iCloud connection are left untouched. Export a backup first if you might want this data back.",
       "resetButton": "Reset all data",
@@ -354,6 +363,7 @@
     "notConfigured": "The assistant isn't set up yet. Choose a provider in Settings — an OpenAI key or a local Ollama model.",
     "emptyResponse": "Empty response from the assistant.",
     "tooManySteps": "The assistant took too many steps without answering. Try rephrasing your question.",
+    "cancelled": "Cancelled.",
     "assistant": "Assistant error ({{status}}): {{detail}}",
     "ollamaUnreachable": "Can't reach Ollama at {{url}}. Make sure it's running (`ollama serve`).",
     "transcription": "Transcription failed ({{status}}): {{detail}}"

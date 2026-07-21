@@ -57,6 +57,14 @@
   },
   "people": {
     "newContact": "新聯絡人",
+    "typeValue": {
+      "home": "住家",
+      "work": "工作",
+      "other": "其他",
+      "cell": "行動",
+      "homepage": "首頁",
+      "social": "社群"
+    },
     "searchPlaceholder": "搜尋聯絡人…",
     "noneFound": "找不到聯絡人。",
     "fullName": "全名",
@@ -210,6 +218,7 @@
       "importTitle": "匯入 Second Brain 資料",
       "confirmImport": "匯入會以備份檔案的內容取代應用程式中的所有現有資料，且無法復原。要繼續嗎？",
       "errorInvalid": "該檔案不是有效的 Second Brain 備份。",
+      "errorNewer": "此備份是由較新版本的 Second Brain 所建立。請先更新應用程式再匯入。",
       "resetHeading": "重設",
       "resetHint": "永久刪除你所有的活動、提醒、待辦事項、筆記、聯絡人、清單、標籤與連結。你的 OpenAI 金鑰與 iCloud 連線不受影響。若日後可能需要這些資料，請先匯出備份。",
       "resetButton": "重設所有資料",
@@ -352,6 +361,7 @@
     "notConfigured": "助理尚未設定。請在「設定」中選擇服務供應者 —— OpenAI 金鑰或本機 Ollama 模型。",
     "emptyResponse": "助理回傳了空白內容。",
     "tooManySteps": "助理執行了太多步驟仍未給出答案，請換個方式提問。",
+    "cancelled": "已取消。",
     "assistant": "助理錯誤（{{status}}）：{{detail}}",
     "ollamaUnreachable": "無法連線到 {{url}} 的 Ollama。請確認它正在執行（`ollama serve`）。",
     "transcription": "轉錄失敗（{{status}}）：{{detail}}"
