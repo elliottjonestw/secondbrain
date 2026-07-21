@@ -14,6 +14,7 @@ import {
 } from "../db";
 import { Button, Modal } from "../components/ui";
 import { Avatar } from "../components/Avatar";
+import { PhotoPicker } from "../components/PhotoPicker";
 import { TagEditor, LinksPanel, LinkTarget } from "../components/ItemMeta";
 
 // Type presets for the multi-value editors (matches vCard TYPE params).
@@ -242,7 +243,7 @@ function PersonEditor({
     <div className="mx-auto max-w-3xl p-6">
       {/* Header */}
       <div className="mb-4 flex items-center gap-4">
-        <Avatar name={display} photo={form.photo} size={56} />
+        <PhotoPicker name={display} value={form.photo} onChange={(photo) => patch({ photo })} size={56} />
         <input
           value={form.full_name}
           onChange={(e) => patch({ full_name: e.target.value })}
