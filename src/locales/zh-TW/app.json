@@ -465,7 +465,12 @@
     "clear": "清除",
     "listeningHint": "聆聽中… 點麥克風即可停止",
     "listeningHintSpace": "聆聽中…放開空白鍵即可停止",
-    "tagline": "查詢與修改 · 使用你的資料"
+    "tagline": "查詢與修改 · 使用你的資料",
+    "openChat": "詢問助理",
+    "closeChat": "關閉對話",
+    "openInAssistant": "在助理頁面開啟",
+    "popupEmpty": "不用離開這一頁，就能詢問你的一天。",
+    "popupCrashed": "對話視窗發生問題。請關閉後重新開啟，或前往助理頁面。"
   },
   "notifications": {
     "todoDue": "待辦事項到期"

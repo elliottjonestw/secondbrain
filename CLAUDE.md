@@ -62,6 +62,12 @@ Runtime DB: `~/Library/Application Support/com.elliottjones.secondbrain/secondbr
 - **Don't add a `key={version}` that bumps on mutations** — it remounts the view and wipes in-progress edits (this broke Notes typing). `resetNonce` exists only for demo resets.
 - **The note editor debounces writes (400ms)**, flushing on unmount. Don't revert to save-per-keystroke.
 - **Icons: `lucide-react` only, no emoji.**
+- **The assistant's turn/voice lifecycle lives in `useAssistantChat`, not in a component.** Two surfaces run a conversation — the Assistant page and the floating popup — and `deliver`/the mic lifecycle/the speech hold-back are too delicate to exist twice. The surfaces are views over the hook; don't reimplement `deliver` in a component.
+- **Popup and page are never mounted at once** (`App` hides the popup on the assistant page). That's what keeps the hook's window-level hold-to-talk listener from registering twice — if you ever render both, scope that listener first.
+- **The popup renders in `App.tsx`, outside `<main>`.** Inside a view it would unmount on every navigation, which defeats the point: clicking an item card must navigate *and* leave the chat open.
+- **Closing the popup doesn't unmount it** (it collapses to the button), so the hook's unmount cleanup never runs — `cancelInput()` on close is what stops a hot mic sitting behind a closed window. Any new "dismissed but mounted" surface needs the same call.
+- **Hold-Space is gated on `spaceEnabled`.** The popup passes its open state: with it always-on, holding Space on any page would start an invisible recording.
+- **The calendar's bottom bar keeps its right side clear** (`pr-20`, buttons on the left) — the popup's button owns the bottom-right corner of every page. Anything new pinned bottom-right will collide with it.
 - **The assistant conversation lives in `App.tsx`, not `AssistantView`.** Item cards navigate away, which unmounts the view — owning `messages` locally silently wiped the chat on every card click. `resetNonce` still remounts the view, so a demo reset clears `chat` explicitly.
 - **Deep-linking into a view = `NavTarget` key + a prop the view consumes on mount** (`navigate` in `App.tsx`). Every type supports it; Todos/Reminders/People guard with an `opened` ref so closing the detail can't re-open it.
 
@@ -127,6 +133,7 @@ src/
   components/  ui · Avatar · ItemMeta · ItemCard · EventForm
         today/   registry · types · CardShell · CardBoundary · useAsync · dayData ·
                  derive · <Name>Widget    # one file per Today card
+        assistant/  useAssistantChat · MessageList · Composer · AssistantPopup
   views/       Today · Calendar · Reminders · Todos · Notes · People · Assistant · Settings · Search
 src-tauri/
   src/lib.rs                 # plugin wiring + migrations (keep thin)

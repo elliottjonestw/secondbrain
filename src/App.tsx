@@ -8,10 +8,13 @@ import TodosView from "./views/TodosView";
 import NotesView from "./views/NotesView";
 import PeopleView from "./views/PeopleView";
 import SearchView from "./views/SearchView";
-import AssistantView, { UiMessage } from "./views/AssistantView";
+import AssistantView from "./views/AssistantView";
+import AssistantPopup from "./components/assistant/AssistantPopup";
+import type { UiMessage } from "./components/assistant/useAssistantChat";
 import SettingsView from "./views/SettingsView";
 import type { NavTarget } from "./types";
 import { startReminderPoller, resetNotificationState } from "./lib/notifications";
+import { isAssistantConfigured } from "./lib/settings";
 import { db } from "./db";
 import { resetAndSeedDemo } from "./lib/demo";
 import { Modal, Button } from "./components/ui";
@@ -56,6 +59,9 @@ export default function App() {
   // The assistant conversation lives here, not in AssistantView: clicking an
   // item card navigates away, which would otherwise unmount the chat and lose it.
   const [chat, setChat] = useState<UiMessage[]>([]);
+  // Whether the floating chat window is expanded. Deliberately not persisted:
+  // a chat window that reopens itself on every launch is worse than one click.
+  const [popupOpen, setPopupOpen] = useState(false);
 
   // Each view reloads its own data after mutations and on mount; switching
   // views remounts the next one, so no global refresh signal is needed.
@@ -215,6 +221,23 @@ export default function App() {
         {view === "settings" && <SettingsView />}
         {view === "search" && <SearchView query={search} goTo={(v, target) => navigate(v as View, target)} />}
       </main>
+
+      {/* The floating chat window: outside <main> so navigating to an item card
+          leaves it open, and so it floats above whatever view is mounted.
+          Hidden on the assistant page (it *is* the assistant page there) and
+          when there's no model configured — a button on every page that only
+          says "go to Settings" is noise. isAssistantConfigured() reads
+          localStorage, so it's recomputed on each render rather than held in
+          state; a view change after adding a key is enough to reveal it. */}
+      {view !== "assistant" && isAssistantConfigured() && (
+        <AssistantPopup
+          messages={chat}
+          setMessages={setChat}
+          goTo={(v, target) => navigate(v as View, target)}
+          open={popupOpen}
+          setOpen={setPopupOpen}
+        />
+      )}
 
       <Modal
         open={showDemoPrompt}

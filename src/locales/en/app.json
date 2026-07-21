@@ -467,7 +467,12 @@
     "clear": "Clear",
     "listeningHint": "Listening… tap the mic to stop",
     "listeningHintSpace": "Listening… release the SPACE bar to stop",
-    "tagline": "Asks and edits · works on your data"
+    "tagline": "Asks and edits · works on your data",
+    "openChat": "Ask the assistant",
+    "closeChat": "Close chat",
+    "openInAssistant": "Open in Assistant",
+    "popupEmpty": "Ask about your day without leaving this page.",
+    "popupCrashed": "The chat window ran into a problem. Close and reopen it, or open the Assistant page."
   },
   "notifications": {
     "todoDue": "Todo due"

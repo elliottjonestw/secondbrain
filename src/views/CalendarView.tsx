@@ -170,10 +170,16 @@ export default function CalendarView({ onChange, openEventId }: { onChange: () =
         )}
       </div>
 
-      {/* Bottom bar — ICS import/export, shown across all calendar views. */}
-      <div className="flex items-center justify-between gap-3 border-t border-neutral-200 px-4 py-2 dark:border-neutral-700">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="truncate text-xs text-neutral-400">{msg}</span>
+      {/* Bottom bar — ICS import/export, shown across all calendar views.
+          The buttons sit on the LEFT and the status keeps right-hand padding:
+          the assistant's floating button owns the bottom-right corner, and it
+          would otherwise cover Export outright and clip a long export path. */}
+      <div className="flex items-center justify-between gap-3 border-t border-neutral-200 py-2 pl-4 pr-20 dark:border-neutral-700">
+        <div className="flex shrink-0 gap-2">
+          <Button onClick={doImport}><span className="flex items-center gap-1.5"><Upload size={15} /> {t("calendar.importIcs")}</span></Button>
+          <Button onClick={doExport}><span className="flex items-center gap-1.5"><Download size={15} /> {t("calendar.exportIcs")}</span></Button>
+        </div>
+        <div className="flex min-w-0 items-center justify-end gap-3">
           {errors.length > 0 && (
             <span
               className="flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-400"
@@ -182,10 +188,7 @@ export default function CalendarView({ onChange, openEventId }: { onChange: () =
               <CloudOff size={12} /> {t("calendar.someUnavailable")}
             </span>
           )}
-        </div>
-        <div className="flex shrink-0 gap-2">
-          <Button onClick={doImport}><span className="flex items-center gap-1.5"><Upload size={15} /> {t("calendar.importIcs")}</span></Button>
-          <Button onClick={doExport}><span className="flex items-center gap-1.5"><Download size={15} /> {t("calendar.exportIcs")}</span></Button>
+          <span className="truncate text-xs text-neutral-400" title={msg}>{msg}</span>
         </div>
       </div>
 
