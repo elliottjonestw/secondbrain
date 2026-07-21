@@ -326,9 +326,17 @@
     "localOnlyMeta": "Tags, people and links are available on events in the built-in {{calendar}} calendar only."
   },
   "today": {
+    "summary": "Your day",
+    "refreshSummary": "Rewrite summary",
+    "summaryFailed": "Couldn't write a summary just now.",
+    "prevDay": "Previous day",
+    "nextDay": "Next day",
+    "backToToday": "Today",
     "schedule": "Schedule",
     "noEvents": "No events today.",
+    "noEventsDay": "No events on this day.",
     "dueToday": "Due today & overdue",
+    "dueOn": "Due {{date}}",
     "nothingDue": "Nothing due.",
     "overdue": "overdue",
     "pinnedNotes": "Pinned notes",

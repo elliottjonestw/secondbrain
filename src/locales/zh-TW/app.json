@@ -324,9 +324,17 @@
     "localOnlyMeta": "標籤、聯絡人與連結僅適用於內建的「{{calendar}}」行事曆中的行程。"
   },
   "today": {
+    "summary": "今日摘要",
+    "refreshSummary": "重新產生摘要",
+    "summaryFailed": "目前無法產生摘要。",
+    "prevDay": "前一天",
+    "nextDay": "後一天",
+    "backToToday": "今天",
     "schedule": "行程",
     "noEvents": "今天沒有行程。",
+    "noEventsDay": "這天沒有行程。",
     "dueToday": "今天到期與逾期",
+    "dueOn": "{{date}} 到期",
     "nothingDue": "沒有到期項目。",
     "overdue": "逾期",
     "pinnedNotes": "釘選的備忘錄",

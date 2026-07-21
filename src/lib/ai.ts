@@ -20,6 +20,9 @@ import { format, startOfDay } from "date-fns";
 // Locale-free numeric/ISO helpers, so importing them here doesn't localize
 // anything the model reads.
 import { ageFromBirthday, nextBirthday } from "./format";
+// The daily summary is the one model output shown verbatim to the user, so it
+// needs the UI language by name.
+import { LANGUAGES, currentLanguage } from "./i18n";
 import type { EventRow, ItemRef, ItemType, UnifiedEvent } from "../types";
 import {
   db, listLists, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms, escapeLike,
@@ -1746,6 +1749,16 @@ function resolveChatEndpoint(s: AppSettings): ChatEndpoint {
   };
 }
 
+/**
+ * The tools for one request, or null when this call must send none at all.
+ * An empty `tools: []` is a 400 on OpenAI, so "no tools" has to mean omitting
+ * the field (and `tool_choice`) entirely — that's what the day summary wants.
+ */
+function toolsFor(tools: unknown): unknown[] | null {
+  const t = (tools ?? TOOLS) as unknown[];
+  return Array.isArray(t) && t.length === 0 ? null : t;
+}
+
 async function callChat(
   ep: ChatEndpoint,
   messages: OAIMessage[],
@@ -1755,14 +1768,14 @@ async function callChat(
 ) {
   if (ep.provider === "ollama") return callOllama(ep, messages, opts);
 
+  const tools = toolsFor(opts.tools);
   const res = await fetch(ep.url, {
     method: "POST",
     headers: ep.headers,
     body: JSON.stringify({
       model: ep.model,
       messages,
-      tools: opts.tools ?? TOOLS,
-      tool_choice: "auto",
+      ...(tools ? { tools, tool_choice: "auto" } : {}),
       // Warmer than the 0.2 this used when replies were data dumps: the prompt now
       // asks for natural spoken-sounding prose, which 0.2 renders stiff and formulaic.
       temperature: opts.temperature ?? 0.6,
@@ -1839,7 +1852,7 @@ async function callOllama(
       body: JSON.stringify({
         model: ep.model,
         messages: messages.map(toNativeMessage),
-        tools: opts.tools ?? TOOLS,
+        ...(toolsFor(opts.tools) ? { tools: toolsFor(opts.tools) } : {}),
         stream: false,
         options: { num_ctx: OLLAMA_NUM_CTX, temperature: opts.temperature ?? 0.6 },
       }),
@@ -2075,4 +2088,149 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
   }
 
   throw new Error(i18next.t("errors.tooManySteps"));
+}
+
+// --- Daily summary (Today view) ----------------------------------------------
+//
+// Deliberately NOT the agentic loop. The Today view has already loaded exactly
+// the day's data, so re-searching for it would cost several rounds to arrive at
+// facts we're holding — this is one tool-free call that only turns a digest we
+// build into prose. Everything the model would otherwise compute (overdue,
+// ages, "in 3 days") is computed by the caller and handed over as a fact.
+
+/** One day's facts, already resolved by the caller. Times are local-offset ISO. */
+export interface DaySummaryInput {
+  /**
+   * The day being summarised, as `yyyy-MM-dd`. The Today view can step to any
+   * date, so this is not necessarily today — the prompt uses it to choose past,
+   * present or future tense, which the model gets wrong left to its own devices.
+   */
+  date: string;
+  /** Occurrences falling on the day, in start order. */
+  events: { title: string; start: string; all_day: boolean; location?: string | null }[];
+  /** Reminders due on the day (or still open from before). */
+  reminders: { title: string; due: string | null; overdue: boolean }[];
+  /** To-dos due on the day (or overdue), highest priority first. */
+  todos: { title: string; due: string | null; priority: string; overdue: boolean }[];
+  /** Birthdays today and soon. `age` is the age they turn, computed in TS. */
+  birthdays: { name: string; date: string; in_days: number; age: number | null }[];
+}
+
+/** Does this day have anything at all worth summarising? */
+export function hasDayContent(input: DaySummaryInput): boolean {
+  return (
+    input.events.length > 0 || input.reminders.length > 0 ||
+    input.todos.length > 0 || input.birthdays.length > 0
+  );
+}
+
+/** Model-facing clock time. Unlocalized on purpose, like every other prompt string. */
+function digestTime(iso: string | null, allDay = false): string {
+  if (allDay) return "all day";
+  if (!iso) return "no time";
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? "no time" : format(d, "h:mm a");
+}
+
+/** The day's facts as compact lines. Empty sections are omitted, not sent as "none". */
+function dayDigest(input: DaySummaryInput): string {
+  const parts: string[] = [];
+  if (input.events.length) {
+    parts.push("EVENTS:\n" + input.events.map((e) =>
+      `- ${e.title || "(untitled)"} at ${digestTime(e.start, e.all_day)}` +
+      (e.location ? ` (${e.location})` : "")).join("\n"));
+  }
+  if (input.reminders.length) {
+    parts.push("REMINDERS:\n" + input.reminders.map((r) =>
+      `- ${r.title} at ${digestTime(r.due)}${r.overdue ? " [OVERDUE]" : ""}`).join("\n"));
+  }
+  if (input.todos.length) {
+    parts.push("TO-DOS:\n" + input.todos.map((t) =>
+      `- ${t.title} (priority ${t.priority})${t.due ? `, due ${digestTime(t.due)}` : ""}` +
+      `${t.overdue ? " [OVERDUE]" : ""}`).join("\n"));
+  }
+  if (input.birthdays.length) {
+    parts.push("BIRTHDAYS:\n" + input.birthdays.map((b) => {
+      // Relative to the day being described, not to today — the view can be
+      // showing any date, so "TODAY" would be a lie on all the others.
+      const when = b.in_days === 0
+        ? "ON THIS DAY"
+        : b.in_days === 1 ? "the day after" : `${b.in_days} days after this day`;
+      // The age is given, never derived — the model reaches for its training
+      // cutoff year the moment it has to subtract one (see dateContext).
+      return `- ${b.name}, ${when}${b.age === null ? "" : `, turning ${b.age}`}`;
+    }).join("\n"));
+  }
+  return parts.join("\n\n");
+}
+
+const DAY_SUMMARY_PROMPT =
+  "You write a short briefing about ONE DAY for the user of a personal life-management app, from the data " +
+  "below. It is displayed at the top of their Today page.\n\n" +
+  "How to write it:\n" +
+  "- Two or three sentences of ordinary prose, as if you were telling them over coffee. Under 60 words.\n" +
+  "- NEVER use bullet points, lists, headings, tables or bold labels. Prose only.\n" +
+  "- Lead with the shape of the day, then what matters most: what's first, what clashes, what's overdue, " +
+  "whose birthday it is. Don't recite every item — the tiles below already list them.\n" +
+  "- Keep times and numbers as readable digits (9:30am, 3 to-dos), never spelled out as words.\n" +
+  "- Address the user as \"you\". No preamble like \"Here is your summary\" and no sign-off.\n" +
+  "- Only use what's in the data. Never invent an item, a time, or a person.";
+
+/**
+ * One-paragraph briefing for the Today page.
+ *
+ * Callers should check `hasDayContent` first — an empty day has nothing to say
+ * and shouldn't cost a request. Throws like any other assistant call; the Today
+ * view treats a failure as "no summary" rather than an error banner, since this
+ * is an enhancement over tiles that already show the same data.
+ */
+export async function summarizeDay(input: DaySummaryInput, signal?: AbortSignal): Promise<string> {
+  const settings = getSettings();
+  const ep = resolveChatEndpoint(settings);
+  if (!ep.model || (ep.provider === "openai" && !settings.openaiApiKey.trim())) {
+    throw new Error(i18next.t("errors.notConfigured"));
+  }
+
+  const now = new Date();
+  // The summary is user-facing, so unlike every other model-facing string here
+  // it has to come back in the UI language.
+  const lang = LANGUAGES.find((l) => l.code === currentLanguage());
+  // Local midnight, not `new Date("yyyy-MM-dd")` — that parses as UTC and lands
+  // on the previous day for anyone west of Greenwich.
+  const day = new Date(`${input.date}T00:00:00`);
+  const offsetDays = Math.round(
+    (startOfDay(day).getTime() - startOfDay(now).getTime()) / 86400000,
+  );
+  // Which day is being described, and in what tense. The view can step to any
+  // date, and a briefing about next Tuesday written in the present tense ("you
+  // have standup at 9:30") reads as if it were happening now.
+  const whichDay = offsetDays === 0
+    ? "You are describing TODAY. Write in the present tense."
+    : offsetDays === 1
+      ? "You are describing TOMORROW, not today. Write in the future tense."
+      : offsetDays === -1
+        ? "You are describing YESTERDAY, not today. Write in the past tense."
+        : offsetDays > 0
+          ? `You are describing ${format(day, "EEEE, MMMM d, yyyy")}, which is ${offsetDays} days from ` +
+            "today. Write in the future tense and name the day, since it is not today."
+          : `You are describing ${format(day, "EEEE, MMMM d, yyyy")}, which is ${-offsetDays} days ago. ` +
+            "Write in the past tense and name the day, since it is not today.";
+  const messages: OAIMessage[] = [
+    {
+      role: "system",
+      content:
+        `TODAY IS ${format(now, "EEEE, MMMM d, yyyy")} and the time is now ${format(now, "h:mm a")}. ` +
+        "Your training data ends well before today; the date above is the only correct source, and every " +
+        "\"overdue\", age and day-count in the data has already been worked out for you — use them as given " +
+        `and do no date arithmetic of your own.\n\n${whichDay}\n\n` +
+        DAY_SUMMARY_PROMPT +
+        `\n- Write the summary in ${lang?.nativeName ?? "English"}.`,
+    },
+    { role: "user", content: dayDigest(input) },
+  ];
+
+  const data = await callChat(ep, messages, { tools: [], temperature: 0.6, signal });
+  const text = (data?.choices?.[0]?.message as OAIMessage | undefined)?.content;
+  if (!text?.trim()) throw new Error(i18next.t("errors.emptyResponse"));
+  return text.trim();
 }
