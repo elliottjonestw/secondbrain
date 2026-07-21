@@ -2126,6 +2126,10 @@ export interface DaySummaryInput {
     low: number;
     unit: string;
     precipitation: number | null;
+    /** Apparent temperature — often the one worth mentioning, not the air temp. */
+    feels_like: number | null;
+    /** US AQI, when the day is today and the reading came back. */
+    air_quality: number | null;
   } | null;
 }
 
@@ -2183,7 +2187,9 @@ function dayDigest(input: DaySummaryInput): string {
     parts.push(
       `WEATHER in ${w.place}: ${w.condition}, high ${Math.round(w.high)}${w.unit}, ` +
       `low ${Math.round(w.low)}${w.unit}` +
-      (w.precipitation === null ? "" : `, ${w.precipitation}% chance of precipitation`),
+      (w.precipitation === null ? "" : `, ${w.precipitation}% chance of precipitation`) +
+      (w.feels_like === null ? "" : `, feels like ${Math.round(w.feels_like)}${w.unit}`) +
+      (w.air_quality === null ? "" : `, air quality index ${Math.round(w.air_quality)} (US AQI)`),
     );
   }
   return parts.join("\n\n");
@@ -2199,8 +2205,10 @@ const DAY_SUMMARY_PROMPT =
   "whose birthday it is. Don't recite every item — the tiles below already list them.\n" +
   "- Keep times and numbers as readable digits (9:30am, 3 to-dos), never spelled out as words.\n" +
   "- If weather is given, mention it ONLY when it would change what they do — rain or snow, a storm, a " +
-  "notably hot or cold day, or plans that look outdoor. Tie it to the day (\"take a coat for that 6pm " +
-  "walk\") instead of reciting a forecast, and say nothing about ordinary weather; it has its own tile.\n" +
+  "notably hot or cold day, poor air quality (US AQI over 100), or plans that look outdoor. Prefer the " +
+  "feels-like temperature to the air temperature when they differ much, since that's what going outside " +
+  "is actually like. Tie it to the day (\"take a coat for that 6pm walk\") instead of reciting a forecast, " +
+  "and say nothing about ordinary weather; it has its own tile.\n" +
   "- Address the user as \"you\". No preamble like \"Here is your summary\" and no sign-off.\n" +
   "- Only use what's in the data. Never invent an item, a time, or a person.";
 

@@ -20,6 +20,8 @@ import type { TemperatureUnit, WeatherLocation } from "./settings";
 
 const FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
 const GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search";
+// Same platform, same keyless terms, different service.
+const AIR_QUALITY_URL = "https://air-quality-api.open-meteo.com/v1/air-quality";
 
 /**
  * How far either side of today Open-Meteo will serve. It reports the exact
@@ -32,8 +34,20 @@ const MAX_FUTURE_DAYS = 14;
 
 /** Long enough that stepping around the week is free, short enough to stay true. */
 const CACHE_TTL_MS = 30 * 60 * 1000;
-const CACHE_KEY = "secondbrain.weather";
+// Versioned: the cached object is DayWeather, so a build that changes that
+// shape must retire what earlier builds wrote rather than read it back.
+const CACHE_KEY = "secondbrain.weather.v2";
 const CACHE_MAX = 20;
+
+/** One hour of the day, for the strip across the card. */
+export interface HourWeather {
+  /** Local ISO timestamp as the service returned it. */
+  time: string;
+  temp: number;
+  code: number;
+  /** Chance of precipitation, 0–100, or null if the service didn't say. */
+  precipitation: number | null;
+}
 
 /** One day's forecast, already unit-converted by the service. */
 export interface DayWeather {
@@ -45,10 +59,47 @@ export interface DayWeather {
   precipitation: number | null;
   /** Temperature right now. Only meaningful for today, so null on other days. */
   now: number | null;
+  /**
+   * What it feels like: the current apparent temperature on today, the day's
+   * apparent high on any other. Humidity and wind can put this 7°C above the
+   * air temperature, which is the number that actually describes going outside.
+   */
+  feelsLike: number | null;
   /** "°C" / "°F", as reported by the service rather than assumed. */
   unit: string;
+  /** Relative humidity now, 0–100. Today only — `current` has no other meaning. */
+  humidity: number | null;
+  /** Wind now on today, the day's max otherwise. */
+  wind: number | null;
+  /** "km/h" / "mph", as reported. */
+  windUnit: string;
+  /** Daily maximum UV index. Available for every day, unlike the `current` block. */
+  uvIndex: number | null;
   sunrise: string | null;
   sunset: string | null;
+  /** The rest of the day, hour by hour. Empty if the service didn't return it. */
+  hours: HourWeather[];
+  /** Air quality now, from a separate endpoint. Today only, and null if it failed. */
+  air: AirQuality | null;
+}
+
+/** Current air quality. US AQI because its categories are the widely-known ones. */
+export interface AirQuality {
+  usAqi: number;
+  pm25: number | null;
+}
+
+/**
+ * US AQI band. Thresholds are the EPA's published breakpoints; `label` is a
+ * `weather.aqi.*` translation key and `tone` is a Tailwind text colour.
+ */
+export function aqiBand(usAqi: number): { label: string; tone: string } {
+  if (usAqi <= 50) return { label: "good", tone: "text-green-600" };
+  if (usAqi <= 100) return { label: "moderate", tone: "text-yellow-600" };
+  if (usAqi <= 150) return { label: "sensitive", tone: "text-orange-500" };
+  if (usAqi <= 200) return { label: "unhealthy", tone: "text-red-500" };
+  if (usAqi <= 300) return { label: "veryUnhealthy", tone: "text-purple-500" };
+  return { label: "hazardous", tone: "text-rose-800" };
 }
 
 /** A geocoding hit, for the Settings place picker. */
@@ -87,10 +138,34 @@ function cacheKey(loc: WeatherLocation, day: Date, unit: TemperatureUnit): strin
   return `${loc.latitude.toFixed(2)},${loc.longitude.toFixed(2)}|${isoDay(day)}|${unit}`;
 }
 
+/**
+ * Is this a cached entry of the shape the app currently renders?
+ *
+ * A cache written by an older build outlives the code that wrote it: adding
+ * `hours` to DayWeather meant every unexpired entry came back without one, and
+ * the card crashed reading `.length` off it. The key is versioned to retire the
+ * old blob, and this check means the *next* shape change degrades to a refetch
+ * instead of a crash, whether or not someone remembers to bump the version.
+ */
+function isCurrentShape(entry: unknown): entry is CacheEntry {
+  const data = (entry as CacheEntry)?.data as Partial<DayWeather> | undefined;
+  return (
+    typeof (entry as CacheEntry)?.at === "number" &&
+    !!data &&
+    typeof data.code === "number" &&
+    typeof data.high === "number" &&
+    typeof data.low === "number" &&
+    Array.isArray(data.hours)
+  );
+}
+
 function readCache(): Record<string, CacheEntry> {
   try {
     const raw = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
-    return raw && typeof raw === "object" ? raw : {};
+    if (!raw || typeof raw !== "object") return {};
+    const out: Record<string, CacheEntry> = {};
+    for (const [k, v] of Object.entries(raw)) if (isCurrentShape(v)) out[k] = v;
+    return out;
   } catch {
     return {};
   }
@@ -141,21 +216,33 @@ export async function getDayWeather(
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.data;
 
   const date = isoDay(day);
+  const isToday = dayOffset(day) === 0;
+  // Wind follows the temperature unit: whoever wants °F wants mph.
+  const windUnit = unit === "fahrenheit" ? "mph" : "kmh";
   const params = new URLSearchParams({
     latitude: String(loc.latitude),
     longitude: String(loc.longitude),
-    daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset",
-    current: "temperature_2m,weather_code",
+    daily: "weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max," +
+      "precipitation_probability_max,wind_speed_10m_max,uv_index_max,sunrise,sunset",
+    hourly: "temperature_2m,weather_code,precipitation_probability",
+    current: "temperature_2m,weather_code,apparent_temperature,relative_humidity_2m,wind_speed_10m",
     // The service buckets days in the *location's* timezone, which is what makes
     // "the high on Friday" mean the same thing there as it does on the tile.
     timezone: "auto",
     temperature_unit: unit,
+    wind_speed_unit: windUnit,
     start_date: date,
     end_date: date,
   });
 
   try {
-    const res = await fetch(`${FORECAST_URL}?${params}`, { method: "GET", signal });
+    // Air quality is a different service on the same platform, so it's a second
+    // request — fired alongside, and allowed to fail on its own. `current` only
+    // describes now, so it's today's card or nothing.
+    const [res, air] = await Promise.all([
+      fetch(`${FORECAST_URL}?${params}`, { method: "GET", signal }),
+      isToday ? getAirQuality(loc, signal) : Promise.resolve(null),
+    ]);
     if (!res.ok) return null;
     const data = await res.json();
     // Open-Meteo reports refusals as 200 + `{ error: true, reason }`.
@@ -168,25 +255,90 @@ export async function getDayWeather(
     // miss rather than rendering a tile full of blanks.
     if (code === null || high === null || low === null) return null;
 
+    const currentNumber = (field: string): number | null =>
+      isToday && typeof data?.current?.[field] === "number" ? data.current[field] : null;
+
     const out: DayWeather = {
       code,
       high,
       low,
       precipitation: firstNumber(data?.daily?.precipitation_probability_max),
       // "Now" only means something on today's tile.
-      now: dayOffset(day) === 0 && typeof data?.current?.temperature_2m === "number"
-        ? data.current.temperature_2m
-        : null,
+      now: currentNumber("temperature_2m"),
+      // Today knows what it feels like right now; other days only have the
+      // day's apparent high, which is the honest stand-in.
+      feelsLike: currentNumber("apparent_temperature")
+        ?? firstNumber(data?.daily?.apparent_temperature_max),
       unit: typeof data?.daily_units?.temperature_2m_max === "string"
         ? data.daily_units.temperature_2m_max
         : "°",
+      humidity: currentNumber("relative_humidity_2m"),
+      wind: currentNumber("wind_speed_10m") ?? firstNumber(data?.daily?.wind_speed_10m_max),
+      windUnit: typeof data?.daily_units?.wind_speed_10m_max === "string"
+        ? data.daily_units.wind_speed_10m_max
+        : "km/h",
+      uvIndex: firstNumber(data?.daily?.uv_index_max),
       sunrise: firstString(data?.daily?.sunrise),
       sunset: firstString(data?.daily?.sunset),
+      hours: parseHours(data?.hourly, isToday),
+      air,
     };
     writeCache(key, out);
     return out;
   } catch {
     return null; // offline, aborted, or the service is having a day
+  }
+}
+
+/**
+ * The hourly arrays as a list, trimmed to what's still ahead.
+ *
+ * On today that means from the current hour on — hours that have already
+ * happened are history, not forecast. On any other day the whole day is ahead,
+ * so it starts at the beginning.
+ */
+function parseHours(hourly: any, isToday: boolean): HourWeather[] {
+  const times: unknown = hourly?.time;
+  if (!Array.isArray(times)) return [];
+  const out: HourWeather[] = [];
+  for (let i = 0; i < times.length; i++) {
+    const time = times[i];
+    if (typeof time !== "string") continue;
+    const temp = hourly?.temperature_2m?.[i];
+    const code = hourly?.weather_code?.[i];
+    if (typeof temp !== "number" || typeof code !== "number") continue;
+    const p = hourly?.precipitation_probability?.[i];
+    out.push({ time, temp, code, precipitation: typeof p === "number" ? p : null });
+  }
+  if (!isToday) return out;
+  // Local wall-clock strings ("2026-07-21T15:00"), so compare on the hour
+  // rather than parsing each one into a Date.
+  const nowHour = new Date().getHours();
+  return out.filter((h) => Number(h.time.slice(11, 13)) >= nowHour);
+}
+
+/**
+ * Current air quality, or null if it's unavailable. Never throws, for the same
+ * reason the forecast doesn't: this decorates a card that must still render.
+ */
+async function getAirQuality(loc: WeatherLocation, signal?: AbortSignal): Promise<AirQuality | null> {
+  const params = new URLSearchParams({
+    latitude: String(loc.latitude),
+    longitude: String(loc.longitude),
+    current: "pm2_5,us_aqi",
+    timezone: "auto",
+  });
+  try {
+    const res = await fetch(`${AIR_QUALITY_URL}?${params}`, { method: "GET", signal });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data?.error) return null;
+    const usAqi = data?.current?.us_aqi;
+    if (typeof usAqi !== "number") return null;
+    const pm25 = data?.current?.pm2_5;
+    return { usAqi, pm25: typeof pm25 === "number" ? pm25 : null };
+  } catch {
+    return null;
   }
 }
 

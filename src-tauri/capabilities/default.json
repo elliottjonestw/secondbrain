@@ -28,6 +28,7 @@
         { "url": "https://api.openai.com/*" },
         { "url": "https://api.open-meteo.com/*" },
         { "url": "https://geocoding-api.open-meteo.com/*" },
+        { "url": "https://air-quality-api.open-meteo.com/*" },
         { "url": "https://caldav.icloud.com/*" },
         { "url": "https://*.icloud.com/*" },
         { "url": "http://localhost:*/*" },

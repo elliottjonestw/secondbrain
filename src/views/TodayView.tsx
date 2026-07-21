@@ -9,13 +9,13 @@ import type { EventOccurrence, TodoRow, ReminderRow, NoteRow, PersonRow, GoTo } 
 import { listTodos, listReminders, listNotes, listPeople, toggleTodo, toggleReminder } from "../db";
 import { getOccurrences } from "../lib/calendars";
 import {
-  startOfDay, endOfDay, isSameDay, fmtTime, fmtDateTime, fmtMonthDay, fmtFullDate,
+  startOfDay, endOfDay, isSameDay, fmtTime, fmtHour, fmtDateTime, fmtMonthDay, fmtFullDate,
   fmtRelativeDays, isOverdue, isToday, ageFromBirthday, toDateInput,
 } from "../lib/format";
 import { nextOccurrenceFrom } from "../lib/recurrence";
 import { summarizeDay, hasDayContent, type DaySummaryInput } from "../lib/ai";
 import {
-  getDayWeather, isForecastable, weatherCondition, englishCondition, type DayWeather,
+  getDayWeather, isForecastable, weatherCondition, englishCondition, aqiBand, type DayWeather,
 } from "../lib/weather";
 import {
   isAssistantConfigured, getSettings, saveSettings, mergeTodayLayout, type TodayCardPref,
@@ -337,6 +337,8 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
           low: weather.low,
           unit: weather.unit,
           precipitation: weather.precipitation,
+          feels_like: weather.feelsLike,
+          air_quality: weather.air?.usAqi ?? null,
         }
       : null,
   };
@@ -683,24 +685,87 @@ function WeatherBody({ weather }: { weather: DayWeather }) {
   const Icon = WEATHER_ICONS[condition.icon];
   // Whole degrees: the service's tenth of a degree is noise at tile size.
   const deg = (v: number) => `${Math.round(v)}${weather.unit}`;
+  const band = weather.air ? aqiBand(weather.air.usAqi) : null;
+
   return (
-    <div className="flex items-center gap-3 py-1">
-      <Icon size={32} className="shrink-0 text-blue-500" />
-      <div className="min-w-0">
-        <div className="flex items-baseline gap-2">
-          {/* "Now" only exists on today; other days lead with the high. */}
-          <span className="text-2xl font-semibold">{deg(weather.now ?? weather.high)}</span>
-          <span className="truncate text-sm text-neutral-400">
-            {tr(`weather.conditions.${condition.label}` as "weather.conditions.clear")}
-          </span>
-        </div>
-        <div className="text-xs text-neutral-400">
-          {tr("today.weatherRange", { high: deg(weather.high), low: deg(weather.low) })}
-          {weather.precipitation !== null && weather.precipitation > 0 &&
-            ` · ${tr("today.weatherPrecipitation", { percent: weather.precipitation })}`}
+    <div className="space-y-3 py-1">
+      <div className="flex items-center gap-3">
+        <Icon size={32} className="shrink-0 text-blue-500" />
+        <div className="min-w-0">
+          <div className="flex items-baseline gap-2">
+            {/* "Now" only exists on today; other days lead with the high. */}
+            <span className="text-2xl font-semibold">{deg(weather.now ?? weather.high)}</span>
+            <span className="truncate text-sm text-neutral-400">
+              {tr(`weather.conditions.${condition.label}` as "weather.conditions.clear")}
+            </span>
+          </div>
+          <div className="text-xs text-neutral-400">
+            {tr("today.weatherRange", { high: deg(weather.high), low: deg(weather.low) })}
+            {weather.precipitation !== null && weather.precipitation > 0 &&
+              ` · ${tr("today.weatherPrecipitation", { percent: weather.precipitation })}`}
+          </div>
         </div>
       </div>
+
+      {/* The rest of the day. Scrolls rather than wrapping — a second row of
+          hours reads as a second day. */}
+      {weather.hours.length > 1 && (
+        <div className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1">
+          {weather.hours.map((h) => {
+            const HourIcon = WEATHER_ICONS[weatherCondition(h.code).icon];
+            return (
+              <div key={h.time} className="flex w-11 shrink-0 flex-col items-center gap-0.5">
+                <span className="text-[10px] text-neutral-400">{fmtHour(Number(h.time.slice(11, 13)))}</span>
+                <HourIcon size={15} className="text-blue-500" />
+                <span className="text-xs">{deg(h.temp)}</span>
+                {/* Only worth the ink when there's a real chance of rain. */}
+                <span className="text-[10px] text-blue-500">
+                  {h.precipitation !== null && h.precipitation >= 10 ? `${h.precipitation}%` : "\u00a0"}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-neutral-100 pt-2 text-xs dark:border-neutral-700">
+        {weather.feelsLike !== null && (
+          <Stat label={tr("today.feelsLike")} value={deg(weather.feelsLike)} />
+        )}
+        {weather.humidity !== null && (
+          <Stat label={tr("today.humidity")} value={`${Math.round(weather.humidity)}%`} />
+        )}
+        {weather.wind !== null && (
+          <Stat label={tr("today.wind")} value={`${Math.round(weather.wind)} ${weather.windUnit}`} />
+        )}
+        {weather.uvIndex !== null && (
+          <Stat label={tr("today.uvIndex")} value={String(Math.round(weather.uvIndex))} />
+        )}
+        {weather.air && band && (
+          <Stat
+            label={tr("today.airQuality")}
+            value={`${Math.round(weather.air.usAqi)} · ${tr(`weather.aqi.${band.label}` as "weather.aqi.good")}`}
+            tone={band.tone}
+          />
+        )}
+        {weather.sunrise && weather.sunset && (
+          <Stat
+            label={tr("today.daylight")}
+            value={`${fmtTime(new Date(weather.sunrise))} – ${fmtTime(new Date(weather.sunset))}`}
+          />
+        )}
+      </div>
     </div>
+  );
+}
+
+/** One label/value pair in the weather card's stat row. */
+function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
+  return (
+    <span className="flex items-baseline gap-1">
+      <span className="text-neutral-400">{label}</span>
+      <span className={tone ?? ""}>{value}</span>
+    </span>
   );
 }
 

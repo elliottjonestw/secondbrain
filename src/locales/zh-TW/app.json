@@ -366,6 +366,12 @@
     "weatherPrecipitation": "降雨機率 {{percent}}%",
     "weatherUnavailable": "無法取得天氣預報。",
     "weatherOutOfRange": "這麼久之後的天氣無法預報。",
+    "feelsLike": "體感",
+    "humidity": "濕度",
+    "wind": "風速",
+    "uvIndex": "紫外線",
+    "airQuality": "空氣",
+    "daylight": "日照",
     "birthdays": "即將到來的生日",
     "noBirthdays": "未來 30 天內沒有生日。"
   },
@@ -387,6 +393,14 @@
       "thunderstorm": "雷雨",
       "thunderstormHail": "雷雨伴冰雹",
       "unknown": "天氣不穩"
+    },
+    "aqi": {
+      "good": "良好",
+      "moderate": "普通",
+      "sensitive": "對敏感族群不良",
+      "unhealthy": "不健康",
+      "veryUnhealthy": "非常不健康",
+      "hazardous": "危害"
     }
   },
   "search": {

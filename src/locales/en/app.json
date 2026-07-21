@@ -369,7 +369,13 @@
     "weatherRange": "High {{high}} · Low {{low}}",
     "weatherPrecipitation": "{{percent}}% chance of rain",
     "weatherUnavailable": "Couldn't reach the forecast.",
-    "weatherOutOfRange": "No forecast this far out."
+    "weatherOutOfRange": "No forecast this far out.",
+    "feelsLike": "Feels",
+    "humidity": "Humidity",
+    "wind": "Wind",
+    "uvIndex": "UV",
+    "airQuality": "Air",
+    "daylight": "Daylight"
   },
   "weather": {
     "conditions": {
@@ -389,6 +395,14 @@
       "thunderstorm": "Thunderstorm",
       "thunderstormHail": "Thunderstorm with hail",
       "unknown": "Unsettled"
+    },
+    "aqi": {
+      "good": "Good",
+      "moderate": "Moderate",
+      "sensitive": "Poor for some",
+      "unhealthy": "Unhealthy",
+      "veryUnhealthy": "Very unhealthy",
+      "hazardous": "Hazardous"
     }
   },
   "search": {

@@ -95,6 +95,9 @@ Runtime DB: `~/Library/Application Support/com.elliottjones.secondbrain/secondbr
 
 - **Open-Meteo, chosen because it needs no key and no account.** Don't swap in a provider that requires registration — "nothing to sign up for" is the constraint, not an accident. Attribution (CC-BY) is in Settings + README.
 - **Never stored in SQLite**, same rule as remote calendar events: fetched live, cached in `localStorage` for 30 min. A forecast is stale within the hour, so persisting it just means showing yesterday's weather confidently.
+- **`current` only describes now**, so feels-like/humidity/wind/AQI are today-only; other days fall back to the daily apparent max and wind max, and skip air quality entirely. Don't render a `current` field on a day that isn't today.
+- **The forecast cache outlives the code that wrote it.** `DayWeather` is stored in `localStorage`, so *any* change to that interface must bump `CACHE_KEY` — adding `hours` without bumping shipped a `TypeError` off an unexpired entry from the previous build. `readCache` now also drops entries failing `isCurrentShape`, so the next shape change refetches instead of crashing.
+- **Air quality is a second endpoint** (`air-quality-api.open-meteo.com`, also keyless, own capability entry). It's fetched alongside the forecast with `Promise.all` and fails independently — no AQI must never mean no weather card.
 - **Bound the day range client-side** (`isForecastable`, ~90 back / 14 ahead). Out of range, the API answers `200` with `{ error: true, reason }` — not an HTTP error — so a request outside the window is a wasted round trip that also *looks* like success.
 - **`getDayWeather` never throws**; `searchPlaces` does. The tile is an enhancement on a page that works without it, but a search box that silently returns nothing is indistinguishable from "no such place".
 - **Use local `yyyy-MM-dd`, never `toISOString().slice(0,10)`** — that shifts the day westward and asks for the wrong date.
@@ -121,7 +124,7 @@ src/
 src-tauri/
   src/lib.rs                 # plugin wiring + migrations (keep thin)
   migrations/00N_*.sql       # 001 init · 002 lists · 003 people · 004 custom fields · 005 FTS trigram
-  capabilities/default.json  # http scope: api.openai.com + *.icloud.com + *.open-meteo.com + localhost (Ollama)
+  capabilities/default.json  # http scope: api.openai.com + *.icloud.com + *.open-meteo.com (forecast/geocoding/air-quality) + localhost (Ollama)
 ```
 
 ## Conventions & don'ts
