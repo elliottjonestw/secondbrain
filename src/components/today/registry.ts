@@ -10,6 +10,7 @@ import { summaryWidget } from "./SummaryWidget";
 import { scheduleWidget } from "./ScheduleWidget";
 import { dueWidget } from "./DueWidget";
 import { weatherWidget } from "./WeatherWidget";
+import { stocksWidget } from "./StocksWidget";
 import { pinnedNotesWidget, recentNotesWidget } from "./NotesWidgets";
 import { birthdaysWidget } from "./BirthdaysWidget";
 
@@ -18,6 +19,7 @@ export const WIDGETS: readonly TodayWidget[] = [
   scheduleWidget,
   dueWidget,
   weatherWidget,
+  stocksWidget,
   pinnedNotesWidget,
   recentNotesWidget,
   birthdaysWidget,

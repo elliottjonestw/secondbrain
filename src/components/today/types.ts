@@ -36,6 +36,7 @@ export type WidgetLabelKey =
   | "today.schedule"
   | "today.dueToday"
   | "today.weatherCard"
+  | "today.stocksCard"
   | "today.pinnedNotes"
   | "today.recentNotes"
   | "today.birthdays";

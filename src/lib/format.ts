@@ -130,6 +130,36 @@ export function fmtRelativeDays(days: number): string {
   return rtf.format(days, "day");
 }
 
+/**
+ * A price in its own currency, formatted for the active locale.
+ *
+ * Not every listing is quoted in dollars — Tencent comes back in HKD, the FTSE
+ * in GBp — so the currency is whatever the quote service reported and Intl
+ * decides where the symbol goes and how the digits group. An empty `currency`
+ * means the number isn't money at all (an index level), and renders bare.
+ */
+export function fmtPrice(value: number, currency: string): string {
+  const digits = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+  if (!currency) return new Intl.NumberFormat(localeTag(), digits).format(value);
+  try {
+    return new Intl.NumberFormat(localeTag(), { style: "currency", currency, ...digits }).format(value);
+  } catch {
+    // An unrecognised currency code throws, and this renders inside a card —
+    // a bad code must cost the symbol, not the whole tile.
+    return new Intl.NumberFormat(localeTag(), digits).format(value);
+  }
+}
+
+/** "+1.24%" / "−0.38%" — always signed, because the sign is the whole point. */
+export function fmtChangePercent(percent: number): string {
+  return new Intl.NumberFormat(localeTag(), {
+    style: "percent",
+    signDisplay: "exceptZero",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(percent / 100);
+}
+
 /** Date -> value for <input type="datetime-local"> (local time, no seconds). */
 export function toLocalInput(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");

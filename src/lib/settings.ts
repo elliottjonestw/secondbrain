@@ -62,6 +62,15 @@ export interface AppSettings {
   /** Temperature unit for the weather tile. Open-Meteo converts server-side. */
   temperatureUnit: TemperatureUnit;
   /**
+   * Symbols on the Today ticker, in the order they're shown. Empty means the
+   * card doesn't render at all — like the weather tile with no location, an
+   * empty ticker would just be a standing advert for a setting.
+   *
+   * Resolved whole by the Settings picker (ticker *and* display name), so the
+   * card never has to look a symbol up before it can draw a row.
+   */
+  watchlist: StockSymbol[];
+  /**
    * Order and visibility of the Today page's cards. Stored as the user arranged
    * it, NOT as the complete truth — read it through `mergeTodayLayout`, which
    * drops ids the app no longer has and appends ones it has gained. An empty
@@ -92,6 +101,19 @@ export function mergeTodayLayout(stored: TodayCardPref[], known: readonly string
 }
 
 export type TemperatureUnit = "celsius" | "fahrenheit";
+
+/**
+ * An instrument chosen in Settings. Lives here rather than in `stocks.ts` for
+ * the same reason `WeatherLocation` does: it's the stored *configuration*, and
+ * keeping it on this side means the provider module depends on settings and
+ * never the other way round.
+ */
+export interface StockSymbol {
+  /** Ticker as the quote service knows it, e.g. "AAPL", "0700.HK", "^GSPC". */
+  symbol: string;
+  /** Display name resolved once at pick time, e.g. "Apple Inc.". */
+  name: string;
+}
 
 /** A place chosen in Settings, as returned by the geocoding search. */
 export interface WeatherLocation {
@@ -127,6 +149,7 @@ const DEFAULTS: AppSettings = {
   language: "system",
   weatherLocation: null,
   temperatureUnit: "celsius",
+  watchlist: [],
   todayLayout: [],
 };
 

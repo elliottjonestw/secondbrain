@@ -164,7 +164,17 @@
       "placeSearchFailed": "目前無法搜尋地點，請檢查網路連線後再試一次。",
       "temperatureUnit": "溫度單位",
       "celsius": "攝氏 (°C)",
-      "fahrenheit": "華氏 (°F)"
+      "fahrenheit": "華氏 (°F)",
+      "watchlist": "股票追蹤清單",
+      "watchlistHint": "顯示在「今天」頁面的股票代號。報價來自 Yahoo Finance，不需註冊帳號；但這是未公開的介面，可能隨時失效。",
+      "watchlistPlaceholder": "搜尋公司或股票代號",
+      "searchSymbol": "搜尋",
+      "symbolSearchFailed": "目前無法搜尋股票代號。",
+      "noSymbols": "找不到相符的股票代號。",
+      "removeSymbol": "從追蹤清單移除",
+      "watchlistFull": "追蹤清單最多可加入 {{count}} 檔。",
+      "moveUp": "上移",
+      "moveDown": "下移"
     },
     "voice": {
       "description": "用說的跟助理對話，它會朗讀回覆；用打字的則以文字回覆。語音與聊天使用相同的工具，因此同樣可以查詢與修改資料。",
@@ -374,6 +384,10 @@
     "uvIndex": "紫外線",
     "airQuality": "空氣",
     "daylight": "日照",
+    "stocksCard": "股市",
+    "stocks": "市場",
+    "stocksUnavailable": "無法取得股市資料。",
+    "marketClosed": "休市",
     "birthdays": "即將到來的生日",
     "noBirthdays": "未來 30 天內沒有生日。"
   },

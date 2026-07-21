@@ -17,7 +17,10 @@ import { listTodos, listReminders, listNotes, listPeople } from "../../db";
 import { getOccurrences } from "../../lib/calendars";
 import { startOfDay, endOfDay } from "../../lib/format";
 import { getDayWeather, type DayWeather } from "../../lib/weather";
-import { getSettings, type WeatherLocation, type TemperatureUnit } from "../../lib/settings";
+import { getQuotes, type Quote } from "../../lib/stocks";
+import {
+  getSettings, type WeatherLocation, type TemperatureUnit, type StockSymbol,
+} from "../../lib/settings";
 
 let cacheRevision = -1;
 const cache = new Map<string, Promise<unknown>>();
@@ -117,4 +120,22 @@ export function loadWeather(
 ): Promise<DayWeather | null> {
   const key = `weather|${dayKey(day)}|${loc.latitude.toFixed(2)},${loc.longitude.toFixed(2)}|${unit}`;
   return cached(revision, key, () => getDayWeather(loc, day, unit));
+}
+
+/** The configured watchlist, or empty when the ticker is off. */
+export function watchlist(): StockSymbol[] {
+  return getSettings().watchlist;
+}
+
+/**
+ * Quotes for the watchlist.
+ *
+ * No day in the key: a quote only ever describes now, which is also why the
+ * card hides itself on any day but today. The symbols are in the key so
+ * editing the list in Settings and coming back is a miss rather than a stale
+ * row for a ticker that's no longer on it.
+ */
+export function loadQuotes(symbols: StockSymbol[], revision: number): Promise<(Quote | null)[]> {
+  const key = `stocks|${symbols.map((s) => s.symbol).join(",")}`;
+  return cached(revision, key, () => getQuotes(symbols));
 }

@@ -165,7 +165,17 @@
       "placeSearchFailed": "Couldn't search for places just now. Check your connection and try again.",
       "temperatureUnit": "Temperature",
       "celsius": "Celsius (°C)",
-      "fahrenheit": "Fahrenheit (°F)"
+      "fahrenheit": "Fahrenheit (°F)",
+      "watchlist": "Stock watchlist",
+      "watchlistHint": "Symbols shown on the Today page. Quotes come from Yahoo Finance, which needs no account — but it's an undocumented endpoint, so it may stop working without warning.",
+      "watchlistPlaceholder": "Search a company or ticker",
+      "searchSymbol": "Search",
+      "symbolSearchFailed": "Couldn't search for symbols just now.",
+      "noSymbols": "No matching symbols.",
+      "removeSymbol": "Remove from watchlist",
+      "watchlistFull": "A watchlist holds up to {{count}} symbols.",
+      "moveUp": "Move up",
+      "moveDown": "Move down"
     },
     "voice": {
       "description": "Talk to the assistant and it replies aloud; type and it replies in text. Voice uses the same tools as the chat, so it can answer questions and make changes.",
@@ -377,7 +387,11 @@
     "wind": "Wind",
     "uvIndex": "UV",
     "airQuality": "Air",
-    "daylight": "Daylight"
+    "daylight": "Daylight",
+    "stocksCard": "Stocks",
+    "stocks": "Markets",
+    "stocksUnavailable": "Couldn't reach the markets.",
+    "marketClosed": "Closed"
   },
   "weather": {
     "conditions": {

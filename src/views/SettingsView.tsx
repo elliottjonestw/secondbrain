@@ -2,7 +2,7 @@ import { ReactNode, useEffect, useRef, useState } from "react";
 import {
   Eye, EyeOff, Check, CalendarDays, ExternalLink, Loader2, AlertCircle,
   Sparkles, Mic, Languages, Database, Download, Upload, LucideIcon,
-  Cloud, Server, RefreshCw, Trash2, Volume2, MapPin, X,
+  Cloud, Server, RefreshCw, Trash2, Volume2, MapPin, X, ChevronUp, ChevronDown,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -11,13 +11,14 @@ import {
   DEFAULT_OLLAMA_URL,
   MIN_SPEECH_RATE, MAX_SPEECH_RATE, clampSpeechRate,
   type AppSettings, type AssistantProvider, type CalDavAccount, type TtsEngine,
-  type TemperatureUnit, type WeatherLocation,
+  type TemperatureUnit, type WeatherLocation, type StockSymbol,
 } from "../lib/settings";
 import { listOllamaModels } from "../lib/ai";
 import {
   LANGUAGES, SYSTEM_LANGUAGE, changeLanguage, matchSystemLanguage, currentLanguage,
 } from "../lib/i18n";
 import { searchPlaces, type PlaceResult } from "../lib/weather";
+import { searchSymbols, MAX_WATCHLIST, type SymbolResult } from "../lib/stocks";
 import {
   hasVoiceFor, listVoices, previewVoice, previewNaturalVoice, getLastNaturalError,
   type VoiceOption,
@@ -209,6 +210,7 @@ function GeneralSettings() {
   const [language, setLanguage] = useState(getSettings().language);
   const [location, setLocation] = useState(getSettings().weatherLocation);
   const [unit, setUnit] = useState(getSettings().temperatureUnit);
+  const [watchlist, setWatchlist] = useState(getSettings().watchlist);
 
   // Applied immediately rather than on a Save button: the whole point of a
   // language picker is seeing the result, and there's nothing to validate.
@@ -265,7 +267,167 @@ function GeneralSettings() {
           </select>
         </Field>
       )}
+
+      <Field label={t("settings.general.watchlist")} hint={t("settings.general.watchlistHint")}>
+        <WatchlistEditor
+          watchlist={watchlist}
+          onChange={(next) => { setWatchlist(next); saveSettings({ watchlist: next }); }}
+        />
+      </Field>
     </>
+  );
+}
+
+/**
+ * The Today ticker's symbols: search, add, reorder, remove.
+ *
+ * Reordering is ▲/▼ buttons, not drag — HTML5 drag does not work in this
+ * webview, confirmed in every place it was tried. Buttons are also the only
+ * version of this that a keyboard can reach.
+ *
+ * Search is explicit (button or Enter) rather than as-you-type, same as the
+ * place picker: this asks a third-party service a question, and firing one
+ * request per keystroke to set a value once is rude to it and pointless for us.
+ */
+function WatchlistEditor({
+  watchlist, onChange,
+}: { watchlist: StockSymbol[]; onChange: (next: StockSymbol[]) => void }) {
+  const { t } = useTranslation();
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<SymbolResult[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  // Aborts the previous search when a new one starts, so a fast double-Enter
+  // can't land the earlier results over the later ones.
+  const ctlRef = useRef<AbortController | null>(null);
+  useEffect(() => () => ctlRef.current?.abort(), []);
+
+  const full = watchlist.length >= MAX_WATCHLIST;
+
+  async function search() {
+    if (!query.trim()) return;
+    ctlRef.current?.abort();
+    const ctl = new AbortController();
+    ctlRef.current = ctl;
+    setBusy(true);
+    setFailed(false);
+    try {
+      setResults(await searchSymbols(query, ctl.signal));
+    } catch {
+      // Aborted requests are expected on a re-search; only a real failure flips
+      // to the error notice.
+      if (ctl.signal.aborted) return;
+      setResults(null);
+      setFailed(true);
+    } finally {
+      if (!ctl.signal.aborted) setBusy(false);
+    }
+  }
+
+  function add(hit: SymbolResult) {
+    // Adding the same ticker twice would fetch it twice and draw it twice.
+    if (full || watchlist.some((s) => s.symbol === hit.symbol)) return;
+    onChange([...watchlist, { symbol: hit.symbol, name: hit.name }]);
+    setResults(null);
+    setQuery("");
+  }
+
+  function move(index: number, delta: number) {
+    const to = index + delta;
+    if (to < 0 || to >= watchlist.length) return;
+    const next = [...watchlist];
+    [next[index], next[to]] = [next[to], next[index]];
+    onChange(next);
+  }
+
+  return (
+    <div>
+      {!!watchlist.length && (
+        <ul className="mb-2 overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-600">
+          {watchlist.map((s, i) => (
+            <li
+              key={s.symbol}
+              className="flex items-center gap-2 border-b border-neutral-100 px-3 py-2 last:border-0 dark:border-neutral-700"
+            >
+              <div className="min-w-0 flex-1">
+                <span className="text-sm font-medium">{s.symbol}</span>
+                <span className="ml-2 truncate text-xs text-neutral-400">{s.name}</span>
+              </div>
+              <button
+                onClick={() => move(i, -1)}
+                disabled={i === 0}
+                className="text-neutral-400 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-neutral-400"
+                aria-label={t("settings.general.moveUp")}
+                title={t("settings.general.moveUp")}
+              >
+                <ChevronUp size={15} />
+              </button>
+              <button
+                onClick={() => move(i, 1)}
+                disabled={i === watchlist.length - 1}
+                className="text-neutral-400 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-neutral-400"
+                aria-label={t("settings.general.moveDown")}
+                title={t("settings.general.moveDown")}
+              >
+                <ChevronDown size={15} />
+              </button>
+              <button
+                onClick={() => onChange(watchlist.filter((w) => w.symbol !== s.symbol))}
+                className="text-neutral-400 hover:text-red-500"
+                aria-label={t("settings.general.removeSymbol")}
+                title={t("settings.general.removeSymbol")}
+              >
+                <X size={15} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {full ? (
+        <p className="text-xs text-neutral-400">
+          {t("settings.general.watchlistFull", { count: MAX_WATCHLIST })}
+        </p>
+      ) : (
+        <div className="flex gap-2">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void search(); }}
+            placeholder={t("settings.general.watchlistPlaceholder")}
+            className={INPUT_CLASS}
+          />
+          <Button onClick={() => void search()} disabled={busy || !query.trim()}>
+            {busy ? t("common.loading") : t("settings.general.searchSymbol")}
+          </Button>
+        </div>
+      )}
+
+      {failed && <div className="mt-2"><Notice tone="error">{t("settings.general.symbolSearchFailed")}</Notice></div>}
+      {results?.length === 0 && <p className="mt-2 text-xs text-neutral-400">{t("settings.general.noSymbols")}</p>}
+      {!!results?.length && (
+        <ul className="mt-2 overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-600">
+          {results.map((r) => {
+            const already = watchlist.some((s) => s.symbol === r.symbol);
+            return (
+              <li key={`${r.symbol}|${r.exchange}`}>
+                <button
+                  onClick={() => add(r)}
+                  disabled={already}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-neutral-50 disabled:opacity-40 dark:hover:bg-neutral-700/50"
+                >
+                  <span className="font-medium">{r.symbol}</span>
+                  <span className="min-w-0 flex-1 truncate text-neutral-400">{r.name}</span>
+                  <span className="shrink-0 text-xs text-neutral-400">{r.exchange}</span>
+                  {already && <Check size={14} className="shrink-0 text-green-600" />}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
   );
 }
 
