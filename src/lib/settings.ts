@@ -147,9 +147,16 @@ const DEFAULTS: AppSettings = {
   speechRate: 1,
   preferredVoices: {},
   language: "system",
-  weatherLocation: null,
+  // A fresh install gets a populated weather tile and ticker rather than two
+  // cards advertising a setting. Both are ordinary values the user can change
+  // or clear in Settings; clearing sticks, because a stored settings object
+  // overrides these defaults key by key.
+  weatherLocation: { name: "New York", country: "United States", latitude: 40.7128, longitude: -74.006 },
   temperatureUnit: "celsius",
-  watchlist: [],
+  watchlist: [
+    { symbol: "AAPL", name: "Apple Inc." },
+    { symbol: "GOOGL", name: "Alphabet Inc." },
+  ],
   todayLayout: [],
 };
 
