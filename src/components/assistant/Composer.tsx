@@ -20,7 +20,13 @@ export default function Composer({
   const { t } = useTranslation();
   const pad = compact ? "p-2.5" : "p-4";
   const size = compact ? 16 : 18;
-  const btn = compact ? "p-2" : "p-2.5";
+  // The buttons deliberately mirror the textarea's box: same vertical padding, a
+  // transparent border standing in for its real one, and the icon centred in a
+  // 20px box (text-sm's line height). That makes all three the same height by
+  // construction — an 18px icon with no border left them 4px short, which reads
+  // as the mic sitting misaligned against the input.
+  const btn = `border border-transparent ${compact ? "p-2" : "p-2.5"}`;
+  const iconBox = "flex h-5 w-5 items-center justify-center";
 
   return (
     <div className={`border-t border-neutral-200 ${pad} dark:border-neutral-700`}>
@@ -40,8 +46,12 @@ export default function Composer({
           aria-label={recording ? t("assistant.stopRecording") : t("assistant.startVoice")}
           title={recording ? t("assistant.stopRecording") : t("assistant.talkHint")}
         >
-          {recording ? <Square size={size} /> : <Mic size={size} />}
+          <span className={iconBox}>{recording ? <Square size={size} /> : <Mic size={size} />}</span>
         </button>
+        {/* The popup's input is about half the page's width, where the full
+            placeholder wraps to a second line and is clipped by the single-row
+            height. Shorter copy rather than a taller box, so the window stays
+            compact. */}
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -50,7 +60,8 @@ export default function Composer({
           }}
           rows={1}
           disabled={recording}
-          placeholder={recording ? t("assistant.listening") : t("assistant.inputPlaceholder")}
+          placeholder={recording ? t("assistant.listening")
+            : t(compact ? "assistant.inputPlaceholderShort" : "assistant.inputPlaceholder")}
           className={`flex-1 resize-none rounded-xl border border-neutral-200 outline-none focus:border-blue-400 disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 ${
             compact ? "max-h-24 px-3 py-2 text-sm" : "max-h-40 px-4 py-2.5 text-sm"
           }`}
@@ -61,7 +72,7 @@ export default function Composer({
           className={`rounded-xl bg-blue-600 ${btn} text-white hover:bg-blue-700 disabled:opacity-40`}
           aria-label={t("assistant.send")}
         >
-          <Send size={size} />
+          <span className={iconBox}><Send size={size} /></span>
         </button>
       </div>
     </div>

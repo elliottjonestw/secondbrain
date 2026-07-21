@@ -486,6 +486,7 @@
     "talkHint": "Talk to the assistant, or hold Space",
     "listening": "Listening…",
     "inputPlaceholder": "Ask about your calendar, tasks, notes…",
+    "inputPlaceholderShort": "Ask anything…",
     "send": "Send",
     "stopSpeaking": "Stop",
     "clear": "Clear",
