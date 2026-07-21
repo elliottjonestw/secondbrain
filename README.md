@@ -257,6 +257,9 @@ src/
     openaiTts.ts        # OpenAI neural voices (natural spoken replies)
     demo.ts             # reset + seed demo data
   components/
+    today/              # one file per Today widget + the registry they're
+                        #   listed in; each fetches its own data and renders
+                        #   inside an error boundary
     ui.tsx              # Modal, Button, priority helpers
     Avatar.tsx          # contact avatar (photo or initials)
     PhotoPicker.tsx     # avatar + profile-photo upload (crop/downscale)

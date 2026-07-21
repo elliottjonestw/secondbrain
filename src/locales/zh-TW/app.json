@@ -339,6 +339,8 @@
     "edit": "編輯",
     "layoutTitle": "編輯「今天」頁面",
     "layoutHint": "使用箭頭調整卡片順序，點眼睛圖示可隱藏卡片。隱藏的卡片不會再載入資料。",
+    "cardFailed": "無法載入這張卡片。",
+    "cardCrashed": "這張卡片發生問題，頁面其他部分仍可正常使用。",
     "resetLayout": "回復預設",
     "done": "完成",
     "hideCard": "隱藏卡片",

@@ -51,9 +51,14 @@ Runtime DB: `~/Library/Application Support/com.elliottjones.secondbrain/secondbr
 - **New plugin = 3 steps:** crate in `Cargo.toml`, `.plugin()` in `lib.rs`, permission in `capabilities/default.json`.
 
 **UI**
-- **The Today page's cards are a registry, not JSX in order** (`CARD_IDS` + `renderCard`). Order/visibility live in `settings.todayLayout` and MUST be read through `mergeTodayLayout` — stored ids are a *preference*, not an inventory, so a card added later has to be appended for anyone who already customised their page, and a removed one dropped. Card ids are persisted: renaming one resets that card's position for every existing user.
+- **A Today widget is one file exporting one `TodayWidget`** (`components/today/`), registered in `registry.ts` and nowhere else. It fetches its own data and renders its own card, so adding one touches no existing widget. `TodayView` only lays them out.
+- **Every widget renders inside `CardBoundary`.** Without it one card's throw blanks the whole page — which is exactly what a stale weather cache did. A *render* bug loses that tile only; a failed fetch isn't a throw, it comes back through `useAsync`'s `error` and stays inside the card.
+- **Shared reads go through `dayData.ts`, never straight to `db.ts`.** Its promise cache is what stops "widgets fetch independently" from becoming five copies of the same query. The revision counter is module-scoped and monotonic on purpose: a per-mount `useState(0)` would collide with a cache left at revision 0 by an earlier visit and serve rows the user has since edited.
+- **`useAsync` keeps the previous value during a reload** — blanking it flashes a skeleton on every checkbox tick. Same reason the page has no Suspense: keeping stale content visible through a refetch would need `startTransition` discipline in every widget.
+- **Rules two widgets share live in `derive.ts`** (day-scoping, overdue, birthdays). The due card shows them and the summary describes them; two copies drift and the briefing starts describing a day the card doesn't show.
+- **Order/visibility live in `settings.todayLayout`** and MUST be read through `mergeTodayLayout` — stored ids are a *preference*, not an inventory, so a widget added later has to be appended for anyone who already customised their page, and a removed one dropped. Widget ids are persisted: renaming one resets that card's position for every existing user.
 - **No drag-and-drop. HTML5 drag does not work in this WKWebView** — confirmed broken in all four places it was used (Today cards, to-do reorder, custom-field reorder, calendar reschedule). `dataTransfer.setData` + `-webkit-user-drag: element` + `user-select: none`, the fix that's supposed to work, changed nothing. Reordering is ▲/▼ buttons (also keyboard-reachable); calendar rescheduling is edit-the-event. Don't add `draggable` back — it compiles, looks right, and does nothing in the packaged app, which is why it survived this long.
-- **Hiding a Today card stops its fetch, not just its render.** The summary is billed and the forecast is someone else's free service; both hooks take a visibility flag. A hidden card that still calls out is the bug this prevents.
+- **Hiding a Today card stops its fetch, not just its render** — the summary is billed and the forecast is someone else's free service. This is now automatic: a hidden widget isn't rendered, so it never asks. Keep fetching inside the widget and it stays that way; hoist a fetch up to `TodayView` and hidden cards start paying again.
 - **Don't add a `key={version}` that bumps on mutations** — it remounts the view and wipes in-progress edits (this broke Notes typing). `resetNonce` exists only for demo resets.
 - **The note editor debounces writes (400ms)**, flushing on unmount. Don't revert to save-per-keystroke.
 - **Icons: `lucide-react` only, no emoji.**
@@ -120,6 +125,8 @@ src/
   lib/  i18n · format · calendars · recurrence · ics · ai · voice · weather · notifications · settings · demo
         caldav/  client · discovery · events · ical    # network client, not SQLite
   components/  ui · Avatar · ItemMeta · ItemCard · EventForm
+        today/   registry · types · CardShell · CardBoundary · useAsync · dayData ·
+                 derive · <Name>Widget    # one file per Today card
   views/       Today · Calendar · Reminders · Todos · Notes · People · Assistant · Settings · Search
 src-tauri/
   src/lib.rs                 # plugin wiring + migrations (keep thin)
