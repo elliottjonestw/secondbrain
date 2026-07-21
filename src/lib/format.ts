@@ -147,6 +147,44 @@ export function toDateInput(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/** Parsed `yyyy-mm-dd` birthday. `year` is null for a vCard date with no year
+ *  (`--05-14`), which is legal and means "we know the day, not the age". */
+function parseBirthday(value: string): { year: number | null; month: number; day: number } | null {
+  // `-` as the year is vCard's "unknown year" marker, giving `--05-14`.
+  const m = /^(\d{4}|-)-(\d{2})-(\d{2})/.exec(value.trim());
+  if (!m) return null;
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return { year: m[1] === "-" ? null : Number(m[1]), month, day };
+}
+
+/**
+ * Age in whole years, or null when the birthday has no year or lies in the
+ * future. Deliberately locale-free and computed here rather than anywhere it's
+ * displayed: `ai.ts` feeds this to the model, which otherwise does the
+ * subtraction itself and reaches for the year its training data ended in.
+ */
+export function ageFromBirthday(value: string, now: Date = new Date()): number | null {
+  const b = parseBirthday(value);
+  if (!b || b.year === null) return null;
+  let age = now.getFullYear() - b.year;
+  // Not yet had this year's birthday.
+  if (now.getMonth() + 1 < b.month || (now.getMonth() + 1 === b.month && now.getDate() < b.day)) age--;
+  return age >= 0 ? age : null;
+}
+
+/** The next occurrence of a birthday as `yyyy-mm-dd`, or null if unparseable.
+ *  Works without a birth year — only the month/day matter. */
+export function nextBirthday(value: string, now: Date = new Date()): string | null {
+  const b = parseBirthday(value);
+  if (!b) return null;
+  let year = now.getFullYear();
+  const thisYear = new Date(year, b.month - 1, b.day);
+  if (startOfDay(thisYear) < startOfDay(now)) year++;
+  return toDateInput(new Date(year, b.month - 1, b.day));
+}
+
 export function isOverdue(iso: string | null): boolean {
   if (!iso) return false;
   return new Date(iso).getTime() < Date.now();

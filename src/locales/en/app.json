@@ -85,6 +85,7 @@
     "customFields": "Custom fields",
     "nickname": "Nickname",
     "birthday": "Birthday",
+    "age": "Age",
     "organization": "Organization",
     "jobTitle": "Title",
     "prefix": "Prefix",

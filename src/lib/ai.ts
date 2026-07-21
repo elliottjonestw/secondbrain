@@ -17,6 +17,9 @@ import i18next from "i18next";
 // wrapper: these strings go into the model's prompt, which stays English
 // regardless of the UI language. Localizing them would only confuse the model.
 import { format, startOfDay } from "date-fns";
+// Locale-free numeric/ISO helpers, so importing them here doesn't localize
+// anything the model reads.
+import { ageFromBirthday, nextBirthday } from "./format";
 import type { EventRow, ItemRef, ItemType, UnifiedEvent } from "../types";
 import {
   db, listLists, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms, escapeLike,
@@ -335,7 +338,7 @@ const TOOLS = [
     function: {
       name: "search_people",
       description:
-        "Search the user's contacts (people). Matches name, nickname, organization, and email/phone text. Returns compact records including ids, emails, phones, addresses, websites, custom fields, and notes.",
+        "Search the user's contacts (people). Matches name, nickname, organization, and email/phone text. Returns compact records including ids, emails, phones, addresses, websites, custom fields, and notes. When a birthday is known the record also carries `age` (already worked out for today) and `next_birthday` — use those numbers as given; never recompute an age yourself.",
       parameters: {
         type: "object",
         properties: {
@@ -1024,6 +1027,9 @@ async function toolGetItem(args: Record<string, unknown>) {
     return { type: other.t, id: other.i, label: await getItemLabel(other.t, other.i) };
   }));
 
+  if (type === "person") {
+    return { type, item: { ...rowWithLocalTimes(item), ...birthdayFacts(item.birthday) }, tags, linked };
+  }
   return { type, item: rowWithLocalTimes(item), tags, linked };
 }
 
@@ -1031,6 +1037,19 @@ async function toolGetItem(args: Record<string, unknown>) {
 function parseCol<T>(json: string | null): T[] | undefined {
   if (!json) return undefined;
   try { const v = JSON.parse(json); return Array.isArray(v) && v.length ? v : undefined; } catch { return undefined; }
+}
+
+/**
+ * Age and next birthday, computed here rather than left to the model. Handed a
+ * bare `1986-01-28` it does the subtraction in its head and answers from the
+ * year its training data ended in ("36") no matter what today's date the prompt
+ * carries. A number in the tool result isn't guessable.
+ */
+function birthdayFacts(birthday: string | null): { age?: number; next_birthday?: string } {
+  if (!birthday) return {};
+  const age = ageFromBirthday(birthday);
+  const next = nextBirthday(birthday);
+  return { age: age ?? undefined, next_birthday: next ?? undefined };
 }
 
 async function toolSearchPeople(args: Record<string, unknown>) {
@@ -1065,6 +1084,7 @@ async function toolSearchPeople(args: Record<string, unknown>) {
       organization: p.organization || undefined,
       title: p.title || undefined,
       birthday: p.birthday || undefined,
+      ...birthdayFacts(p.birthday),
       emails: parseCol(p.emails),
       phones: parseCol(p.phones),
       addresses: parseCol(p.addresses),
@@ -1973,24 +1993,41 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
   const now = new Date();
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "local time";
   const localIso = format(now, "yyyy-MM-dd'T'HH:mm:ssXXX"); // e.g. 2026-07-20T14:30:00+08:00
+  // Stated as a fact first and placed at the TOP of the system prompt. Buried at
+  // the bottom and worded only as a scheduling rule, this was obeyed when
+  // creating events yet ignored for arithmetic: asked a 1986 contact's age the
+  // model answered from its training cutoff, not from today.
   const dateContext =
-    `\n\nThe current date and time is ${format(now, "EEEE, MMMM d, yyyy, h:mm a")} in the user's ` +
-    `local timezone (${tz}, ISO ${localIso}). Interpret ALL dates and clock times the user mentions ` +
-    `(\"10am\", \"today\", \"tomorrow\", \"next Friday\", \"in 2 hours\") in this local timezone, using the ` +
-    `correct current year. When passing datetimes to tools, write ISO 8601 with the user's local UTC ` +
-    `offset (like ${localIso}). Do NOT use UTC or a trailing \"Z\" — that would save the event at the ` +
-    `wrong hour.`;
+    `TODAY'S DATE IS ${format(now, "EEEE, MMMM d, yyyy")}. The current local time is ` +
+    `${format(now, "h:mm a")} in the user's timezone (${tz}, ISO ${localIso}).\n` +
+    `- Your training data ends well before today. You do NOT know what year it is from memory — the date ` +
+    `above is the only correct source, and it overrides any sense you have of the current year.\n` +
+    `- Use it for ALL date arithmetic: ages, \"how long ago\", \"how many days until\", whether something is ` +
+    `past or upcoming. Someone born in 1986 is ${format(now, "yyyy")} minus 1986 years old, not the age you ` +
+    `would guess.\n` +
+    `- Interpret every date and clock time the user mentions (\"10am\", \"today\", \"tomorrow\", \"next Friday\", ` +
+    `\"in 2 hours\") in this local timezone, using the correct current year.\n` +
+    `- When passing datetimes to tools, write ISO 8601 with the user's local UTC offset (like ${localIso}). ` +
+    `Do NOT use UTC or a trailing \"Z\" — that would save the event at the wrong hour.\n\n`;
 
   // Only role/content go to the model — never the UiMessage `items`. But an
   // assistant turn that showed cards gets a system note after it recording
   // which items those were, so the next user message can refer to them.
-  const messages: OAIMessage[] = [{ role: "system", content: SYSTEM_PROMPT + dateContext }];
+  const messages: OAIMessage[] = [{ role: "system", content: dateContext + SYSTEM_PROMPT }];
   for (const m of history) {
     messages.push({ role: m.role, content: m.content });
     if (m.role === "assistant" && m.items && m.items.length > 0) {
       messages.push({ role: "system", content: await shownItemsNote(m.items) });
     }
   }
+
+  // Repeated last, next to the question being answered: the top-of-prompt copy
+  // is a long way from the generation point once a conversation has some
+  // history, and the current year is exactly what gets lost over that distance.
+  messages.push({
+    role: "system",
+    content: `Reminder: today is ${format(now, "EEEE, MMMM d, yyyy")}. Base every date calculation on it.`,
+  });
 
   // Tracked across rounds to decide whether the reply is missing its cards.
   let showedItems = false; // show_items ran and accepted at least one item

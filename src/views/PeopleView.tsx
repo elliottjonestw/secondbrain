@@ -16,7 +16,7 @@ import { Button, Modal } from "../components/ui";
 import { Avatar } from "../components/Avatar";
 import { PhotoPicker } from "../components/PhotoPicker";
 import { TagEditor, LinksPanel, LinkTarget } from "../components/ItemMeta";
-import { fmtFullDate } from "../lib/format";
+import { fmtFullDate, ageFromBirthday } from "../lib/format";
 
 // Type presets for the multi-value editors (matches vCard TYPE params).
 const EMAIL_TYPES = ["home", "work", "other"];
@@ -432,9 +432,13 @@ function PersonSummary({ form }: { form: Draft }) {
   const addresses = form.addresses.filter(hasAddress);
   const custom = form.custom_fields.filter((c) => c.label.trim() && c.value.trim());
   const birthday = form.birthday ? birthdayLabel(form.birthday) : null;
+  // Its own row rather than "28 January 1986 (40)" — no string to assemble, so
+  // nothing to get wrong per language.
+  const age = form.birthday ? ageFromBirthday(form.birthday) : null;
   const details: [string, string][] = [
     ...(form.nickname.trim() ? [[t("people.nickname"), form.nickname.trim()] as [string, string]] : []),
     ...(birthday ? [[t("people.birthday"), birthday] as [string, string]] : []),
+    ...(age !== null ? [[t("people.age"), String(age)] as [string, string]] : []),
   ];
 
   return (
