@@ -73,6 +73,8 @@
     "changePhoto": "Change photo",
     "removePhoto": "Remove photo",
     "photoError": "Couldn't read that image. Try a PNG, JPEG, WebP or GIF.",
+    "edit": "Edit",
+    "done": "Done",
     "confirmDelete": "Delete {{name}}? This cannot be undone.",
     "details": "Details",
     "nameDetails": "Name details",

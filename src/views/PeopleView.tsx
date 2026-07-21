@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
-  Plus, X, Trash2, Star, Mail, Phone, ExternalLink, GripVertical,
+  Plus, X, Trash2, Star, Mail, Phone, ExternalLink, GripVertical, Pencil, Eye,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
@@ -16,6 +16,7 @@ import { Button, Modal } from "../components/ui";
 import { Avatar } from "../components/Avatar";
 import { PhotoPicker } from "../components/PhotoPicker";
 import { TagEditor, LinksPanel, LinkTarget } from "../components/ItemMeta";
+import { fmtFullDate } from "../lib/format";
 
 // Type presets for the multi-value editors (matches vCard TYPE params).
 const EMAIL_TYPES = ["home", "work", "other"];
@@ -171,6 +172,23 @@ function toDraft(p: PersonRow): Draft {
   };
 }
 
+/**
+ * True for a person with nothing filled in — i.e. one that was just created.
+ * Tested on the row rather than the draft so it reflects what's stored, not
+ * what's been typed since.
+ */
+function isBlank(p: PersonRow): boolean {
+  return !(
+    p.full_name?.trim() || p.nickname || p.organization || p.title || p.birthday ||
+    p.notes || p.photo || p.favorite === 1 ||
+    // Empty multi-value fields are normally stored as NULL, but "[]" is a
+    // legal value too — parse rather than trusting the column to be null.
+    parseArr(p.emails).length || parseArr(p.phones).length ||
+    parseArr(p.addresses).length || parseArr(p.urls).length ||
+    parseArr(p.custom_fields).length
+  );
+}
+
 function PersonEditor({
   person, targets, onChanged, onDeleted,
 }: {
@@ -184,6 +202,11 @@ function PersonEditor({
   // (400ms) and flushed on unmount, so typing stays instant and the row never
   // re-fetches out from under the editor. Same pattern as the Notes editor.
   const [form, setForm] = useState<Draft>(() => toDraft(person));
+  // Existing people open read-only; a freshly-created (blank) person opens
+  // straight into the form, same rule as the Notes editor. Evaluated once —
+  // the detail is keyed by id, so selecting another person remounts and
+  // re-evaluates, which is what sends you back to preview.
+  const [preview, setPreview] = useState(() => !isBlank(person));
   const formRef = useRef(form);
   formRef.current = form;
   const firstRender = useRef(true);
@@ -238,20 +261,38 @@ function PersonEditor({
   }, []);
 
   const display = form.full_name.trim() || t("people.newContact");
+  // Job line: "Engineer at Acme", or whichever half exists.
+  const subtitle = [form.title.trim(), form.organization.trim()].filter(Boolean).join(" · ");
 
   return (
     <div className="mx-auto max-w-3xl p-6">
       {/* Header */}
       <div className="mb-4 flex items-center gap-4">
-        <PhotoPicker name={display} value={form.photo} onChange={(photo) => patch({ photo })} size={56} />
-        <input
-          value={form.full_name}
-          onChange={(e) => patch({ full_name: e.target.value })}
-          placeholder={t("people.fullName")}
-          className="flex-1 bg-transparent text-2xl font-bold outline-none"
-        />
+        {preview ? (
+          <Avatar name={display} photo={form.photo} size={56} />
+        ) : (
+          <PhotoPicker name={display} value={form.photo} onChange={(photo) => patch({ photo })} size={56} />
+        )}
+        {preview ? (
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-2xl font-bold dark:text-neutral-100">{display}</h2>
+            {subtitle && <p className="truncate text-sm text-neutral-500">{subtitle}</p>}
+          </div>
+        ) : (
+          <input
+            value={form.full_name}
+            onChange={(e) => patch({ full_name: e.target.value })}
+            placeholder={t("people.fullName")}
+            className="flex-1 bg-transparent text-2xl font-bold outline-none"
+          />
+        )}
         <Button variant="ghost" onClick={() => patch({ favorite: !form.favorite })} aria-label={form.favorite ? t("people.unfavorite") : t("people.favorite")}>
           <Star size={18} className={form.favorite ? "text-amber-400" : "text-neutral-400"} fill={form.favorite ? "currentColor" : "none"} />
+        </Button>
+        <Button variant="ghost" onClick={() => setPreview((v) => !v)}>
+          <span className="flex items-center gap-1.5">
+            {preview ? <><Pencil size={15} /> {t("people.edit")}</> : <><Eye size={15} /> {t("people.done")}</>}
+          </span>
         </Button>
         <Button
           variant="danger"
@@ -269,6 +310,7 @@ function PersonEditor({
       </div>
 
       <div className="space-y-5">
+        {preview ? <PersonSummary form={form} /> : <>
         {/* Basics */}
         <Section title={t("people.details")}>
           <div className="grid grid-cols-2 gap-3">
@@ -347,12 +389,152 @@ function PersonEditor({
           />
         </Section>
 
-        {/* Tags + Links — the cross-app integration */}
+        </>}
+
+        {/* Tags + Links — the cross-app integration. Shown in both modes: they
+            write straight to the DB rather than through the draft, so there's
+            nothing to "save", and Notes shows them in preview too. */}
         <div className="grid grid-cols-2 gap-4 rounded-lg border border-neutral-200 p-4 dark:border-neutral-700">
           <TagEditor type="person" id={person.id} />
           <LinksPanel type="person" id={person.id} targets={targets} />
         </div>
       </div>
+    </div>
+  );
+}
+
+// --- read-only summary --------------------------------------------------------
+// Renders the draft, not the row, so switching out of edit shows what you just
+// typed rather than waiting for the debounced save + reload to land.
+// Empty fields are omitted entirely, sections included: a sparse contact shows
+// a short page, not a page of blanks.
+
+/** A birthday is a bare `yyyy-mm-dd`; build a *local* date so it doesn't render
+ *  a day early west of UTC (`new Date("1990-05-04")` parses as UTC midnight). */
+function birthdayLabel(value: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value.trim());
+  if (!m) return null;
+  return fmtFullDate(new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+}
+
+function formatAddress(a: PersonAddress): string {
+  return [a.street, [a.postal_code, a.city].filter(Boolean).join(" "), a.region, a.country]
+    .map((s) => s?.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function PersonSummary({ form }: { form: Draft }) {
+  const { t } = useTranslation();
+  const emails = form.emails.filter((e) => e.value.trim());
+  const phones = form.phones.filter((p) => p.value.trim());
+  const urls = form.urls.filter((u) => u.value.trim());
+  const addresses = form.addresses.filter(hasAddress);
+  const custom = form.custom_fields.filter((c) => c.label.trim() && c.value.trim());
+  const birthday = form.birthday ? birthdayLabel(form.birthday) : null;
+  const details: [string, string][] = [
+    ...(form.nickname.trim() ? [[t("people.nickname"), form.nickname.trim()] as [string, string]] : []),
+    ...(birthday ? [[t("people.birthday"), birthday] as [string, string]] : []),
+  ];
+
+  return (
+    <>
+      {details.length > 0 && (
+        <Section title={t("people.details")}>
+          <dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1 text-sm dark:text-neutral-100">
+            {details.map(([label, value]) => (
+              <Fragment key={label}>
+                <dt className="text-neutral-500">{label}</dt>
+                <dd>{value}</dd>
+              </Fragment>
+            ))}
+          </dl>
+        </Section>
+      )}
+
+      {emails.length > 0 && (
+        <Section title={t("people.email")}>
+          <ValueList rows={emails} onOpen={(v) => void openUrl(`mailto:${v}`)} icon={<Mail size={14} />} />
+        </Section>
+      )}
+
+      {phones.length > 0 && (
+        <Section title={t("people.phone")}>
+          <ValueList rows={phones} onOpen={(v) => void openUrl(`tel:${v.replace(/\s+/g, "")}`)} icon={<Phone size={14} />} />
+        </Section>
+      )}
+
+      {urls.length > 0 && (
+        <Section title={t("people.websites")}>
+          <ValueList
+            rows={urls}
+            onOpen={(v) => void openUrl(/^https?:\/\//i.test(v) ? v : `https://${v}`)}
+            icon={<ExternalLink size={14} />}
+          />
+        </Section>
+      )}
+
+      {addresses.length > 0 && (
+        <Section title={t("people.addresses")}>
+          <div className="space-y-2 text-sm dark:text-neutral-100">
+            {addresses.map((a, i) => (
+              <div key={i}>
+                <div className="text-xs text-neutral-500">{t(`people.typeValue.${a.type}`, { defaultValue: a.type ?? "" })}</div>
+                <div className="whitespace-pre-line">{formatAddress(a)}</div>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {custom.length > 0 && (
+        <Section title={t("people.customFields")}>
+          <dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1 text-sm dark:text-neutral-100">
+            {custom.map((c, i) => (
+              <Fragment key={i}>
+                <dt className="text-neutral-500">{c.label}</dt>
+                <dd>{c.value}</dd>
+              </Fragment>
+            ))}
+          </dl>
+        </Section>
+      )}
+
+      {form.notes.trim() && (
+        <Section title={t("nav.notes")}>
+          <p className="whitespace-pre-wrap text-sm dark:text-neutral-100">{form.notes.trim()}</p>
+        </Section>
+      )}
+    </>
+  );
+}
+
+/** Read-only counterpart to TypedValueRows: type label + clickable value. */
+function ValueList({
+  rows, onOpen, icon,
+}: {
+  rows: { type: string; value: string }[];
+  onOpen: (value: string) => void;
+  icon: React.ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-1 text-sm">
+      {rows.map((r, i) => (
+        <div key={i} className="flex items-center gap-3">
+          <span className="w-20 shrink-0 text-xs text-neutral-500">
+            {t(`people.typeValue.${r.type}`, { defaultValue: r.type })}
+          </span>
+          <button
+            onClick={() => onOpen(r.value.trim())}
+            className="flex min-w-0 items-center gap-1.5 truncate text-blue-600 hover:underline dark:text-blue-400"
+            title={t("people.open")}
+          >
+            <span className="truncate">{r.value}</span>
+            <span className="shrink-0 text-neutral-400">{icon}</span>
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
