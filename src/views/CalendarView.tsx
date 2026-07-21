@@ -80,13 +80,22 @@ export default function CalendarView({ onChange, openEventId }: { onChange: () =
   }, [occurrences, openEventId]);
 
   async function doExport() {
-    const path = await exportCalendar();
-    setMsg(path ? t("calendar.exportedTo", { path }) : "");
+    try {
+      const path = await exportCalendar();
+      setMsg(path ? t("calendar.exportedTo", { path }) : "");
+    } catch (e) {
+      setMsg("");
+      setErrors([e instanceof Error ? e.message : String(e)]);
+    }
   }
   async function doImport() {
-    const n = await importCalendar();
-    setMsg(t("calendar.imported", { count: n }));
-    bump();
+    try {
+      const n = await importCalendar();
+      setMsg(t("calendar.imported", { count: n }));
+      bump();
+    } catch (e) {
+      setErrors([e instanceof Error ? e.message : String(e)]);
+    }
   }
 
   const move = (dir: number) => {

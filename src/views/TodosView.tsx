@@ -33,6 +33,9 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
   // assistant card), switching to its list so it's also visible behind the
   // detail. Only fires once, so closing the detail doesn't re-open it.
   const opened = useRef(false);
+  // True while addList() is mid-flight, so the onBlur handler (which also calls
+  // addList) doesn't double-fire when an Enter-triggered alert() steals focus.
+  const addingListRef = useRef(false);
   useEffect(() => {
     if (opened.current || !initialId || todos.length === 0) return;
     const match = todos.find((td) => td.id === initialId);
@@ -71,6 +74,11 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
   async function addList() {
     const name = newListName.trim();
     if (!name) { setAddingList(false); return; }
+    // Guard against the blur handler firing again while the modal alert() is
+    // up: Enter → addList → alert steals focus → onBlur → addList again would
+    // otherwise pop the duplicate-name alert twice.
+    if (addingListRef.current) return;
+    addingListRef.current = true;
     const color = CATEGORY_COLORS[lists.length % CATEGORY_COLORS.length];
     let id: string;
     try {
@@ -81,8 +89,16 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
       alert(err instanceof Error && /already exists/.test(err.message)
         ? tr("todos.listAlreadyExists", { name })
         : err instanceof Error ? err.message : String(err));
+      // Release the guard only AFTER the alert has been dismissed, and one task
+      // later: alert() steals focus from the input, and that blur — whether it
+      // lands synchronously during the modal or as a queued task once it closes
+      // — re-enters addList. Clearing the ref before the alert (or right after
+      // it, synchronously) leaves that second call unguarded and pops the same
+      // alert twice. Measured in `npm run dev`, not theorised.
+      window.setTimeout(() => { addingListRef.current = false; }, 0);
       return;
     }
+    addingListRef.current = false;
     setNewListName("");
     setAddingList(false);
     await reload();

@@ -27,6 +27,11 @@ export interface SqlDb {
 }
 
 let _db: SqlDb | null = null;
+// The in-flight open promise, so concurrent first-callers of db() share one
+// open instead of racing into the init branch (the browser backend's
+// loadBrowserDb + resetAndSeedDemo would otherwise run twice in parallel, and
+// the seeder's own db() call could re-enter before `_db` is assigned).
+let _dbPromise: Promise<SqlDb> | null = null;
 
 /** True inside the Tauri webview; false under `npm run dev` in a browser. */
 export function isTauri(): boolean {
@@ -40,20 +45,29 @@ export function isTauri(): boolean {
  * `lib/browserDb.ts`. It exists so the UI can be exercised in a browser; it is
  * seeded with demo data and never persists.
  */
-export async function db(): Promise<SqlDb> {
-  if (!_db) {
-    if (isTauri()) {
-      _db = (await Database.load("sqlite:secondbrain.db")) as SqlDb;
-    } else {
-      const { loadBrowserDb } = await import("./lib/browserDb");
-      _db = await loadBrowserDb();
-      // Seed only after `_db` is set: the seeder calls db() itself, and doing
-      // this inside loadBrowserDb() would re-enter this branch forever.
-      const { resetAndSeedDemo } = await import("./lib/demo");
-      await resetAndSeedDemo();
-    }
+export function db(): Promise<SqlDb> {
+  if (_db) return Promise.resolve(_db);
+  if (!_dbPromise) {
+    _dbPromise = (async () => {
+      let opened: SqlDb;
+      if (isTauri()) {
+        opened = (await Database.load("sqlite:secondbrain.db")) as SqlDb;
+      } else {
+        const { loadBrowserDb } = await import("./lib/browserDb");
+        opened = await loadBrowserDb();
+        // Seed only after the backend is assigned below: the seeder calls db()
+        // itself, and doing this inside loadBrowserDb() would re-enter this
+        // branch forever.
+      }
+      _db = opened;
+      if (!isTauri()) {
+        const { resetAndSeedDemo } = await import("./lib/demo");
+        await resetAndSeedDemo();
+      }
+      return opened;
+    })();
   }
-  return _db;
+  return _dbPromise;
 }
 
 export function newId(): string {
@@ -406,8 +420,12 @@ export async function upsertNote(input: NoteInput): Promise<string> {
 
 export async function deleteNote(id: string): Promise<void> {
   const d = await db();
-  await d.execute("DELETE FROM notes WHERE id=?", [id]);
+  // Images first, then the note: there's no FK cascade and no cross-call
+  // transaction (see importTables' atomicity note), so if the second execute
+  // fails we want the note to still exist so a future delete can retry — not
+  // orphaned image rows pointing at a note that's already gone.
   await d.execute("DELETE FROM note_images WHERE note_id=?", [id]); // no FK cascade — see 006
+  await d.execute("DELETE FROM notes WHERE id=?", [id]);
   await removeItemRelations("note", id);
 }
 
@@ -809,6 +827,12 @@ export async function allLinkTargets(): Promise<
 export async function getItemLabel(type: ItemType, id: string): Promise<string> {
   const d = await db();
   const table = { event: "events", reminder: "reminders", todo: "todos", note: "notes", person: "people" }[type];
+  if (!table) {
+    // The map is keyed by ItemType, so reaching here means a new type was added
+    // to the union without updating this lookup — fail loudly rather than emit
+    // `SELECT title FROM undefined`, which SQLite would reject cryptically.
+    throw new Error(`getItemLabel: unknown item type "${type}"`);
+  }
   const col = type === "event" ? "summary" : type === "person" ? "full_name" : "title";
   const rows = await d.select<{ label: string | null }[]>(
     `SELECT ${col} AS label FROM ${table} WHERE id=?`,
@@ -829,10 +853,12 @@ export async function getItemLabel(type: ItemType, id: string): Promise<string> 
 
 /** Every user-data table. `notes_fts` is a virtual FTS mirror kept in sync by
  *  triggers, so it is never exported or imported directly. No FK cascades
- *  exist, so insert order doesn't matter. */
+ *  exist, so insert order doesn't matter. `note_images` is included so a backup
+ *  round-trips the bytes a note's `sbimg:` reference points at — without it,
+ *  restore would leave every image broken, and clearAllData would orphan rows. */
 export const DATA_TABLES = [
   "tags", "item_tags", "links", "events", "reminders", "lists", "todos",
-  "notes", "people", "person_custom_fields",
+  "notes", "note_images", "people", "person_custom_fields",
 ] as const;
 
 export type DataTable = (typeof DATA_TABLES)[number];

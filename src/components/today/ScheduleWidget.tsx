@@ -21,9 +21,9 @@ function Schedule({ day, viewingToday, revision, goTo }: TodayWidgetProps) {
     >
       {!occs?.length ? (
         <CardEmpty>{viewingToday ? tr("today.noEvents") : tr("today.noEventsDay")}</CardEmpty>
-      ) : occs.map((o, i) => (
+      ) : occs.map((o) => (
         <button
-          key={i}
+          key={`${o.event.id}|${o.start.toISOString()}`}
           onClick={() => goTo("calendar", { eventId: o.event.id })}
           className="flex w-full items-center gap-2 rounded py-1.5 text-left hover:bg-neutral-50 dark:hover:bg-neutral-700/50"
         >

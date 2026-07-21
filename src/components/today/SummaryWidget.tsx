@@ -192,7 +192,7 @@ function Summary({ day, viewingToday, revision }: TodayWidgetProps) {
           high: Math.round(weather.data.high),
           low: Math.round(weather.data.low),
           unit: weather.data.unit,
-          precipitation: weather.data.precipitation,
+          precipitation: weather.data.precipitation !== null ? Math.round(weather.data.precipitation) : null,
           feels_like: weather.data.feelsLike !== null ? Math.round(weather.data.feelsLike) : null,
           air_quality: weather.data.air ? Math.round(weather.data.air.usAqi) : null,
         }

@@ -8,6 +8,7 @@ const MIGRATION_V3: &str = include_str!("../migrations/003_people.sql");
 const MIGRATION_V4: &str = include_str!("../migrations/004_person_custom_fields.sql");
 const MIGRATION_V5: &str = include_str!("../migrations/005_fts_trigram.sql");
 const MIGRATION_V6: &str = include_str!("../migrations/006_note_images.sql");
+const MIGRATION_V7: &str = include_str!("../migrations/007_unique_list_name.sql");
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -46,6 +47,12 @@ pub fn run() {
             version: 6,
             description: "note_images: image bytes referenced from note markdown",
             sql: MIGRATION_V6,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 7,
+            description: "collapse duplicate list names and add a case-insensitive unique index",
+            sql: MIGRATION_V7,
             kind: MigrationKind::Up,
         },
     ];

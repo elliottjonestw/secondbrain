@@ -15,13 +15,24 @@ import { AlertTriangle } from "lucide-react";
  * header and layout intact.
  */
 class Boundary extends Component<
-  { label: string; message: string; children: ReactNode },
-  { failed: boolean }
+  { label: string; message: string; resetKey: unknown; children: ReactNode },
+  { failed: boolean; resetKey: unknown }
 > {
-  state = { failed: false };
+  state = { failed: false, resetKey: this.props.resetKey };
 
   static getDerivedStateFromError() {
     return { failed: true };
+  }
+
+  // Reset a crash when something the caller considers a "fresh start" changes
+  // (the day being viewed, the data revision). Without this a card that threw
+  // while rendering for day N stays crashed for day M: `key` at the call site
+  // is the stable widget id, so the boundary doesn't remount on day changes.
+  static getDerivedStateFromProps(props: { resetKey: unknown }, state: { failed: boolean; resetKey: unknown }) {
+    if (state.failed && props.resetKey !== state.resetKey) {
+      return { failed: false, resetKey: props.resetKey };
+    }
+    return null;
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
@@ -45,11 +56,13 @@ class Boundary extends Component<
 }
 
 /** Translated wrapper — the boundary itself is a class and can't use hooks. */
-export function CardBoundary({ label, children }: { label: string; children: ReactNode }) {
+export function CardBoundary({
+  label, resetKey, children,
+}: { label: string; resetKey: unknown; children: ReactNode }) {
   const { t } = useTranslation();
   return (
     // Remounting on label change is fine and useful: switching language or
     // widget gives a failed card a fresh attempt.
-    <Boundary label={label} message={t("today.cardCrashed")}>{children}</Boundary>
+    <Boundary label={label} message={t("today.cardCrashed")} resetKey={resetKey}>{children}</Boundary>
   );
 }

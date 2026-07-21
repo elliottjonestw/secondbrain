@@ -4,9 +4,11 @@
 // structurally cannot: the plugin's JSON bridge, the native webview's quirks,
 // and anything that only exists once the app is packaged.
 //
-// The app must be built with the `wdio` feature first — `npm run test:e2e`
-// does that. Without it the embedded WebDriver server isn't compiled in and
-// the session fails to attach.
+// The app must be built with the `wdio` feature first — run
+// `npm run test:e2e:build` once before `npm run test:e2e`. The build is kept
+// separate so iterating on specs doesn't trigger a multi-minute rebuild every
+// run; rebuild only when Rust/Tauri code changes. Without the feature the
+// embedded WebDriver server isn't compiled in and the session fails to attach.
 
 export const config: WebdriverIO.Config = {
   runner: "local",

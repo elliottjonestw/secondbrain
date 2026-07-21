@@ -5,7 +5,7 @@
 // would start describing a day the card doesn't show.
 
 import type { TodoRow, ReminderRow, PersonRow } from "../../types";
-import { startOfDay, isSameDay, isOverdue, fmtMonthDay, fmtRelativeDays } from "../../lib/format";
+import { startOfDay, isSameDay, isOverdue, fmtMonthDay, fmtRelativeDays, parseBirthday } from "../../lib/format";
 import { nextOccurrenceFrom } from "../../lib/recurrence";
 
 /**
@@ -62,11 +62,12 @@ export function upcomingBirthdays(people: PersonRow[], within: number, from: Dat
   const out: UpcomingBirthday[] = [];
   for (const person of people) {
     if (!person.birthday) continue;
-    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(person.birthday.trim());
-    if (!m) continue;
-    const month = Number(m[2]);
-    const day = Number(m[3]);
-    if (month < 1 || month > 12 || day < 1 || day > 31) continue;
+    // Reuse the single birthday parser so this stays consistent with the People
+    // view's read of the same field — including vCard `--05-14` (unknown year),
+    // which a local yyyy-mm-dd regex here would silently drop.
+    const parsed = parseBirthday(person.birthday);
+    if (!parsed) continue;
+    const { month, day } = parsed;
     // A Feb 29 birthday on a non-leap year would otherwise roll over to Mar 1
     // (JS Date overflows the day-of-month). Cap to the last day of the month so
     // it lands on Feb 28 that year — the usual convention.

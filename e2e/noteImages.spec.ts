@@ -31,52 +31,64 @@ describe("note images (real Tauri runtime)", () => {
       const data = "QUJDREVGR0g".repeat(40_000).slice(0, 400_000);
       const now = new Date().toISOString();
 
-      await tauri.invoke("plugin:sql|execute", {
-        db,
-        query: "INSERT INTO notes (id, title, body, pinned, created_at, updated_at) VALUES (?,?,?,?,?,?)",
-        values: [noteId, "e2e", `![x](sbimg:${imageId})`, 0, now, now],
-      });
+      // Cleanup runs in `finally` so a failed assert or a thrown invoke can't
+      // leave the test's rows behind in the user's real secondbrain.db. Plain
+      // try/finally, no inner arrow — esbuild's keepNames wraps every function
+      // in __name(...) and that helper isn't defined in the page.
+      let writeMs = 0, readMs = 0, listMs = 0;
+      let result: Record<string, unknown> = {};
+      try {
+        await tauri.invoke("plugin:sql|execute", {
+          db,
+          query: "INSERT INTO notes (id, title, body, pinned, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+          values: [noteId, "e2e", `![x](sbimg:${imageId})`, 0, now, now],
+        });
 
-      const t0 = performance.now();
-      await tauri.invoke("plugin:sql|execute", {
-        db,
-        query: "INSERT INTO note_images (id, note_id, mime, data, width, height, created_at) VALUES (?,?,?,?,?,?,?)",
-        values: [imageId, noteId, "image/jpeg", data, 1600, 1200, now],
-      });
-      const writeMs = performance.now() - t0;
+        const t0 = performance.now();
+        await tauri.invoke("plugin:sql|execute", {
+          db,
+          query: "INSERT INTO note_images (id, note_id, mime, data, width, height, created_at) VALUES (?,?,?,?,?,?,?)",
+          values: [imageId, noteId, "image/jpeg", data, 1600, 1200, now],
+        });
+        writeMs = performance.now() - t0;
 
-      const t1 = performance.now();
-      const rows = (await tauri.invoke("plugin:sql|select", {
-        db, query: "SELECT * FROM note_images WHERE id = ?", values: [imageId],
-      })) as Record<string, unknown>[];
-      const readMs = performance.now() - t1;
+        const t1 = performance.now();
+        const rows = (await tauri.invoke("plugin:sql|select", {
+          db, query: "SELECT * FROM note_images WHERE id = ?", values: [imageId],
+        })) as Record<string, unknown>[];
+        readMs = performance.now() - t1;
 
-      // The whole point of the separate table: the note list must not pay for it.
-      const t2 = performance.now();
-      const notes = (await tauri.invoke("plugin:sql|select", {
-        db, query: "SELECT * FROM notes", values: [],
-      })) as Record<string, unknown>[];
-      const listMs = performance.now() - t2;
+        // The whole point of the separate table: the note list must not pay for it.
+        const t2 = performance.now();
+        const notes = (await tauri.invoke("plugin:sql|select", {
+          db, query: "SELECT * FROM notes", values: [],
+        })) as Record<string, unknown>[];
+        listMs = performance.now() - t2;
 
-      // Clean up — this is the user's real database.
-      await tauri.invoke("plugin:sql|execute", {
-        db, query: "DELETE FROM note_images WHERE note_id = ?", values: [noteId],
-      });
-      await tauri.invoke("plugin:sql|execute", {
-        db, query: "DELETE FROM notes WHERE id = ?", values: [noteId],
-      });
-      const left = (await tauri.invoke("plugin:sql|select", {
-        db, query: "SELECT count(*) AS n FROM note_images WHERE note_id = ?", values: [noteId],
-      })) as { n: number }[];
+        result = {
+          intact: rows[0]?.data === data,
+          lengthBack: String(rows[0]?.data ?? "").length,
+          noteCount: notes.length,
+        };
+      } finally {
+        // Clean up — this is the user's real database.
+        await tauri.invoke("plugin:sql|execute", {
+          db, query: "DELETE FROM note_images WHERE note_id = ?", values: [noteId],
+        });
+        await tauri.invoke("plugin:sql|execute", {
+          db, query: "DELETE FROM notes WHERE id = ?", values: [noteId],
+        });
+        const left = (await tauri.invoke("plugin:sql|select", {
+          db, query: "SELECT count(*) AS n FROM note_images WHERE note_id = ?", values: [noteId],
+        })) as { n: number }[];
+        result.leftBehind = Number(left[0].n);
+      }
 
       return {
-        intact: rows[0]?.data === data,
-        lengthBack: String(rows[0]?.data ?? "").length,
-        noteCount: notes.length,
+        ...result,
         writeMs: Math.round(writeMs),
         readMs: Math.round(readMs),
         listMs: Math.round(listMs),
-        leftBehind: Number(left[0].n),
       };
     });
 

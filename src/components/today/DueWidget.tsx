@@ -38,7 +38,11 @@ function Due({ day, viewingToday, revision, onChange, goTo }: TodayWidgetProps) 
                 <input
                   type="checkbox"
                   className="accent-blue-600"
-                  onChange={async () => { await toggleReminder(r.id, true); onChange(); }}
+                  aria-label={r.title}
+                  onChange={async () => {
+                    try { await toggleReminder(r.id, true); onChange(); }
+                    catch (e) { console.error("toggleReminder failed", e); }
+                  }}
                 />
                 <Bell size={14} className="shrink-0 text-neutral-400" />
                 <span className="truncate">{r.title}</span>
@@ -53,7 +57,11 @@ function Due({ day, viewingToday, revision, onChange, goTo }: TodayWidgetProps) 
               <input
                 type="checkbox"
                 className="accent-blue-600"
-                onChange={async () => { await toggleTodo(t.id, true); onChange(); }}
+                aria-label={t.title}
+                onChange={async () => {
+                  try { await toggleTodo(t.id, true); onChange(); }
+                  catch (e) { console.error("toggleTodo failed", e); }
+                }}
               />
               <span className="truncate">{t.title}</span>
               <PriorityFlag priority={t.priority} />

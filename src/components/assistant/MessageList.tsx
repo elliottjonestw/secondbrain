@@ -30,20 +30,41 @@ export default function MessageList({
 }) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Whether the user is parked at the bottom of the transcript. While they've
+  // scrolled up to read history we don't yank them back down on every status
+  // flip — only auto-scroll while they're following along.
+  const pinnedToBottom = useRef(true);
+  const prevLen = useRef(messages.length);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // Threshold accounts for sub-pixel rounding and the smooth-scroll-in-flight
+    // case where we haven't quite reached the bottom yet.
+    pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 32;
+  };
 
   useEffect(() => {
+    // The user just sent a message themselves: re-pin and follow it down even
+    // if they'd scrolled up to quote something. New assistant content (a reply,
+    // cited cards) still respects pinnedToBottom so reading history is quiet.
+    const grew = messages.length > prevLen.current;
+    const userTurn = grew && messages[messages.length - 1]?.role === "user";
+    prevLen.current = messages.length;
+    if (userTurn) pinnedToBottom.current = true;
+    if (!pinnedToBottom.current) return;
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, loading]);
 
   return (
     // min-h-0 so this actually shrinks and scrolls inside the popup's
     // max-height column instead of pushing the composer off-screen.
-    <div ref={scrollRef} className={`min-h-0 flex-1 overflow-y-auto ${compact ? "p-3" : "p-6"}`}>
+    <div ref={scrollRef} onScroll={onScroll} className={`min-h-0 flex-1 overflow-y-auto ${compact ? "p-3" : "p-6"}`}>
       <div className={compact ? "space-y-3" : "mx-auto max-w-2xl space-y-4"}>
         {messages.length === 0 && empty}
 
-        {messages.map((m, i) => (
-          <div key={i}>
+        {messages.map((m) => (
+          <div key={m.uiId}>
             <div className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
               <div
                 className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm ${

@@ -128,7 +128,7 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
           if (!widget) return null;
           const { Component } = widget;
           return (
-            <CardBoundary key={id} label={tr(widget.labelKey)}>
+            <CardBoundary key={id} label={tr(widget.labelKey)} resetKey={`${day.toISOString()}|${revision}`}>
               <Component
                 day={day}
                 viewingToday={viewingToday}

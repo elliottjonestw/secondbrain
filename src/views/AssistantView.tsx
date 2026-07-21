@@ -27,7 +27,10 @@ export default function AssistantView({
 }) {
   const { t } = useTranslation();
   const [keyed, setKeyed] = useState(isAssistantConfigured());
-  const chat = useAssistantChat({ messages, setMessages });
+  // Hold-to-talk only makes sense once a key is configured — without one the
+  // chat can't run, and the listener would otherwise eat Space-scroll on the
+  // "need key" screen for nothing.
+  const chat = useAssistantChat({ messages, setMessages, spaceEnabled: keyed });
 
   useEffect(() => { setKeyed(isAssistantConfigured()); }, []);
 

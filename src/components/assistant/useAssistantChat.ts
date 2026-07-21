@@ -21,8 +21,10 @@ import type { ItemRef } from "../../types";
 
 /** A chat message plus the items the assistant chose to show alongside it.
  *  ai.ts strips everything but role/content before calling the API, so the
- *  extra field never reaches the model. */
-export type UiMessage = ChatMessage & { items?: ItemRef[] };
+ *  extra fields never reach the model. `uiId` is a client-only stable key so
+ *  MessageList doesn't have to fall back to array-index keys (which reorder
+ *  badly when an aborted user turn is sliced off the end mid-transcript). */
+export type UiMessage = ChatMessage & { items?: ItemRef[]; uiId: number };
 
 /**
  * How long to wait for speech to begin before showing the reply anyway.
@@ -30,6 +32,10 @@ export type UiMessage = ChatMessage & { items?: ItemRef[] };
  * this only exists so a pathological hang can't lose the text entirely.
  */
 const SPEECH_START_TIMEOUT_MS = 10000;
+
+// Monotonic counter for UiMessage.uiId, so each bubble has a stable identity
+// independent of its position in the array.
+let nextUiId = 1;
 
 export interface UseAssistantChat {
   messages: UiMessage[];
@@ -60,6 +66,11 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
   // Set while a finished reply is being held back waiting for speech to start.
   // Calling it prints the reply immediately; see deliver().
   const revealRef = useRef<(() => void) | null>(null);
+  // Tears down whatever deliver() set up while waiting for speech to start,
+  // WITHOUT showing the held-back reply. Used by clear(), where re-appending
+  // the reply would immediately undo the clear. (stopVoice instead calls
+  // revealRef, which DOES show the reply — Stop should never cost the text.)
+  const discardRef = useRef<(() => void) | null>(null);
 
   const voiceOutput = isSpeechSupported();
 
@@ -69,7 +80,10 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
   // Aborting the in-flight turn also prevents a reply landing after unmount.
   useEffect(() => () => {
     stopSpeaking();
-    revealRef.current?.();
+    // discard the held-back reply (if any) without printing it — the surface is
+    // going away, so showing the reply into state nothing will render is wasted
+    // work, and on a popup that reopens later it would pop in unexpectedly.
+    discardRef.current?.();
     abortRef.current?.abort();
     recRef.current?.cancel();
     recRef.current = null;
@@ -133,7 +147,7 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
     const q = text.trim();
     if (!q) return;
     setError(null);
-    const next: UiMessage[] = [...messages, { role: "user", content: q }];
+    const next: UiMessage[] = [...messages, { role: "user", content: q, uiId: nextUiId++ }];
     setMessages(next);
     setInput("");
     setLoading(true);
@@ -163,6 +177,7 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
       const showReply = () =>
         setMessages([...next, {
           role: "assistant", content: reply, items: shown.length ? shown : undefined,
+          uiId: nextUiId++,
         }]);
 
       if (spoken && voiceOutput) {
@@ -173,7 +188,12 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
         setSpeaking(true);
         setStatus(t("status.speaking"));
         await new Promise<void>((resolve) => {
-          const release = () => { window.clearTimeout(timer); revealRef.current = null; resolve(); };
+          const release = () => {
+            window.clearTimeout(timer);
+            revealRef.current = null;
+            discardRef.current = null;
+            resolve();
+          };
           // Backstop: never let a speech problem swallow the reply. voice.ts
           // guarantees onStart fires even when it can't speak, so this only
           // covers something pathological — but "reply never appears" is far
@@ -182,6 +202,9 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
           // Stopping mid-wait should show the text immediately, not strand it
           // until the backstop fires.
           revealRef.current = () => { showReply(); release(); };
+          // Clearing the conversation should throw the held-back reply away,
+          // not print it into the just-emptied transcript.
+          discardRef.current = release;
           speak(reply, {
             onStart: () => { showReply(); release(); },
             onEnd: () => { setSpeaking(false); },
@@ -314,7 +337,11 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
   function clear() {
     setMessages([]);
     setError(null);
-    stopVoice();
+    stopSpeaking();
+    // If a reply is being held for speech-to-start, throw it away rather than
+    // letting the pending reveal/timer re-append it into the emptied transcript.
+    discardRef.current?.();
+    setSpeaking(false);
   }
 
   return {
