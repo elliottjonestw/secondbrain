@@ -152,6 +152,7 @@ Then open **Assistant** and try:
 | `search_notes` | FTS5 keyword search (or recent), pinned filter |
 | `search_people` | contacts by name/nickname/org/email/phone, tag filter; a known birthday also returns a computed `age` and `next_birthday` |
 | `get_item` | full detail of one item (incl. `person`, with the same computed `age`, and events in a connected calendar) + its tags and linked items |
+| `get_weather` | one day's forecast for the weather location set in Settings — condition, high/low, feels-like, rain chance, wind, UV, sunrise/sunset, plus today-only "right now" temperature, humidity and air quality (optional hour-by-hour strip) |
 
 | Write tool | Purpose |
 |------|---------|

@@ -39,6 +39,9 @@ import {
   type EventDraft,
 } from "./calendars";
 import { getSettings, DEFAULT_OLLAMA_URL, type AppSettings } from "./settings";
+// Same live-fetch path the Today card uses, cache included — an assistant
+// question right after that card rendered costs no second request.
+import { getDayWeather, isForecastable, englishCondition } from "./weather";
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -366,6 +369,28 @@ const TOOLS = [
           calendar_id: { type: "string", description: "For events: the calendar_id returned by search_events." },
         },
         required: ["type", "id"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_weather",
+      description:
+        "Get the forecast for the weather location the user set in Settings. One day per call, so a question " +
+        "about a weekend takes two calls. Only ~90 days back and 14 days ahead are available. Weather is not " +
+        "one of the user's items — never pass it to show_items. Never state a forecast this tool didn't return.",
+      parameters: {
+        type: "object",
+        properties: {
+          date: { type: "string", description: "yyyy-MM-dd. Defaults to today." },
+          include_hours: {
+            type: "boolean",
+            description:
+              "Include the hour-by-hour strip for the rest of the day. Only ask for it when the question is " +
+              "about a time of day (\"will it rain this afternoon\") — it is a lot of numbers otherwise.",
+          },
+        },
       },
     },
   },
@@ -1109,6 +1134,69 @@ const MAX_SHOWN_ITEMS = 8;
  * comes back as an error the model can correct rather than a blank card.
  */
 /**
+ * The forecast for one day at the location in Settings.
+ *
+ * There is no `location` argument on purpose: the answer is about the place the
+ * user configured, and resolving a place named in the message would mean
+ * geocoding it and disambiguating the several Springfields it returns.
+ */
+async function toolGetWeather(args: Record<string, unknown>) {
+  const { weatherLocation: loc, temperatureUnit: unit } = getSettings();
+  if (!loc) {
+    return { error: "No weather location is set. Ask the user to set one in Settings." };
+  }
+
+  // Local midnight, built field by field: `new Date("2026-07-22")` parses as UTC
+  // and lands on the previous day west of Greenwich.
+  let day = startOfDay(new Date());
+  if (typeof args.date === "string") {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(args.date.trim());
+    if (!m) return { error: "date must be yyyy-MM-dd." };
+    day = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  }
+  // Checked before fetching: outside its window the service answers 200 with
+  // `{ error: true }`, which reads as success.
+  if (!isForecastable(day)) {
+    return { error: "No forecast is available for that date — only about 90 days back and 14 days ahead." };
+  }
+
+  const w = await getDayWeather(loc, day, unit);
+  if (!w) return { error: "The weather service is unavailable right now." };
+
+  const round = (n: number | null) => (n === null ? null : Math.round(n));
+  // `current` only describes now, so anything derived from it is meaningful on
+  // today alone — hence the `_now` names and the null on any other day.
+  const isToday = day.getTime() === startOfDay(new Date()).getTime();
+  return {
+    place: loc.name,
+    date: format(day, "yyyy-MM-dd"),
+    // English, like every other string the model reads.
+    condition: englishCondition(w.code),
+    high: round(w.high),
+    low: round(w.low),
+    unit: w.unit,
+    precipitation_chance: round(w.precipitation),
+    temperature_now: isToday ? round(w.now) : null,
+    feels_like: round(w.feelsLike),
+    humidity_now: isToday ? round(w.humidity) : null,
+    wind: round(w.wind),
+    wind_unit: w.windUnit,
+    uv_index: round(w.uvIndex),
+    sunrise: w.sunrise,
+    sunset: w.sunset,
+    air_quality_now: w.air ? Math.round(w.air.usAqi) : null,
+    hours: args.include_hours === true
+      ? w.hours.map((h) => ({
+          time: h.time,
+          temp: Math.round(h.temp),
+          condition: englishCondition(h.code),
+          precipitation_chance: round(h.precipitation),
+        }))
+      : undefined,
+  };
+}
+
+/**
  * For recurring events shown without an explicit occurrence, fill in the
  * upcoming occurrence (from the start of today) so the card shows a current
  * date instead of the series' origin.
@@ -1573,6 +1661,7 @@ async function executeTool(
     case "search_notes": return toolSearchNotes(args);
     case "search_people": return toolSearchPeople(args);
     case "get_item": return toolGetItem(args);
+    case "get_weather": return toolGetWeather(args);
     // presentation
     case "show_items": return toolShowItems(args, emitItems);
     // write
@@ -1612,6 +1701,7 @@ function statusFor(name: string, args: Record<string, unknown>): string {
     case "search_notes": return args.query ? i18next.t("status.searchNotesFor", { query: String(args.query) }) : i18next.t("status.searchNotes");
     case "search_people": return args.query ? i18next.t("status.searchPeopleFor", { query: String(args.query) }) : i18next.t("status.searchPeople");
     case "get_item": return i18next.t("status.getItem");
+    case "get_weather": return i18next.t("status.weather");
     case "show_items": return i18next.t("status.showItems");
     case "create_todo": return i18next.t("status.createTodo");
     case "update_todo": return i18next.t("status.updateTodo");
@@ -1641,7 +1731,7 @@ const SYSTEM_PROMPT =
   "You are a helpful personal assistant embedded in a local life-management app called Second Brain. " +
   "You help the user with THEIR data — calendar events, reminders, to-dos, notes, people (contacts), lists, and tags.\n\n" +
   "You can READ, WRITE, and DELETE data:\n" +
-  "- Read/lookup tools: get_overview, search_todos, search_events, list_calendars, search_reminders, search_notes, search_people, get_item.\n" +
+  "- Read/lookup tools: get_overview, search_todos, search_events, list_calendars, search_reminders, search_notes, search_people, get_item, get_weather.\n" +
   "- Create/update tools: create_todo, update_todo, create_event, update_event, create_reminder, " +
   "update_reminder, create_note, update_note, create_list, create_person, update_person, add_tag.\n" +
   "- Linking tools: link_items / unlink_items connect any two items (e.g. attach a person to an event, " +
@@ -1660,6 +1750,12 @@ const SYSTEM_PROMPT =
   "- Events in connected calendars have no tags, links or attached people — those apply to the built-in " +
   "calendar only. If a tool reports `unavailable_calendars`, mention in passing that you couldn't reach that " +
   "calendar (\"I couldn't get to your Work calendar, but…\") rather than implying you saw the whole schedule.\n\n" +
+  "Weather:\n" +
+  "- get_weather answers for the ONE location the user set in Settings. You cannot look up another city; if " +
+  "they ask about somewhere else, say so and point them at Settings.\n" +
+  "- Always call it — never answer from memory, and never guess a forecast the tool didn't return.\n" +
+  "- It covers one day per call and only about 90 days back and 14 days ahead.\n" +
+  "- The forecast is not one of the user's items, so it never goes to show_items.\n\n" +
   "How to answer:\n" +
   "- Your replies are often read aloud by a text-to-speech voice, so write the way a person would SAY it: one " +
   "or two short sentences of ordinary prose.\n" +

@@ -537,6 +537,7 @@
     "searchPeople": "Looking through contacts…",
     "searchPeopleFor": "Searching people for “{{query}}”…",
     "getItem": "Fetching details…",
+    "weather": "Checking the forecast…",
     "showItems": "Pulling up the items…",
     "createTodo": "Creating a to-do…",
     "updateTodo": "Updating a to-do…",
