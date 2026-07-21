@@ -7,6 +7,7 @@ const MIGRATION_V2: &str = include_str!("../migrations/002_default_lists.sql");
 const MIGRATION_V3: &str = include_str!("../migrations/003_people.sql");
 const MIGRATION_V4: &str = include_str!("../migrations/004_person_custom_fields.sql");
 const MIGRATION_V5: &str = include_str!("../migrations/005_fts_trigram.sql");
+const MIGRATION_V6: &str = include_str!("../migrations/006_note_images.sql");
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -39,6 +40,12 @@ pub fn run() {
             version: 5,
             description: "rebuild notes_fts with the trigram tokenizer (CJK search)",
             sql: MIGRATION_V5,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 6,
+            description: "note_images: image bytes referenced from note markdown",
+            sql: MIGRATION_V6,
             kind: MigrationKind::Up,
         },
     ];

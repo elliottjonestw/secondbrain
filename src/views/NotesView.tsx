@@ -4,9 +4,11 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
 import type { NoteRow } from "../types";
-import { listNotes, upsertNote, deleteNote, searchNotes, allLinkTargets } from "../db";
+import { listNotes, upsertNote, deleteNote, searchNotes, allLinkTargets, insertNoteImage } from "../db";
 import { Button } from "../components/ui";
 import MarkdownToolbar, { mdActions, MdEdit } from "../components/MarkdownToolbar";
+import NoteImage, { SBIMG, primeNoteImage, releaseNoteImages, noteUrlTransform } from "../components/NoteImage";
+import { encodeNoteImage } from "../lib/images";
 import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/ItemMeta";
 import { fmtDateTime } from "../lib/format";
 
@@ -23,6 +25,10 @@ export default function NotesView({ onChange, initialId }: { onChange: () => voi
     setTargets(await allLinkTargets());
   };
   useEffect(() => { void reload(); }, [query]);
+
+  // Cached image object URLs are shared across notes, so they're only revoked
+  // when the whole view goes away — not on every note switch.
+  useEffect(() => releaseNoteImages, []);
 
   const selected = notes.find((n) => n.id === selectedId) ?? null;
   const bump = () => { void reload(); onChange(); };
@@ -112,6 +118,11 @@ function NoteEditor({
   // React owns the textarea's value, so a toolbar edit's caret position can only
   // be restored after the re-render that carries the new text.
   const pendingSel = useRef<[number, number] | null>(null);
+  // Mirrors `body` so async image inserts can patch the *latest* text rather
+  // than the snapshot they closed over before encoding started.
+  const bodyRef = useRef(body);
+  const imageSeq = useRef(0);
+  const [imageError, setImageError] = useState(false);
 
   function scheduleSave(next: { title?: string; body?: string; pinned?: boolean }) {
     const draft = {
@@ -140,7 +151,62 @@ function NoteEditor({
   function applyEdit(edit: MdEdit) {
     pendingSel.current = [edit.start, edit.end];
     setBody(edit.body);
+    bodyRef.current = edit.body;
     scheduleSave({ body: edit.body });
+  }
+
+  /**
+   * Insert an image at the caret.
+   *
+   * Encoding and the DB write are async, and the user keeps typing meanwhile —
+   * so a placeholder token goes in synchronously at the caret and is swapped
+   * for the real `sbimg:` reference when the write lands. Resolving the caret
+   * position after the await would drop the image wherever the cursor had
+   * wandered to.
+   */
+  async function insertImage(file: File) {
+    const el = textareaRef.current;
+    const at = el ? [el.selectionStart, el.selectionEnd] : [body.length, body.length];
+    const token = `sbimg:pending-${++imageSeq.current}`;
+    const alt = file.name.replace(/\.[^.]+$/, "") || t("notes.md.imageAlt");
+    const md = `![${alt}](${token})`;
+    const withPlaceholder = body.slice(0, at[0]) + md + body.slice(at[1]);
+    applyEdit({ body: withPlaceholder, start: at[0] + md.length, end: at[0] + md.length });
+
+    try {
+      const encoded = await encodeNoteImage(file);
+      const id = await insertNoteImage(note.id, encoded);
+      primeNoteImage(id, encoded.mime, encoded.data, encoded.width, encoded.height);
+      swapToken(token, `${SBIMG}${id}`);
+    } catch {
+      swapToken(token, null); // drop the placeholder rather than leave a dead ref
+      setImageError(true);
+    }
+  }
+
+  /** Replace (or remove) a placeholder in whatever the body has become since.
+   *  Reads `bodyRef`, not the `body` closure — the user has been typing. */
+  function swapToken(token: string, replacement: string | null) {
+    const current = bodyRef.current;
+    // Matched with the closing paren, so `pending-1` can't match inside
+    // `pending-11` — which it does on the eleventh image pasted into a note.
+    const next = replacement === null
+      ? current.replace(new RegExp(`!\\[[^\\]]*\\]\\(${token}\\)`), "")
+      : current.replace(`(${token})`, `(${replacement})`);
+    if (next === current) return; // the user deleted the placeholder mid-flight
+    setBody(next);
+    bodyRef.current = next;
+    scheduleSave({ body: next });
+  }
+
+  /** Pasting a screenshot inserts it; every other paste falls through to the
+   *  textarea's own handling. */
+  function onBodyPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const file = Array.from(e.clipboardData.files).find((f) => f.type.startsWith("image/"));
+    if (!file) return;
+    e.preventDefault();
+    setImageError(false);
+    void insertImage(file);
   }
 
   function onBodyKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -188,19 +254,34 @@ function NoteEditor({
 
       {preview ? (
         <div className="prose prose-sm max-w-none rounded-lg border border-neutral-200 p-4 dark:prose-invert dark:border-neutral-700">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{body || t("notes.noContent")}</ReactMarkdown>
+          {/* `img` is overridden so `sbimg:` references resolve to stored rows,
+              and the URL sanitizer is widened to let that scheme survive. */}
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{ img: NoteImage }}
+            urlTransform={noteUrlTransform}
+          >
+            {body || t("notes.noContent")}
+          </ReactMarkdown>
         </div>
       ) : (
         <div>
-          <MarkdownToolbar textareaRef={textareaRef} body={body} onEdit={applyEdit} />
+          <MarkdownToolbar
+            textareaRef={textareaRef}
+            body={body}
+            onEdit={applyEdit}
+            onInsertImage={(file) => { setImageError(false); void insertImage(file); }}
+          />
           <textarea
             ref={textareaRef}
             value={body}
-            onChange={(e) => { setBody(e.target.value); scheduleSave({ body: e.target.value }); }}
+            onChange={(e) => { setBody(e.target.value); bodyRef.current = e.target.value; scheduleSave({ body: e.target.value }); }}
             onKeyDown={onBodyKeyDown}
+            onPaste={onBodyPaste}
             placeholder={t("notes.bodyPlaceholder")}
             className="h-96 w-full resize-none rounded-b-lg border border-neutral-200 p-4 font-mono text-sm outline-none focus:border-blue-400 dark:border-neutral-700 dark:bg-neutral-800"
           />
+          {imageError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{t("notes.md.imageError")}</p>}
         </div>
       )}
 

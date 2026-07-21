@@ -455,7 +455,11 @@
       "code": "Code",
       "quote": "Quote",
       "linkText": "text",
-      "linkUrl": "url"
+      "linkUrl": "url",
+      "image": "Insert image",
+      "imageAlt": "image",
+      "imageError": "That image couldn't be added.",
+      "imageMissing": "Image not found"
     }
   },
   "assistant": {

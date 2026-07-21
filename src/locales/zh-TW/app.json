@@ -453,7 +453,11 @@
       "code": "程式碼",
       "quote": "引用",
       "linkText": "文字",
-      "linkUrl": "網址"
+      "linkUrl": "網址",
+      "image": "插入圖片",
+      "imageAlt": "圖片",
+      "imageError": "無法加入這張圖片。",
+      "imageMissing": "找不到圖片"
     }
   },
   "assistant": {

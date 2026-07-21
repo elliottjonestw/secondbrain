@@ -9,38 +9,23 @@ import { useRef, useState } from "react";
 import { Camera, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Avatar } from "./Avatar";
+import { decode, encodeJpeg, IMAGE_ACCEPT as ACCEPT } from "../lib/images";
 
 /** Longest edge of the stored square, and the JPEG quality used for it. */
 const SIZE = 256;
 const QUALITY = 0.8;
 
-/** Formats WebKit decodes. HEIC is deliberately absent — it fails to decode. */
-const ACCEPT = "image/png,image/jpeg,image/webp,image/gif";
-
-/**
- * Center-crop to a square and re-encode as a JPEG data URI.
- *
- * `imageOrientation: "from-image"` applies the EXIF rotation; without it every
- * photo taken on a phone lands sideways. JPEG has no alpha, so the canvas is
- * filled white first — otherwise a transparent PNG re-encodes to black.
- */
+/** Center-crop to a square and re-encode as a JPEG data URI. */
 async function toDataUri(file: File): Promise<string> {
-  const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  const bitmap = await decode(file);
   try {
     const edge = Math.min(bitmap.width, bitmap.height);
-    const canvas = document.createElement("canvas");
-    canvas.width = SIZE;
-    canvas.height = SIZE;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("no 2d context");
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, SIZE, SIZE);
-    ctx.drawImage(
-      bitmap,
-      (bitmap.width - edge) / 2, (bitmap.height - edge) / 2, edge, edge,
-      0, 0, SIZE, SIZE,
-    );
-    return canvas.toDataURL("image/jpeg", QUALITY);
+    return encodeJpeg(bitmap, SIZE, SIZE, {
+      x: (bitmap.width - edge) / 2,
+      y: (bitmap.height - edge) / 2,
+      w: edge,
+      h: edge,
+    }, QUALITY);
   } finally {
     bitmap.close();
   }

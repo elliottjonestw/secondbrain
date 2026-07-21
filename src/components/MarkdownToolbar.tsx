@@ -1,8 +1,9 @@
-import { RefObject } from "react";
+import { RefObject, useRef } from "react";
 import {
   Bold, Italic, Strikethrough, Heading1, Heading2, Heading3,
-  List, ListOrdered, ListChecks, Link as LinkIcon, Code, Quote,
+  List, ListOrdered, ListChecks, Link as LinkIcon, Code, Quote, Image as ImageIcon,
 } from "lucide-react";
+import { IMAGE_ACCEPT } from "../lib/images";
 import { useTranslation } from "react-i18next";
 
 /** The result of a toolbar action: the new body plus where the caret should land. */
@@ -75,6 +76,9 @@ type Props = {
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   body: string;
   onEdit: (edit: MdEdit) => void;
+  /** Insert a picked image file at the caret. Owned by the editor, which knows
+   *  the note id the image has to be stored against. */
+  onInsertImage: (file: File) => void;
 };
 
 /** Builds the action set once so the buttons and the keyboard shortcuts in
@@ -96,8 +100,9 @@ export function mdActions(body: string, start: number, end: number, labels: { te
   };
 }
 
-export default function MarkdownToolbar({ textareaRef, body, onEdit }: Props) {
+export default function MarkdownToolbar({ textareaRef, body, onEdit, onInsertImage }: Props) {
   const { t } = useTranslation();
+  const fileInput = useRef<HTMLInputElement>(null);
 
   function run(pick: (a: ReturnType<typeof mdActions>) => MdEdit) {
     const el = textareaRef.current;
@@ -122,6 +127,7 @@ export default function MarkdownToolbar({ textareaRef, body, onEdit }: Props) {
     { key: "link", icon: LinkIcon, label: t("notes.md.link"), run: () => run((a) => a.link()), group: 3 },
     { key: "code", icon: Code, label: t("notes.md.code"), run: () => run((a) => a.code()), group: 3 },
     { key: "quote", icon: Quote, label: t("notes.md.quote"), run: () => run((a) => a.quote()), group: 3 },
+    { key: "image", icon: ImageIcon, label: t("notes.md.image"), run: () => fileInput.current?.click(), group: 4 },
   ];
 
   return (
@@ -148,6 +154,17 @@ export default function MarkdownToolbar({ textareaRef, body, onEdit }: Props) {
           </button>
         </span>
       ))}
+      <input
+        ref={fileInput}
+        type="file"
+        accept={IMAGE_ACCEPT}
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) onInsertImage(file);
+          e.target.value = ""; // so re-picking the same file fires again
+        }}
+      />
     </div>
   );
 }

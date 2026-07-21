@@ -10,6 +10,7 @@ import type {
   ReminderRow,
   TodoRow,
   NoteRow,
+  NoteImageRow,
   ListRow,
   TagRow,
   LinkRow,
@@ -368,8 +369,36 @@ export async function upsertNote(input: NoteInput): Promise<string> {
 }
 
 export async function deleteNote(id: string): Promise<void> {
-  await (await db()).execute("DELETE FROM notes WHERE id=?", [id]);
+  const d = await db();
+  await d.execute("DELETE FROM notes WHERE id=?", [id]);
+  await d.execute("DELETE FROM note_images WHERE note_id=?", [id]); // no FK cascade — see 006
   await removeItemRelations("note", id);
+}
+
+// --- Note images -------------------------------------------------------------
+// Referenced from the note body as `sbimg:<id>`. Editing a reference out of the
+// markdown deliberately does NOT delete the row: saves are debounced mid-edit,
+// so cutting an image to paste it lower down would destroy it between
+// keystrokes. Rows are reclaimed when the whole note goes.
+
+export async function insertNoteImage(
+  noteId: string,
+  img: { mime: string; data: string; width: number; height: number },
+): Promise<string> {
+  const id = newId();
+  await (await db()).execute(
+    "INSERT INTO note_images (id, note_id, mime, data, width, height, created_at) VALUES (?,?,?,?,?,?,?)",
+    [id, noteId, img.mime, img.data, img.width, img.height, nowIso()],
+  );
+  return id;
+}
+
+export async function getNoteImage(id: string): Promise<NoteImageRow | undefined> {
+  const rows = await (await db()).select<NoteImageRow[]>(
+    "SELECT * FROM note_images WHERE id = ?",
+    [id],
+  );
+  return rows[0];
 }
 
 /** Shortest query the trigram tokenizer can answer (see 005_fts_trigram.sql). */

@@ -100,6 +100,19 @@ export interface NoteRow {
   updated_at: string | null;
 }
 
+// An image embedded in a note. The markdown in `NoteRow.body` carries only
+// `![alt](sbimg:<id>)`; the bytes live in their own table so the note list and
+// the FTS index never touch them. See 006_note_images.sql.
+export interface NoteImageRow {
+  id: string;
+  note_id: string;
+  mime: string;
+  data: string; // base64, no `data:` prefix
+  width: number;
+  height: number;
+  created_at: string;
+}
+
 // People (contacts), modeled on vCard 4.0 (RFC 6350). See 003_people.sql.
 // Multi-value fields are stored as JSON arrays on the row (parsed at the UI
 // boundary), the same pattern events use for exdates/categories.

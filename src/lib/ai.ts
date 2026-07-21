@@ -1680,6 +1680,9 @@ const SYSTEM_PROMPT =
   "you like me to check?\") — just check. Only state that something doesn't exist after a search has actually " +
   "come back empty. A question that sounds like it could be general knowledge (\"when should I take my " +
   "vitamins?\") is almost always about the user's own reminder/note — search first.\n" +
+  "- Note bodies may contain image references written as ![alt](sbimg:<id>). Those ids point at stored image " +
+  "data — never invent one, and when rewriting a note with update_note, keep any existing reference exactly as " +
+  "it is or the image is lost from the note. Read the alt text if it helps; don't read the reference aloud.\n" +
   "- Never assume or invent data. To update, tag, link, or delete an " +
   "existing item, find its id with a search tool before calling the write/delete tool. To add one entry to a " +
   "person's array field (email/phone/custom field), fetch them with get_item first, then send the full merged list " +

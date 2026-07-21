@@ -59,6 +59,8 @@ A single SQLite file, `secondbrain.db`, in Tauri's app-data directory:
 
 Migrations are versioned and idempotent (managed by `tauri-plugin-sql`); they run automatically on startup. App **settings** (your OpenAI key + model, your calendar-account configuration, your weather location, and your stock watchlist) live separately in the webview's `localStorage`, not in the database — so they survive a data reset and stay out of the syncable calendar data.
 
+**Note images are stored in their own table, not in the note text.** The markdown body holds only a reference (`![alt](sbimg:<id>)`); the bytes live in `note_images` and are read only by the preview that renders them. Inlining them as data URIs would put every image on the `notes` row — which the sidebar re-reads on every keystroke in the search box — and feed them to a *trigram* full-text index. Measured on one 300 KB image, that's a 638 KB search index versus 331 bytes.
+
 **Connected Apple calendars are not stored here.** They're fetched from iCloud live whenever the visible date range changes, and edits are written straight back — nothing is copied to disk. That's why connecting a calendar needs no migration and no schema change, and also why Apple events need a connection to show up (see [Limitations](#notes--current-limitations)).
 
 ## Features
@@ -68,7 +70,7 @@ Migrations are versioned and idempotent (managed by `tauri-plugin-sql`); they ru
 - **Apple Calendar (iCloud)** — connect your iCloud account in Settings and your Apple calendars appear alongside the built-in one, each with its own color and a visibility toggle so you can view them **individually or together**. Create, edit, delete, and skip-an-occurrence all write straight back to iCloud. When creating an event you pick its calendar; a **default calendar** setting decides where events land otherwise (including ones the assistant creates).
 - **Reminders** — Apple-Reminders-style with a filter sidebar (**All / Scheduled / Flagged / Completed**, each with live counts). Due date + optional alert time, recurrence, priority, link to a to-do. Native OS notifications fire when due (polled once a minute while the app is open).
 - **To-Do** — multiple lists (defaults: **Personal**, **Work**), inline list creation, subtasks, priority, due dates, reordering (▲/▼ on hover), and "Convert to event". Incomplete tasks always sort above completed ones.
-- **Notes** — markdown with live preview, pin, FTS5 full-text search. The editor holds local state and debounces saves, so typing stays smooth. A **formatting toolbar** sits above the text while editing (bold, italic, strikethrough, H1–H3, bullet/numbered/checklist, link, inline code, quote) — buttons act on the current selection, line markers apply to every line the selection touches and toggle off when re-applied, and **⌘/Ctrl+B, +I and +K** do bold, italic and link from the keyboard. The toolbar is hidden in preview mode.
+- **Notes** — markdown with live preview, pin, FTS5 full-text search. The editor holds local state and debounces saves, so typing stays smooth. A **formatting toolbar** sits above the text while editing (bold, italic, strikethrough, H1–H3, bullet/numbered/checklist, link, inline code, quote) — buttons act on the current selection, line markers apply to every line the selection touches and toggle off when re-applied, and **⌘/Ctrl+B, +I and +K** do bold, italic and link from the keyboard. The toolbar is hidden in preview mode. **Images** go in from the toolbar's picker or by pasting a screenshot straight into the text; they're downscaled to 1600px and re-encoded as JPEG on the way in, and they render in the preview.
 - **People** — a contacts book modeled on **vCard 4.0**: multiple emails/phones/addresses/websites (each with a type), structured name, nickname, organization, title, birthday (the profile also shows the **age** derived from it), notes, favorite, a **profile photo**, and **user-defined custom fields** (e.g. "Eye color: Blue", reorderable with ▲/▼). Custom-field **labels are global** — a field you add shows up on every person (each person keeps its own value). Because that makes deletion destructive, the ✕ on a field asks first, offering to either clear just this person's value or delete the field (and its data) for everyone. Master-detail with the same debounced auto-save as Notes (no Save button). **Selecting a person opens a read-only profile** — only filled-in fields are shown — and **Edit** switches to the form; a person you've just created opens straight in the form, the same rule the Notes editor uses. Click an email/phone/website to open it (`mailto:`/`tel:`/browser), from either mode. Tags and links stay visible in both. Upcoming birthdays surface on the Today dashboard.
 - **Weather** — an optional forecast tile on Today: condition, high/low and chance of rain, an **hour-by-hour strip** for the rest of the day, and a stat row with **feels-like, humidity, wind, UV index, air quality (US AQI) and daylight hours** — for whichever day you're viewing. Feels-like is often the number that matters: in a humid summer it runs several degrees above the air temperature. Air quality comes from Open-Meteo's separate (equally keyless) air-quality service and only applies to today, since it's a live reading. Data comes from [Open-Meteo](https://open-meteo.com), which needs **no account, no API key and no registration** — you pick a location in Settings and that's the whole setup. Nothing is written to the database: forecasts are fetched live and cached in `localStorage` for half an hour, the same rule connected calendar events follow. Celsius or Fahrenheit is a setting; with no location set, the tile doesn't exist.
 
@@ -258,6 +260,7 @@ src/
       ical.ts           # VEVENT <-> UnifiedEvent via ical.js (TZID-aware)
     notifications.ts    # due-item notification poller
     format.ts           # date helpers
+    images.ts           # decode/downscale/re-encode (person photos, note images)
     settings.ts         # app settings (OpenAI key/model, voice, calendar accounts,
                         #   weather location + unit, stock watchlist)
     ai.ts               # AI assistant: read + write tools + agentic loop
@@ -278,6 +281,8 @@ src/
     ui.tsx              # Modal, Button, priority helpers
     Avatar.tsx          # contact avatar (photo or initials)
     PhotoPicker.tsx     # avatar + profile-photo upload (crop/downscale)
+    MarkdownToolbar.tsx # note formatting bar (selection/line transforms)
+    NoteImage.tsx       # renders sbimg: refs in the note preview
     ItemMeta.tsx        # shared Tags + Links + People panels
     ItemCard.tsx        # item row: search results + assistant chat cards
     EventForm.tsx       # event create/edit
@@ -292,6 +297,7 @@ src-tauri/
     003_people.sql          # people (contacts, vCard 4.0-modeled)
     004_person_custom_fields.sql  # global custom-field label registry
     005_fts_trigram.sql     # rebuild notes FTS with the trigram tokenizer (CJK)
+    006_note_images.sql     # note_images: image bytes referenced from note bodies
   capabilities/default.json  # plugin permissions (sql, notification, dialog,
                              #   fs scope, http scope for api.openai.com +
                              #   caldav.icloud.com / *.icloud.com +
