@@ -425,7 +425,11 @@
   "search": {
     "resultsFor": "Search results for “{{query}}”",
     "prompt": "Type in the search box above.",
-    "noMatches": "No matches."
+    "noMatches": "No matches.",
+    "searching": "Searching…",
+    "remoteWindow": "Connected calendars searched from {{from}} to {{to}}.",
+    "widen": "Search a wider range",
+    "calendarsUnavailable": "Couldn’t reach {{names}} — those results are missing."
   },
   "notes": {
     "newNote": "New note",

@@ -28,6 +28,13 @@ export interface ItemRef {
 export interface NavTarget {
   noteId?: string;
   eventId?: string;
+  /**
+   * ISO start of the occurrence to open. The calendar resolves a target out of
+   * the events it has loaded for the *visible* window, so without this a hit
+   * from global search — which can be months away — opens nothing at all. It
+   * also picks the right instance of a recurring series.
+   */
+  eventStart?: string;
   todoId?: string;
   reminderId?: string;
   personId?: string;

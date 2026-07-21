@@ -29,9 +29,11 @@ export const VIEW_FOR: Record<ItemType, string> = {
 };
 
 /** The nav target that opens this item's detail once its view has mounted. */
-export function targetFor({ type, id }: { type: ItemType; id: string }): NavTarget {
+export function targetFor(
+  { type, id, occurrenceStart }: { type: ItemType; id: string; occurrenceStart?: string },
+): NavTarget {
   switch (type) {
-    case "event": return { eventId: id };
+    case "event": return { eventId: id, eventStart: occurrenceStart };
     case "reminder": return { reminderId: id };
     case "todo": return { todoId: id };
     case "note": return { noteId: id };

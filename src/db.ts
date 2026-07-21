@@ -493,6 +493,87 @@ export function escapeLike(s: string): string {
 }
 
 /**
+ * SQL prefilter matching ANY term, so the JS ranking below has candidates to
+ * work with without loading the whole table.
+ */
+export function anyTermClause(
+  terms: string[],
+  columns: string[],
+): { clause: string; params: string[] } {
+  const one = `(${columns.map((c) => `${c} LIKE ? ESCAPE '\\'`).join(" OR ")})`;
+  return {
+    clause: `(${terms.map(() => one).join(" OR ")})`,
+    params: terms.flatMap((t) => columns.map(() => `%${escapeLike(t)}%`)),
+  };
+}
+
+/**
+ * Rank rows against a query: every term must match, else the best partial
+ * matches closest-first with `partial` set.
+ *
+ * Lives here rather than in a caller because every search in the app has to
+ * agree: matching the query as one substring means `%lunch with Alex meeting%`
+ * finds nothing when the event is "Lunch with Alex". `partial` matters to the
+ * assistant, which must confirm a loose match before acting on it.
+ */
+export function matchQuery<T>(
+  rows: T[],
+  query: string,
+  fields: (row: T) => (string | null | undefined)[],
+): { rows: T[]; partial: boolean } {
+  const terms = queryTerms(query.trim().toLowerCase());
+  if (terms.length === 0) return { rows, partial: false };
+
+  const scored = rows.map((row) => {
+    const hay = fields(row).filter(Boolean).join(" ").toLowerCase();
+    return { row, hits: terms.filter((t) => hay.includes(t)).length };
+  });
+
+  const strict = scored.filter((s) => s.hits === terms.length);
+  if (strict.length > 0) return { rows: strict.map((s) => s.row), partial: false };
+
+  const loose = scored.filter((s) => s.hits > 0).sort((a, b) => b.hits - a.hits);
+  return { rows: loose.map((s) => s.row), partial: loose.length > 0 };
+}
+
+/**
+ * Term-based search over one table's text columns: SQL narrows to rows hitting
+ * any term, `matchQuery` ranks. Shared by the global search bar so it agrees
+ * with the assistant's tools about what matches.
+ */
+async function searchRows<T>(
+  table: string,
+  columns: string[],
+  query: string,
+  fields: (row: T) => (string | null | undefined)[],
+): Promise<T[]> {
+  const terms = queryTerms(query.trim());
+  if (terms.length === 0) return [];
+  const { clause, params } = anyTermClause(terms, columns);
+  const rows = await (await db()).select<T[]>(`SELECT * FROM ${table} WHERE ${clause}`, params);
+  return matchQuery(rows, query, fields).rows;
+}
+
+/** Global-search helpers: one row per match, ranked, no filters. */
+export function searchReminders(query: string): Promise<ReminderRow[]> {
+  return searchRows<ReminderRow>("reminders", ["title", "notes"], query, (r) => [r.title, r.notes]);
+}
+
+export function searchTodos(query: string): Promise<TodoRow[]> {
+  return searchRows<TodoRow>("todos", ["title", "notes"], query, (r) => [r.title, r.notes]);
+}
+
+/** Local events only — the remote half is windowed and lives in calendars.ts. */
+export function searchEventRows(query: string): Promise<EventRow[]> {
+  return searchRows<EventRow>(
+    "events",
+    ["summary", "description", "location", "categories"],
+    query,
+    (e) => [e.summary, e.description, e.location, e.categories],
+  );
+}
+
+/**
  * Full-text search over notes.
  *
  * Two paths on purpose: FTS5 (ranked) when the trigram index can answer the

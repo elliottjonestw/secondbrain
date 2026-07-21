@@ -53,6 +53,8 @@ export default function App() {
   // cleared on any other navigation so it never mis-fires later.
   const [noteTarget, setNoteTarget] = useState<string | null>(null);
   const [calTarget, setCalTarget] = useState<string | null>(null);
+  // The occurrence to open, so the calendar can jump to its month first.
+  const [calTargetStart, setCalTargetStart] = useState<string | null>(null);
   const [todoTarget, setTodoTarget] = useState<string | null>(null);
   const [reminderTarget, setReminderTarget] = useState<string | null>(null);
   const [personTarget, setPersonTarget] = useState<string | null>(null);
@@ -72,6 +74,7 @@ export default function App() {
   function navigate(v: View, target?: NavTarget) {
     setNoteTarget(target?.noteId ?? null);
     setCalTarget(target?.eventId ?? null);
+    setCalTargetStart(target?.eventStart ?? null);
     setTodoTarget(target?.todoId ?? null);
     setReminderTarget(target?.reminderId ?? null);
     setPersonTarget(target?.personId ?? null);
@@ -81,7 +84,7 @@ export default function App() {
 
   /** Clear every pending open-target (search box, plain nav). */
   function clearTargets() {
-    setNoteTarget(null); setCalTarget(null);
+    setNoteTarget(null); setCalTarget(null); setCalTargetStart(null);
     setTodoTarget(null); setReminderTarget(null); setPersonTarget(null);
   }
 
@@ -205,7 +208,7 @@ export default function App() {
       {/* Main */}
       <main className="flex-1 overflow-hidden bg-neutral-50 dark:bg-neutral-900">
         {view === "today" && <TodayView key={resetNonce} onChange={bump} goTo={(v, target) => navigate(v as View, target)} />}
-        {view === "calendar" && <CalendarView key={resetNonce} onChange={bump} openEventId={calTarget ?? undefined} />}
+        {view === "calendar" && <CalendarView key={resetNonce} onChange={bump} openEventId={calTarget ?? undefined} openEventStart={calTargetStart ?? undefined} />}
         {view === "reminders" && <RemindersView key={resetNonce} onChange={bump} initialId={reminderTarget ?? undefined} />}
         {view === "todos" && <TodosView key={resetNonce} onChange={bump} initialId={todoTarget ?? undefined} />}
         {view === "notes" && <NotesView key={resetNonce} onChange={bump} initialId={noteTarget ?? undefined} />}

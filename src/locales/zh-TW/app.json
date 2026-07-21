@@ -423,7 +423,11 @@
   "search": {
     "resultsFor": "「{{query}}」的搜尋結果",
     "prompt": "請在上方的搜尋框輸入。",
-    "noMatches": "沒有符合的結果。"
+    "noMatches": "沒有符合的結果。",
+    "searching": "搜尋中…",
+    "remoteWindow": "已連結的行事曆搜尋範圍為 {{from}} 至 {{to}}。",
+    "widen": "擴大搜尋範圍",
+    "calendarsUnavailable": "無法連線至 {{names}}，這些結果並未包含在內。"
   },
   "notes": {
     "newNote": "新增備忘錄",

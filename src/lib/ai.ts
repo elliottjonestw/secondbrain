@@ -25,7 +25,8 @@ import { ageFromBirthday, nextBirthday } from "./format";
 import { LANGUAGES, currentLanguage } from "./i18n";
 import type { EventRow, ItemRef, ItemType, UnifiedEvent } from "../types";
 import {
-  db, listLists, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms, escapeLike,
+  db, listLists, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
+  matchQuery, anyTermClause,
   upsertTodo, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
   deleteTodo, deleteReminder, deleteNote, deleteList,
   listPeople, searchPeople, upsertPerson, deletePerson, createLink, deleteLink,
@@ -147,40 +148,12 @@ async function resolveListId(name: unknown): Promise<string | null> {
 }
 
 /**
- * Match rows against a free-text query, widening the net if a strict match
- * finds nothing.
- *
- * Two failures motivated this. Matching the whole query as one substring meant
- * "lunch with Alex meeting" found nothing, because the user's phrasing is never
- * the stored title word-for-word — so terms are matched individually and ANDed.
- * But ANDing alone still misses that example ("meeting" appears nowhere in
- * "Lunch with Alex"), so when nothing matches every term we fall back to
- * anything matching at least one, best-first.
- *
- * `partial` is reported to the model so it confirms which item was meant
- * instead of acting on a loose match — this feeds delete confirmations.
- * The sort is stable, so equally-scored rows keep their incoming order
- * (chronological, for events).
+ * `matchQuery` and `anyTermClause` live in db.ts, next to `queryTerms` — the
+ * global search bar needs the same ranking, and two copies would drift on
+ * exactly the phrasing bugs they exist to prevent. `partial` is reported to
+ * the model so it confirms which item was meant instead of acting on a loose
+ * match, which is what protects deletes.
  */
-function matchQuery<T>(
-  rows: T[],
-  query: string,
-  fields: (row: T) => (string | null | undefined)[],
-): { rows: T[]; partial: boolean } {
-  const terms = queryTerms(query.trim().toLowerCase());
-  if (terms.length === 0) return { rows, partial: false };
-
-  const scored = rows.map((row) => {
-    const hay = fields(row).filter(Boolean).join(" ").toLowerCase();
-    return { row, hits: terms.filter((t) => hay.includes(t)).length };
-  });
-
-  const strict = scored.filter((s) => s.hits === terms.length);
-  if (strict.length > 0) return { rows: strict.map((s) => s.row), partial: false };
-
-  const loose = scored.filter((s) => s.hits > 0).sort((a, b) => b.hits - a.hits);
-  return { rows: loose.map((s) => s.row), partial: loose.length > 0 };
-}
 
 /** Told to the model when a search had to fall back to loose matching. */
 const PARTIAL_MATCH_NOTE =
@@ -200,16 +173,6 @@ function categoryLabels(raw: string | null | undefined): string | null {
     const labels = arr.filter((c): c is string => typeof c === "string");
     return labels.length ? labels.join(" ") : null;
   } catch { return null; }
-}
-
-/** SQL prefilter matching ANY term, so the JS ranking above has candidates to
- *  work with without loading the whole table. */
-function anyTermClause(terms: string[], columns: string[]): { clause: string; params: string[] } {
-  const one = `(${columns.map((c) => `${c} LIKE ? ESCAPE '\\'`).join(" OR ")})`;
-  return {
-    clause: `(${terms.map(() => one).join(" OR ")})`,
-    params: terms.flatMap((t) => columns.map(() => `%${escapeLike(t)}%`)),
-  };
 }
 
 /** item_ids that carry a given tag name, for a given item type. */

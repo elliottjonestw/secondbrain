@@ -23,10 +23,19 @@ import EventForm from "../components/EventForm";
 type ViewMode = "month" | "week" | "day";
 const HOUR_PX = 48;
 
-export default function CalendarView({ onChange, openEventId }: { onChange: () => void; openEventId?: string }) {
+export default function CalendarView(
+  { onChange, openEventId, openEventStart }:
+  { onChange: () => void; openEventId?: string; openEventStart?: string },
+) {
   const { t } = useTranslation();
   const [mode, setMode] = useState<ViewMode>("month");
-  const [cursor, setCursor] = useState(new Date());
+  // Start on the target's month when navigated to a specific occurrence: the
+  // effect below can only match events the visible window actually loaded, and
+  // a search hit is routinely months from today.
+  const [cursor, setCursor] = useState(() => {
+    const at = openEventStart ? new Date(openEventStart) : null;
+    return at && !isNaN(at.getTime()) ? at : new Date();
+  });
   const [occurrences, setOccurrences] = useState<EventOccurrence[]>([]);
   const [todos, setTodos] = useState<TodoRow[]>([]);
   const [editing, setEditing] = useState<{ event: UnifiedEvent | null; calendarId?: string; start?: Date; occ?: Date } | null>(null);
@@ -72,12 +81,17 @@ export default function CalendarView({ onChange, openEventId }: { onChange: () =
   const opened = useRef(false);
   useEffect(() => {
     if (opened.current || !openEventId || occurrences.length === 0) return;
-    const match = occurrences.find((o) => o.event.id === openEventId);
+    // One recurring id has many occurrences in a window, so prefer the day we
+    // were sent to before falling back to the first one.
+    const mine = occurrences.filter((o) => o.event.id === openEventId);
+    const at = openEventStart ? new Date(openEventStart) : null;
+    const match =
+      (at && !isNaN(at.getTime()) ? mine.find((o) => isSameDay(o.start, at)) : undefined) ?? mine[0];
     if (match) {
       opened.current = true;
       setEditing({ event: match.event, occ: match.start });
     }
-  }, [occurrences, openEventId]);
+  }, [occurrences, openEventId, openEventStart]);
 
   async function doExport() {
     try {

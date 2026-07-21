@@ -66,6 +66,8 @@ npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
 - **Two expansion paths on purpose:** local uses `rrule`, remote uses **ical.js** for the `TZID` + `VTIMEZONE` only it resolves. Unifying them breaks cross-timezone events.
 - **Writes are ETag-guarded** (`If-Match`, `If-None-Match: *`). A 412 is a real conflict — surface it, never blind-retry.
 - **Reads fail soft:** `getOccurrences` returns `{ occurrences, errors }`; a dead iCloud must never break the local calendar.
+- **`searchEvents` is asymmetric on purpose** — local is SQLite so it searches all time; CalDAV has no keyword search at all, so remote can only be a windowed fetch matched client-side. Any caller MUST show the window (`SearchView`'s footer): outside it, results are *missing*, not absent. It returns one hit per **event**, not per occurrence — a daily standup expanded over a year is one thing the user is looking for — dated to the occurrence nearest now, never the series start.
+- **Snap any search window to whole days.** `getRemoteOccurrences` caches on `calendarId|start|end`, so a window built from `new Date()` mints a fresh key on every keystroke and re-hits the network per character. Debounce too — a keystroke can now cost a CalDAV round-trip.
 - **Writes preserve the source zone via `UnifiedEvent.tzid`.** `dtstart` is still an absolute instant; `tzid` is a *write-back hint only*, set in `toUnified` from `startDate.zone.tzid` (null for all-day/floating/UTC/local). `buildCalendarData` emits `DTSTART;TZID=` + the `VTIMEZONE` **only when the zone is registered in `ICAL.TimezoneService`** — reads register every VTIMEZONE they see, so a fetched event can round-trip; anything else falls back to UTC. **We ship no tz database, so events created in-app still write UTC and a new recurring timed series still drifts across DST.** Never "fix" that by dropping the `fromJSDate(d, true)` — `false` emits a floating time, which is worse. `EXDATE` must carry the same value type and zone as `DTSTART` or the skipped occurrence comes back.
 
 **Platform**
@@ -95,6 +97,7 @@ npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
 - **Image inserts drop a placeholder token first, then swap it** — encode + write are async while the user types, so resolving the caret after the await misplaces the image. The swap matches `(token)` with parens: bare `pending-1` also matches inside `pending-11`.
 - **Icons: `lucide-react` only, no emoji.**
 - **Deep-linking into a view = `NavTarget` key + a prop consumed on mount** (`navigate` in `App.tsx`). Todos/Reminders/People guard with an `opened` ref so closing the detail can't re-open it.
+- **An event target needs `NavTarget.eventStart`, not just `eventId`.** `CalendarView` resolves a target out of the occurrences loaded for the *visible* window, so an id alone silently opens nothing whenever the event is outside it — invisible from Today (always same-day), routine from search. `eventStart` seeds the cursor's month and picks the right instance of a recurring series.
 
 **Assistant surfaces**
 - **The turn/voice lifecycle lives in `useAssistantChat`, not a component** — two surfaces run a conversation (page, popup) and `deliver`/the mic lifecycle/the speech hold-back are too delicate to exist twice.
@@ -116,7 +119,7 @@ npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
 ## AI assistant (`src/lib/ai.ts`)
 
 - **Tool-calling, not context-stuffing** — agentic loop capped at `MAX_TOOL_ROUNDS`. Read tools are filtered + paginated (`limit` default 25 / max 100, returning `total` + `truncated`); push filters into SQL/FTS.
-- **Every text search matches TERMS, never the whole query as one substring** — `%lunch with Alex meeting%` finds nothing when the event is "Lunch with Alex", and the assistant then says it doesn't exist. `matchQuery` ANDs the terms, then falls back to ranked partial matches with `partial_match` set so the model confirms before acting (this protects deletes). `queryTerms` is shared with `db.ts`; SQL prefilters with `anyTermClause`, JS ranks.
+- **Every text search matches TERMS, never the whole query as one substring** — `%lunch with Alex meeting%` finds nothing when the event is "Lunch with Alex", and the assistant then says it doesn't exist. `matchQuery` ANDs the terms, then falls back to ranked partial matches with `partial_match` set so the model confirms before acting (this protects deletes). `matchQuery`, `anyTermClause` and `queryTerms` all live in **`db.ts`** — the global search bar needs identical ranking, and the one thing two copies would drift on is the phrasing bug they exist to prevent. SQL prefilters with `anyTermClause`, JS ranks.
 - **`search_events` defaults its window to `startOfDay(now)`** — the current instant hid a 12:30 lunch at 2pm. It won't look back past today; older items need an explicit `start`.
 - **Write tools partial-merge** (`"field" in args` distinguishes clear-to-null from leave-alone) and reuse `db.ts` upserts so `sequence`/timestamps stay right.
 - **Deletion is permanent** with no UI confirmation — the prompt makes the model confirm. Adding a dialog is a deliberate change (update README).

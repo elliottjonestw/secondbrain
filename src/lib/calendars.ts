@@ -14,9 +14,9 @@ import type { EventRow, EventOccurrence, EventSource, UnifiedEvent } from "../ty
 import { LOCAL_CALENDAR_ID } from "../types";
 import {
   listEvents, getEvent as getLocalEvent, upsertEvent, deleteEvent as deleteLocalEvent,
-  addExdate, newId,
+  addExdate, newId, searchEventRows, matchQuery,
 } from "../db";
-import { expandEvents } from "./recurrence";
+import { expandEvents, nextOccurrenceFrom } from "./recurrence";
 import {
   getCalendarSettings, saveCalendarSettings, saveAccountCalendars,
   type CalDavCalendar,
@@ -232,6 +232,79 @@ export async function getOccurrences(
     (a, b) => a.start.getTime() - b.start.getTime(),
   );
   return { occurrences, errors: remote.errors };
+}
+
+export interface EventSearchHit {
+  event: UnifiedEvent;
+  /** The occurrence to show and open — nearest to `now`, not the series start. */
+  start: Date;
+}
+
+export interface EventSearchResult {
+  hits: EventSearchHit[];
+  /** Per-calendar failures, same fail-soft contract as getOccurrences. */
+  errors: string[];
+  /** The window connected calendars were searched over. Local is unbounded. */
+  windowStart: Date;
+  windowEnd: Date;
+}
+
+/**
+ * Keyword search across every visible calendar.
+ *
+ * The two halves are deliberately asymmetric. Local events are SQLite, so they
+ * are searched over all time. Connected calendars have no keyword search at
+ * all — CalDAV's only server-side filter is a time-range — so they can only be
+ * fetched for a window and matched here. Callers must show which window that
+ * was: results outside it are missing, not absent.
+ *
+ * Returns one hit per *event*, not per occurrence. A daily standup expanded
+ * over a year is one thing the user is looking for, not 365 of them.
+ */
+export async function searchEvents(
+  query: string,
+  windowStart: Date,
+  windowEnd: Date,
+): Promise<EventSearchResult> {
+  const q = query.trim();
+  if (!q) return { hits: [], errors: [], windowStart, windowEnd };
+
+  const now = new Date();
+  const { localVisible } = getCalendarSettings();
+
+  const [localRows, remote] = await Promise.all([
+    localVisible ? searchEventRows(q) : Promise.resolve([] as EventRow[]),
+    getRemoteOccurrences(windowStart, windowEnd),
+  ]);
+
+  const hits: EventSearchHit[] = localRows.map((row) => {
+    const event = localToUnified(row);
+    // Recurring series store the base time, so showing dtstart would date a
+    // weekly standup to whenever the series began — often years ago.
+    return { event, start: nextOccurrenceFrom(event.dtstart, event.rrule, now) ?? new Date(event.dtstart) };
+  });
+
+  // Remote events arrive already expanded, so collapse each id back to the one
+  // occurrence closest to now before ranking.
+  const matched = matchQuery(remote.occurrences, q, (o) => [
+    o.event.summary, o.event.description, o.event.location,
+  ]).rows;
+  const nearest = new Map<string, EventSearchHit>();
+  for (const o of matched) {
+    const key = `${o.event.calendarId}|${o.event.id}`;
+    const seen = nearest.get(key);
+    const closer =
+      !seen ||
+      Math.abs(o.start.getTime() - now.getTime()) < Math.abs(seen.start.getTime() - now.getTime());
+    if (closer) nearest.set(key, { event: o.event, start: o.start });
+  }
+
+  return {
+    hits: [...hits, ...nearest.values()].sort((a, b) => a.start.getTime() - b.start.getTime()),
+    errors: remote.errors,
+    windowStart,
+    windowEnd,
+  };
 }
 
 /** Fetch a single event by calendar + id (local UUID or remote iCal UID). */
