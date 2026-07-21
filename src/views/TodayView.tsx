@@ -41,7 +41,10 @@ function reminderWhen(r: ReminderRow, day: Date): Date | null {
   return new Date(base);
 }
 
-const SUMMARY_CACHE_KEY = "secondbrain.daySummary";
+// Versioned like the weather cache: the cached value is prose built from a
+// `DaySummaryInput`, so a build that changes that shape (or the prompt, or the
+// model) must retire what earlier builds wrote rather than serve stale text.
+const SUMMARY_CACHE_KEY = "secondbrain.daySummary.v1";
 /** How many days' summaries to keep. Enough to step around a week and back
  *  without paying for any of it twice; small enough to stay a tidy blob. */
 const SUMMARY_CACHE_MAX = 20;
@@ -329,16 +332,20 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
       };
     }),
     // English condition text, like every other string the model reads.
+    // Numbers are rounded here (not just in the prompt) so the summary's cache
+    // signature is stable against the live jitter in `now`/`feels_like`/AQI —
+    // a tenth of a degree would otherwise bust the cache and re-bill the same
+    // summary every refresh. Whole units are the resolution the prose uses.
     weather: weather && weatherPlace
       ? {
           place: weatherPlace.name,
           condition: englishCondition(weather.code),
-          high: weather.high,
-          low: weather.low,
+          high: Math.round(weather.high),
+          low: Math.round(weather.low),
           unit: weather.unit,
           precipitation: weather.precipitation,
-          feels_like: weather.feelsLike,
-          air_quality: weather.air?.usAqi ?? null,
+          feels_like: weather.feelsLike !== null ? Math.round(weather.feelsLike) : null,
+          air_quality: weather.air?.usAqi !== undefined ? Math.round(weather.air.usAqi) : null,
         }
       : null,
   };

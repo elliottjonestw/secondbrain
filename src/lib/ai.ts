@@ -1845,6 +1845,7 @@ async function callOllama(
   opts: { tools?: unknown; temperature?: number; signal?: AbortSignal },
 ) {
   let res: Response;
+  const tools = toolsFor(opts.tools);
   try {
     res = await fetch(ep.url, {
       method: "POST",
@@ -1852,7 +1853,7 @@ async function callOllama(
       body: JSON.stringify({
         model: ep.model,
         messages: messages.map(toNativeMessage),
-        ...(toolsFor(opts.tools) ? { tools: toolsFor(opts.tools) } : {}),
+        ...(tools ? { tools } : {}),
         stream: false,
         options: { num_ctx: OLLAMA_NUM_CTX, temperature: opts.temperature ?? 0.6 },
       }),

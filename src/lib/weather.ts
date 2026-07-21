@@ -49,6 +49,19 @@ export interface HourWeather {
   precipitation: number | null;
 }
 
+/**
+ * The `hourly` block from Open-Meteo: parallel arrays indexed alike. Typed
+ * loosely (values may be the wrong type or absent on a malformed reply) so the
+ * parser still has to guard each read — replacing the `any` this used to be
+ * without pretending the service's output is cleaner than it is.
+ */
+interface HourlyPayload {
+  time?: unknown[];
+  temperature_2m?: unknown[];
+  weather_code?: unknown[];
+  precipitation_probability?: unknown[];
+}
+
 /** One day's forecast, already unit-converted by the service. */
 export interface DayWeather {
   /** WMO code — pass to `weatherIconKey` / `weatherLabelKey`. */
@@ -255,6 +268,13 @@ export async function getDayWeather(
     // miss rather than rendering a tile full of blanks.
     if (code === null || high === null || low === null) return null;
 
+    // The location's UTC offset, as the service reports it. The hourly strings
+    // are location-local (timezone=auto), so trimming "the rest of today" must
+    // compare against the location's clock — `new Date().getHours()` would be
+    // the device's hour, which is a different day for anyone viewing weather
+    // away from home.
+    const offset = typeof data?.utc_offset_seconds === "number" ? data.utc_offset_seconds : 0;
+
     const currentNumber = (field: string): number | null =>
       isToday && typeof data?.current?.[field] === "number" ? data.current[field] : null;
 
@@ -280,7 +300,7 @@ export async function getDayWeather(
       uvIndex: firstNumber(data?.daily?.uv_index_max),
       sunrise: firstString(data?.daily?.sunrise),
       sunset: firstString(data?.daily?.sunset),
-      hours: parseHours(data?.hourly, isToday),
+      hours: parseHours(data?.hourly, isToday, offset),
       air,
     };
     writeCache(key, out);
@@ -297,7 +317,7 @@ export async function getDayWeather(
  * happened are history, not forecast. On any other day the whole day is ahead,
  * so it starts at the beginning.
  */
-function parseHours(hourly: any, isToday: boolean): HourWeather[] {
+function parseHours(hourly: HourlyPayload, isToday: boolean, offsetSeconds = 0): HourWeather[] {
   const times: unknown = hourly?.time;
   if (!Array.isArray(times)) return [];
   const out: HourWeather[] = [];
@@ -311,10 +331,11 @@ function parseHours(hourly: any, isToday: boolean): HourWeather[] {
     out.push({ time, temp, code, precipitation: typeof p === "number" ? p : null });
   }
   if (!isToday) return out;
-  // Local wall-clock strings ("2026-07-21T15:00"), so compare on the hour
-  // rather than parsing each one into a Date.
-  const nowHour = new Date().getHours();
-  return out.filter((h) => Number(h.time.slice(11, 13)) >= nowHour);
+  // The strings are local wall-clock ("2026-07-21T15:00") for the *location*,
+  // so the cutoff hour is the location's, not the device's: UTC now, shifted by
+  // the offset the service returned, floored to [0,24) for the date wrap.
+  const nowUtcHour = (Math.floor(Date.now() / 3600000) + offsetSeconds / 3600) % 24;
+  return out.filter((h) => Number(h.time.slice(11, 13)) >= nowUtcHour);
 }
 
 /**

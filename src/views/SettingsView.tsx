@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import {
   Eye, EyeOff, Check, CalendarDays, ExternalLink, Loader2, AlertCircle,
   Sparkles, Mic, Languages, Database, Download, Upload, LucideIcon,
@@ -286,17 +286,29 @@ function WeatherLocationPicker({
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
 
+  // Aborts the previous search when a new one starts, so a fast double-Enter
+  // can't land the earlier results over the later ones. Lives across renders so
+  // the cleanup can abort on unmount too.
+  const ctlRef = useRef<AbortController | null>(null);
+  useEffect(() => () => ctlRef.current?.abort(), []);
+
   async function search() {
     if (!query.trim()) return;
+    ctlRef.current?.abort();
+    const ctl = new AbortController();
+    ctlRef.current = ctl;
     setBusy(true);
     setFailed(false);
     try {
-      setResults(await searchPlaces(query, currentLanguage()));
-    } catch {
+      setResults(await searchPlaces(query, currentLanguage(), ctl.signal));
+    } catch (e) {
+      // Aborted requests are expected on a re-search; only a real failure flips
+      // to the error notice.
+      if (ctl.signal.aborted) return;
       setResults(null);
       setFailed(true);
     } finally {
-      setBusy(false);
+      if (!ctl.signal.aborted) setBusy(false);
     }
   }
 
