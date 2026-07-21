@@ -22,7 +22,9 @@
     "close": "關閉",
     "loading": "載入中…",
     "untitled": "未命名",
-    "untitledParen": "（未命名）"
+    "untitledParen": "（未命名）",
+    "moveUp": "上移",
+    "moveDown": "下移"
   },
   "priority": {
     "0": "無",
@@ -334,6 +336,14 @@
     "localOnlyMeta": "標籤、聯絡人與連結僅適用於內建的「{{calendar}}」行事曆中的行程。"
   },
   "today": {
+    "edit": "編輯",
+    "layoutTitle": "編輯「今天」頁面",
+    "layoutHint": "使用箭頭調整卡片順序，點眼睛圖示可隱藏卡片。隱藏的卡片不會再載入資料。",
+    "resetLayout": "回復預設",
+    "done": "完成",
+    "hideCard": "隱藏卡片",
+    "showCard": "顯示卡片",
+    "weatherCard": "天氣",
     "summary": "今日摘要",
     "refreshSummary": "重新產生摘要",
     "summaryFailed": "目前無法產生摘要。",

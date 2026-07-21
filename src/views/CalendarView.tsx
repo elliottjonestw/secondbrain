@@ -3,14 +3,12 @@ import {
   ChevronLeft, ChevronRight, Plus, Repeat, Square, Upload, Download,
   Layers, Loader2, CloudOff,
 } from "lucide-react";
-import {
-  addDays, addMonths, addWeeks, differenceInCalendarDays,
-} from "date-fns";
+import { addDays, addMonths, addWeeks } from "date-fns";
 import { useTranslation } from "react-i18next";
 import type { TodoRow, EventOccurrence, UnifiedEvent } from "../types";
 import { listTodos } from "../db";
 import {
-  getOccurrences, listCalendars, setCalendarVisible, updateEvent, invalidateCache,
+  getOccurrences, listCalendars, setCalendarVisible, invalidateCache,
   defaultCalendarId, type CalendarInfo,
 } from "../lib/calendars";
 import {
@@ -160,20 +158,6 @@ export default function CalendarView({ onChange, openEventId }: { onChange: () =
             todos={todos}
             onNewEvent={(d) => setEditing({ event: null, calendarId: defaultCalendarId(), start: d })}
             onOpen={(occ) => setEditing({ event: occ.event, occ: occ.start })}
-            onReschedule={async (occ, day) => {
-              const delta = differenceInCalendarDays(day, occ.start);
-              const ns = addDays(new Date(occ.event.dtstart), delta);
-              const ne = occ.event.dtend ? addDays(new Date(occ.event.dtend), delta) : null;
-              try {
-                await updateEvent(occ.event, {
-                  dtstart: ns.toISOString(),
-                  dtend: ne ? ne.toISOString() : null,
-                });
-                bump();
-              } catch (e) {
-                setMsg(e instanceof Error ? e.message : String(e));
-              }
-            }}
           />
         ) : (
           <TimeGrid
@@ -229,7 +213,7 @@ function eachDay(start: Date, end: Date): Date[] {
 // Month grid
 // ---------------------------------------------------------------------------
 function MonthGrid({
-  winStart, cursor, occurrences, todos, onNewEvent, onOpen, onReschedule,
+  winStart, cursor, occurrences, todos, onNewEvent, onOpen,
 }: {
   winStart: Date;
   cursor: Date;
@@ -237,11 +221,9 @@ function MonthGrid({
   todos: TodoRow[];
   onNewEvent: (d: Date) => void;
   onOpen: (occ: EventOccurrence) => void;
-  onReschedule: (occ: EventOccurrence, day: Date) => void;
 }) {
   const { t: tr } = useTranslation();
   const days = eachDay(winStart, addDays(winStart, 41)); // 6 weeks
-  const [drag, setDrag] = useState<EventOccurrence | null>(null);
 
   return (
     <div className="grid grid-cols-7 border-t border-neutral-200 dark:border-neutral-700">
@@ -255,8 +237,6 @@ function MonthGrid({
         return (
           <div
             key={day.toISOString()}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={() => { if (drag) { onReschedule(drag, day); setDrag(null); } }}
             onDoubleClick={() => onNewEvent(new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9))}
             className={`min-h-[96px] border-b border-r border-neutral-200 p-1 dark:border-neutral-700 ${inMonth ? "" : "bg-neutral-50/60 dark:bg-neutral-900/40"}`}
           >
@@ -267,8 +247,6 @@ function MonthGrid({
               {dayOccs.map((o, i) => (
                 <button
                   key={o.event.id + i}
-                  draggable={!o.event.rrule}
-                  onDragStart={() => setDrag(o)}
                   onClick={() => onOpen(o)}
                   className="flex w-full items-center gap-0.5 rounded px-1 py-0.5 text-left text-xs text-white"
                   style={{ background: o.event.color ?? "#3b82f6" }}

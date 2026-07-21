@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import {
-  Plus, X, Trash2, Star, Mail, Phone, ExternalLink, GripVertical, Pencil, Eye,
+  Plus, X, Trash2, Star, Mail, Phone, ExternalLink, ChevronUp, ChevronDown, Pencil, Eye,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
@@ -669,7 +669,6 @@ function CustomFields({ values, onChange }: { values: PersonCustomField[]; onCha
   const [defs, setDefs] = useState<CustomFieldDef[]>([]);
   const [adding, setAdding] = useState(false);
   const [newLabel, setNewLabel] = useState("");
-  const [dragIdx, setDragIdx] = useState<number | null>(null);
   // Field the user asked to remove — drives the "delete for everyone vs. clear
   // here" modal. Deleting the def is destructive across all people, so we never
   // do it from a bare click.
@@ -715,12 +714,16 @@ function CustomFields({ values, onChange }: { values: PersonCustomField[]; onCha
     onChange(values.filter((v) => v.label !== def.label));
   }
 
-  async function onDrop(target: number) {
-    if (dragIdx === null || dragIdx === target) { setDragIdx(null); return; }
+  /**
+   * Move a field one place. Buttons rather than drag: HTML5 drag doesn't work
+   * in WKWebView (see CLAUDE.md), so the grip this used to have moved nothing.
+   */
+  async function move(index: number, delta: number) {
+    const to = index + delta;
+    if (to < 0 || to >= defs.length) return;
     const ids = defs.map((d) => d.id);
-    const [moved] = ids.splice(dragIdx, 1);
-    ids.splice(target, 0, moved);
-    setDragIdx(null);
+    const [moved] = ids.splice(index, 1);
+    ids.splice(to, 0, moved);
     await reorderCustomFields(ids);
     await reloadDefs();
   }
@@ -728,15 +731,23 @@ function CustomFields({ values, onChange }: { values: PersonCustomField[]; onCha
   return (
     <div className="space-y-1.5">
       {defs.map((def, i) => (
-        <div
-          key={def.id}
-          draggable
-          onDragStart={() => setDragIdx(i)}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={() => onDrop(i)}
-          className="flex items-center gap-2"
-        >
-          <GripVertical size={15} className="shrink-0 cursor-grab text-neutral-300" />
+        <div key={def.id} className="flex items-center gap-2">
+          <span className="flex shrink-0 flex-col">
+            <button
+              onClick={() => void move(i, -1)}
+              disabled={i === 0}
+              className="text-neutral-300 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-neutral-300"
+              aria-label={t("common.moveUp")}
+              title={t("common.moveUp")}
+            ><ChevronUp size={13} /></button>
+            <button
+              onClick={() => void move(i, 1)}
+              disabled={i === defs.length - 1}
+              className="text-neutral-300 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-neutral-300"
+              aria-label={t("common.moveDown")}
+              title={t("common.moveDown")}
+            ><ChevronDown size={13} /></button>
+          </span>
           <span className="w-40 shrink-0 truncate text-sm text-neutral-600 dark:text-neutral-300" title={def.label}>{def.label}</span>
           <input value={valueFor(def.label)} onChange={(e) => setValue(def.label, e.target.value)} placeholder={t("people.value")} className={`flex-1 ${inputBase}`} />
           <button onClick={() => setConfirmField(def)} className="rounded p-1.5 text-neutral-400 hover:text-red-500" aria-label={t("people.removeField", { label: def.label })}><X size={14} /></button>

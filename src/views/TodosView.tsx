@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Plus, X, Trash2, CalendarPlus } from "lucide-react";
+import { Plus, X, Trash2, CalendarPlus, ChevronUp, ChevronDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { TodoRow, ListRow } from "../types";
 import {
@@ -80,16 +80,18 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
     onChange();
   }
 
-  // drag reorder within top-level of the active list
-  const [dragId, setDragId] = useState<string | null>(null);
-  async function onDrop(targetId: string) {
-    if (!dragId || dragId === targetId) return;
+  /**
+   * Reorder within the top level of the active list.
+   *
+   * Buttons, not drag: HTML5 drag doesn't work in WKWebView (see CLAUDE.md), so
+   * the grip this used to have moved nothing. Arrows also work from a keyboard.
+   */
+  async function moveTodo(index: number, delta: number) {
     const ids = topLevel.map((t) => t.id);
-    const from = ids.indexOf(dragId);
-    const to = ids.indexOf(targetId);
-    ids.splice(to, 0, ids.splice(from, 1)[0]);
+    const to = index + delta;
+    if (to < 0 || to >= ids.length) return;
+    ids.splice(to, 0, ids.splice(index, 1)[0]);
     await reorderTodos(ids);
-    setDragId(null);
     bump();
   }
 
@@ -152,16 +154,15 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
           </div>
 
           <div className="space-y-1">
-            {topLevel.map((t) => (
+            {topLevel.map((t, i) => (
               <div key={t.id}>
                 <TodoItem
                   todo={t}
                   onToggle={async (c) => { await toggleTodo(t.id, c); bump(); }}
                   onOpen={() => setEditing(t)}
                   onDelete={async () => { if (confirm(tr("todos.confirmDeleteTask", { title: t.title }))) { await deleteTodo(t.id); bump(); } }}
-                  draggable
-                  onDragStart={() => setDragId(t.id)}
-                  onDrop={() => onDrop(t.id)}
+                  onMoveUp={i === 0 ? undefined : () => void moveTodo(i, -1)}
+                  onMoveDown={i === topLevel.length - 1 ? undefined : () => void moveTodo(i, 1)}
                 />
                 {/* subtasks */}
                 <div className="ml-7 space-y-1">
@@ -198,24 +199,21 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
 }
 
 function TodoItem({
-  todo, onToggle, onOpen, onDelete, small, draggable, onDragStart, onDrop,
+  todo, onToggle, onOpen, onDelete, small, onMoveUp, onMoveDown,
 }: {
   todo: TodoRow;
   onToggle: (c: boolean) => void;
   onOpen: () => void;
   onDelete: () => void;
   small?: boolean;
-  draggable?: boolean;
-  onDragStart?: () => void;
-  onDrop?: () => void;
+  /** Undefined at the ends of the list, and on subtasks (which don't reorder). */
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
 }) {
   const { t } = useTranslation();
+  const reorderable = !!(onMoveUp || onMoveDown);
   return (
     <div
-      draggable={draggable}
-      onDragStart={onDragStart}
-      onDragOver={(e) => draggable && e.preventDefault()}
-      onDrop={onDrop}
       className={`group flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-neutral-100 dark:hover:bg-neutral-800 ${small ? "text-sm" : ""}`}
     >
       <input
@@ -231,6 +229,24 @@ function TodoItem({
       {todo.due_at && (
         <span className={`text-xs ${isOverdue(todo.due_at) && !todo.completed ? "text-red-500" : "text-neutral-400"}`}>
           {fmtDateTime(todo.due_at)}
+        </span>
+      )}
+      {reorderable && (
+        <span className="hidden items-center group-hover:flex">
+          <button
+            onClick={(e) => { e.stopPropagation(); onMoveUp?.(); }}
+            disabled={!onMoveUp}
+            className="text-neutral-400 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-neutral-400"
+            title={t("common.moveUp")}
+            aria-label={t("common.moveUp")}
+          ><ChevronUp size={15} /></button>
+          <button
+            onClick={(e) => { e.stopPropagation(); onMoveDown?.(); }}
+            disabled={!onMoveDown}
+            className="text-neutral-400 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-neutral-400"
+            title={t("common.moveDown")}
+            aria-label={t("common.moveDown")}
+          ><ChevronDown size={15} /></button>
         </span>
       )}
       <button

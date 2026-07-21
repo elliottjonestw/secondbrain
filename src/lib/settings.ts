@@ -61,6 +61,34 @@ export interface AppSettings {
   weatherLocation: WeatherLocation | null;
   /** Temperature unit for the weather tile. Open-Meteo converts server-side. */
   temperatureUnit: TemperatureUnit;
+  /**
+   * Order and visibility of the Today page's cards. Stored as the user arranged
+   * it, NOT as the complete truth — read it through `mergeTodayLayout`, which
+   * drops ids the app no longer has and appends ones it has gained. An empty
+   * array means "never customised", i.e. every card in its default order.
+   */
+  todayLayout: TodayCardPref[];
+}
+
+/** One card's placement on the Today page. Order is the array's own order. */
+export interface TodayCardPref {
+  id: string;
+  hidden: boolean;
+}
+
+/**
+ * Reconcile a stored layout with the cards this build actually has.
+ *
+ * Storage is a *preference*, not an inventory: a card added in a later version
+ * must show up for someone who arranged their page in an earlier one, and a
+ * card that's been removed must not linger as a dead row in the editor. So
+ * known ids keep their saved order and visibility, unknown ids are dropped, and
+ * anything missing is appended visible.
+ */
+export function mergeTodayLayout(stored: TodayCardPref[], known: readonly string[]): TodayCardPref[] {
+  const valid = stored.filter((p) => known.includes(p.id));
+  const seen = new Set(valid.map((p) => p.id));
+  return [...valid, ...known.filter((id) => !seen.has(id)).map((id) => ({ id, hidden: false }))];
 }
 
 export type TemperatureUnit = "celsius" | "fahrenheit";
@@ -99,6 +127,7 @@ const DEFAULTS: AppSettings = {
   language: "system",
   weatherLocation: null,
   temperatureUnit: "celsius",
+  todayLayout: [],
 };
 
 export function getSettings(): AppSettings {

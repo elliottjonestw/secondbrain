@@ -51,6 +51,9 @@ Runtime DB: `~/Library/Application Support/com.elliottjones.secondbrain/secondbr
 - **New plugin = 3 steps:** crate in `Cargo.toml`, `.plugin()` in `lib.rs`, permission in `capabilities/default.json`.
 
 **UI**
+- **The Today page's cards are a registry, not JSX in order** (`CARD_IDS` + `renderCard`). Order/visibility live in `settings.todayLayout` and MUST be read through `mergeTodayLayout` — stored ids are a *preference*, not an inventory, so a card added later has to be appended for anyone who already customised their page, and a removed one dropped. Card ids are persisted: renaming one resets that card's position for every existing user.
+- **No drag-and-drop. HTML5 drag does not work in this WKWebView** — confirmed broken in all four places it was used (Today cards, to-do reorder, custom-field reorder, calendar reschedule). `dataTransfer.setData` + `-webkit-user-drag: element` + `user-select: none`, the fix that's supposed to work, changed nothing. Reordering is ▲/▼ buttons (also keyboard-reachable); calendar rescheduling is edit-the-event. Don't add `draggable` back — it compiles, looks right, and does nothing in the packaged app, which is why it survived this long.
+- **Hiding a Today card stops its fetch, not just its render.** The summary is billed and the forecast is someone else's free service; both hooks take a visibility flag. A hidden card that still calls out is the bug this prevents.
 - **Don't add a `key={version}` that bumps on mutations** — it remounts the view and wipes in-progress edits (this broke Notes typing). `resetNonce` exists only for demo resets.
 - **The note editor debounces writes (400ms)**, flushing on unmount. Don't revert to save-per-keystroke.
 - **Icons: `lucide-react` only, no emoji.**

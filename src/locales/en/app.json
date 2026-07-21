@@ -22,7 +22,9 @@
     "close": "Close",
     "loading": "Loading…",
     "untitled": "Untitled",
-    "untitledParen": "(untitled)"
+    "untitledParen": "(untitled)",
+    "moveUp": "Move up",
+    "moveDown": "Move down"
   },
   "priority": {
     "0": "None",
@@ -336,6 +338,14 @@
     "localOnlyMeta": "Tags, people and links are available on events in the built-in {{calendar}} calendar only."
   },
   "today": {
+    "edit": "Edit",
+    "layoutTitle": "Edit Today page",
+    "layoutHint": "Use the arrows to reorder your cards, or the eye to hide one. Hidden cards stop loading their data.",
+    "resetLayout": "Reset to default",
+    "done": "Done",
+    "hideCard": "Hide card",
+    "showCard": "Show card",
+    "weatherCard": "Weather",
     "summary": "Your day",
     "refreshSummary": "Rewrite summary",
     "summaryFailed": "Couldn't write a summary just now.",
