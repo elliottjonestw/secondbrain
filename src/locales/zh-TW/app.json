@@ -356,6 +356,7 @@
     "stopSpeaking": "停止",
     "clear": "清除",
     "listeningHint": "聆聽中… 點麥克風即可停止",
+    "listeningHintSpace": "聆聽中…放開空白鍵即可停止",
     "tagline": "查詢與修改 · 使用你的資料"
   },
   "notifications": {

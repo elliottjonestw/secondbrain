@@ -74,6 +74,9 @@ export default function AssistantView({
   startMicRef.current = () => void startMic();
   stopMicRef.current = () => void stopMic();
   const spaceHeld = useRef(false);
+  // Mirrors spaceHeld for rendering: the hint has to name the right way to
+  // stop, and a ref alone wouldn't re-render it.
+  const [heldBySpace, setHeldBySpace] = useState(false);
   useEffect(() => {
     // Don't hijack Space from text fields, buttons, or links — it must still
     // type a space or activate the focused control there.
@@ -87,16 +90,18 @@ export default function AssistantView({
       if (!isRecordingSupported()) return;
       e.preventDefault(); // Space would otherwise scroll the chat.
       spaceHeld.current = true;
+      setHeldBySpace(true);
       startMicRef.current();
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code !== "Space" || !spaceHeld.current) return;
       e.preventDefault();
       spaceHeld.current = false;
+      setHeldBySpace(false);
       stopMicRef.current();
     };
     // Blur (e.g. app loses focus mid-hold) must release, or we'd never get keyup.
-    const onBlur = () => { if (spaceHeld.current) { spaceHeld.current = false; stopMicRef.current(); } };
+    const onBlur = () => { if (spaceHeld.current) { spaceHeld.current = false; setHeldBySpace(false); stopMicRef.current(); } };
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
@@ -361,7 +366,7 @@ export default function AssistantView({
         {recording && (
           <div className="mx-auto mb-2 flex max-w-2xl items-center gap-2 text-sm text-red-500">
             <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-red-500" />
-            {t("assistant.listeningHint")}
+            {t(heldBySpace ? "assistant.listeningHintSpace" : "assistant.listeningHint")}
           </div>
         )}
         <div className="mx-auto flex max-w-2xl items-end gap-2">

@@ -358,6 +358,7 @@
     "stopSpeaking": "Stop",
     "clear": "Clear",
     "listeningHint": "Listening… tap the mic to stop",
+    "listeningHintSpace": "Listening… release the SPACE bar to stop",
     "tagline": "Asks and edits · works on your data"
   },
   "notifications": {
