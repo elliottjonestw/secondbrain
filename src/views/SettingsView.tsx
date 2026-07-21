@@ -2,20 +2,25 @@ import { ReactNode, useEffect, useState } from "react";
 import {
   Eye, EyeOff, Check, CalendarDays, ExternalLink, Loader2, AlertCircle,
   Sparkles, Mic, Languages, Database, Download, Upload, LucideIcon,
-  Cloud, Server, RefreshCw, Trash2,
+  Cloud, Server, RefreshCw, Trash2, Volume2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   getSettings, saveSettings, getCalendarSettings, saveCalendarSettings,
   DEFAULT_OLLAMA_URL,
-  type AppSettings, type AssistantProvider, type CalDavAccount,
+  MIN_SPEECH_RATE, MAX_SPEECH_RATE, clampSpeechRate,
+  type AppSettings, type AssistantProvider, type CalDavAccount, type TtsEngine,
 } from "../lib/settings";
 import { listOllamaModels } from "../lib/ai";
 import {
   LANGUAGES, SYSTEM_LANGUAGE, changeLanguage, matchSystemLanguage,
 } from "../lib/i18n";
-import { hasVoiceFor } from "../lib/voice";
+import {
+  hasVoiceFor, listVoices, previewVoice, previewNaturalVoice, getLastNaturalError,
+  type VoiceOption,
+} from "../lib/voice";
+import { OPENAI_VOICES, DEFAULT_OPENAI_VOICE } from "../lib/openaiTts";
 import { discoverAccount } from "../lib/caldav/discovery";
 import { invalidateCache, listCalendars, setCalendarVisible, LOCAL_CALENDAR_NAME } from "../lib/calendars";
 import { LOCAL_CALENDAR_ID } from "../types";
@@ -54,6 +59,11 @@ export default function SettingsView() {
       ollamaBaseUrl: draft.ollamaBaseUrl.trim() || DEFAULT_OLLAMA_URL,
       ollamaModel: draft.ollamaModel.trim(),
       sttModel: draft.sttModel.trim() || "whisper-1",
+      ttsEngine: draft.ttsEngine,
+      ttsModel: draft.ttsModel.trim() || "gpt-4o-mini-tts",
+      openaiVoice: draft.openaiVoice,
+      speechRate: clampSpeechRate(draft.speechRate),
+      preferredVoices: draft.preferredVoices,
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -410,7 +420,8 @@ function OllamaFields({ draft, patch }: Pick<PaneProps, "draft" | "patch">) {
 // ---------------------------------------------------------------------------
 function VoiceSettings({ draft, patch, onSave, saved }: PaneProps) {
   const { t, i18n } = useTranslation();
-  // Spoken replies come from OS voices, which macOS ships on demand — if the
+  const natural = draft.ttsEngine === "openai";
+  // Spoken replies fall back to OS voices, which macOS ships on demand — if the
   // language's voice isn't installed the reply is simply silent, with nothing
   // in the UI to explain why. Check and say so.
   const [voiceMissing, setVoiceMissing] = useState(false);
@@ -419,6 +430,9 @@ function VoiceSettings({ draft, patch, onSave, saved }: PaneProps) {
     void hasVoiceFor(i18n.language).then((ok) => { if (live) setVoiceMissing(!ok); });
     return () => { live = false; };
   }, [i18n.language]);
+  // Natural voices degrade to a system voice on any network trouble. That's
+  // deliberately quiet at speaking time, so report it here instead.
+  const naturalError = natural ? getLastNaturalError() : null;
 
   return (
     <>
@@ -434,6 +448,78 @@ function VoiceSettings({ draft, patch, onSave, saved }: PaneProps) {
         </div>
       )}
 
+      {naturalError && (
+        <div className="mb-5">
+          <Notice tone="error">
+            {t("settings.voice.naturalFailed", { detail: naturalError })}
+          </Notice>
+        </div>
+      )}
+
+      <Field
+        label={t("settings.voice.engine")}
+        hint={t(natural ? "settings.voice.engineHintOpenai" : "settings.voice.engineHintSystem")}
+      >
+        <select
+          value={draft.ttsEngine}
+          onChange={(e) => patch({ ttsEngine: e.target.value as TtsEngine })}
+          className={INPUT_CLASS}
+        >
+          <option value="openai">{t("settings.voice.engineOpenai")}</option>
+          <option value="system">{t("settings.voice.engineSystem")}</option>
+        </select>
+      </Field>
+
+      <Field
+        label={t("settings.voice.rate")}
+        hint={t("settings.voice.rateHint")}
+      >
+        <div className="flex items-center gap-3">
+          <input
+            type="range"
+            min={MIN_SPEECH_RATE}
+            max={MAX_SPEECH_RATE}
+            step={0.05}
+            value={draft.speechRate}
+            onChange={(e) => patch({ speechRate: Number(e.target.value) })}
+            className="flex-1 accent-blue-500"
+            aria-label={t("settings.voice.rate")}
+          />
+          <span className="w-12 shrink-0 text-right text-sm tabular-nums text-neutral-500">
+            {draft.speechRate.toFixed(2).replace(/0$/, "")}×
+          </span>
+          {draft.speechRate !== 1 && (
+            <Button onClick={() => patch({ speechRate: 1 })}>
+              {t("settings.voice.rateReset")}
+            </Button>
+          )}
+        </div>
+      </Field>
+
+      {natural ? (
+        <NaturalVoicePicker
+          lang={i18n.language}
+          rate={draft.speechRate}
+          value={draft.openaiVoice}
+          onChange={(id) => patch({ openaiVoice: id })}
+        />
+      ) : (
+        // System voices are per-language by nature — one voice speaks one
+        // language, and an English voice handed Chinese text is silent — so
+        // this is the one place the setting can't be unified.
+        LANGUAGES.map((l) => (
+          <VoicePicker
+            key={l.code}
+            lang={l.code}
+            language={l.nativeName}
+            rate={draft.speechRate}
+            value={draft.preferredVoices[l.code] ?? ""}
+            onChange={(uri) =>
+              patch({ preferredVoices: { ...draft.preferredVoices, [l.code]: uri } })}
+          />
+        ))
+      )}
+
       <Field
         label={t("settings.voice.sttModel")}
         hint={<>{t("settings.voice.sttHint")} <code>whisper-1</code> / <code>gpt-4o-transcribe</code></>}
@@ -447,12 +533,132 @@ function VoiceSettings({ draft, patch, onSave, saved }: PaneProps) {
         />
       </Field>
 
+      {natural && (
+        <Field
+          label={t("settings.voice.ttsModel")}
+          hint={<>{t("settings.voice.sttHint")} <code>gpt-4o-mini-tts</code> / <code>tts-1</code></>}
+        >
+          <input
+            value={draft.ttsModel}
+            onChange={(e) => patch({ ttsModel: e.target.value })}
+            placeholder="gpt-4o-mini-tts"
+            spellCheck={false}
+            className={`${INPUT_CLASS} font-mono`}
+          />
+        </Field>
+      )}
+
       <div className="mb-5">
-        <Notice tone="info">{t("settings.voice.privacyNote")}</Notice>
+        <Notice tone="info">
+          {t(natural ? "settings.voice.privacyNoteOpenai" : "settings.voice.privacyNote")}
+        </Notice>
       </div>
 
       <SaveRow onSave={onSave} saved={saved} />
     </>
+  );
+}
+
+/** Select + preview button, shared by both engines' pickers. */
+function VoiceRow({
+  label, hint, value, onChange, onPreview, children,
+}: {
+  label: string; hint: ReactNode; value: string;
+  onChange: (v: string) => void; onPreview: () => void; children: ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Field label={label} hint={hint}>
+      <div className="flex gap-2">
+        <select value={value} onChange={(e) => onChange(e.target.value)} className={INPUT_CLASS}>
+          {children}
+        </select>
+        <Button onClick={onPreview}>
+          <Volume2 size={16} />
+          {t("settings.voice.preview")}
+        </Button>
+      </div>
+    </Field>
+  );
+}
+
+/** Neural-voice chooser for one language. */
+function NaturalVoicePicker({
+  lang, rate, value, onChange,
+}: { lang: string; rate: number; value: string; onChange: (id: string) => void }) {
+  const { t } = useTranslation();
+  const [error, setError] = useState("");
+  const selected = OPENAI_VOICES.find((v) => v.id === value)?.id ?? "";
+  const fallbackName =
+    OPENAI_VOICES.find((v) => v.id === DEFAULT_OPENAI_VOICE)?.name ?? DEFAULT_OPENAI_VOICE;
+
+  return (
+    <>
+      <VoiceRow
+        label={t("settings.voice.naturalVoice")}
+        hint={t("settings.voice.naturalHint")}
+        value={selected}
+        onChange={onChange}
+        onPreview={() => {
+          setError("");
+          previewNaturalVoice(lang, selected || DEFAULT_OPENAI_VOICE, rate)
+            .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+        }}
+      >
+        <option value="">{t("settings.voice.defaultVoice", { name: fallbackName })}</option>
+        {OPENAI_VOICES.map((v) => (
+          <option key={v.id} value={v.id}>{v.name}</option>
+        ))}
+      </VoiceRow>
+      {error && (
+        <div className="mb-5">
+          <Notice tone="error">{t("settings.voice.naturalFailed", { detail: error })}</Notice>
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * System-voice chooser for one language. The default ("best available") is
+ * deliberately an option rather than a hidden fallback: it keeps working when
+ * the user later downloads a better voice, which the stored URI wouldn't.
+ */
+function VoicePicker({
+  lang, language, rate, value, onChange,
+}: {
+  lang: string; language: string; rate: number;
+  value: string; onChange: (uri: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [voices, setVoices] = useState<VoiceOption[]>([]);
+
+  useEffect(() => {
+    let live = true;
+    void listVoices(lang).then((v) => { if (live) setVoices(v); });
+    return () => { live = false; };
+  }, [lang]);
+
+  if (!voices.length) return null;
+
+  // The saved voice can vanish if the user removes it in System Settings.
+  const selected = voices.find((v) => v.uri === value)?.uri ?? "";
+
+  return (
+    <VoiceRow
+      label={t("settings.voice.outputVoice", { language })}
+      hint={t("settings.voice.voiceHint")}
+      value={selected}
+      onChange={onChange}
+      onPreview={() => previewVoice(lang, selected || voices[0].uri, rate)}
+    >
+      <option value="">{t("settings.voice.bestAvailable")}</option>
+      {voices.map((v) => (
+        <option key={v.uri} value={v.uri}>
+          {v.name} · {t(`settings.voice.quality.${v.quality}`)}
+        </option>
+      ))}
+    </VoiceRow>
   );
 }
 

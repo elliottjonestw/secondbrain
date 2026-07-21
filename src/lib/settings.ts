@@ -5,6 +5,18 @@
 /** Where the assistant's *text* model runs. Voice/STT is always OpenAI. */
 export type AssistantProvider = "openai" | "ollama";
 
+/** Which text-to-speech engine speaks assistant replies. */
+export type TtsEngine = "openai" | "system";
+
+/** Bounds for `speechRate`. Both engines behave sensibly across this range. */
+export const MIN_SPEECH_RATE = 0.5;
+export const MAX_SPEECH_RATE = 2;
+
+export function clampSpeechRate(rate: number): number {
+  if (!Number.isFinite(rate)) return 1;
+  return Math.min(MAX_SPEECH_RATE, Math.max(MIN_SPEECH_RATE, rate));
+}
+
 export interface AppSettings {
   /** Which backend answers the text assistant. */
   assistantProvider: AssistantProvider;
@@ -16,6 +28,28 @@ export interface AppSettings {
   ollamaModel: string;
   /** Speech-to-text model used for voice input. */
   sttModel: string;
+  /**
+   * Which engine speaks replies. "openai" is neural voices over the network
+   * (billed); "system" is the OS's offline voices. Either way the system voice
+   * below is the fallback, so a reply is never lost to a network problem.
+   */
+  ttsEngine: TtsEngine;
+  /** Text-to-speech model used for spoken replies. */
+  ttsModel: string;
+  /**
+   * Chosen OpenAI voice. A single setting rather than one per language: these
+   * voices are multilingual, so the same voice reads both English and Chinese.
+   * (System voices are the opposite — each one speaks a single language — which
+   * is why `preferredVoices` below stays a per-language map.)
+   */
+  openaiVoice: string;
+  /** Speaking rate multiplier, 1 = normal. Applies to both engines. */
+  speechRate: number;
+  /**
+   * Chosen *system* voice per speech language, as BCP 47 tag → voiceURI.
+   * Empty/absent means "let the app pick the best installed voice".
+   */
+  preferredVoices: Record<string, string>;
   /** UI language: "system" to follow the OS, or a code from lib/i18n LANGUAGES. */
   language: string;
 }
@@ -32,6 +66,15 @@ const DEFAULTS: AppSettings = {
   ollamaBaseUrl: DEFAULT_OLLAMA_URL,
   ollamaModel: "",
   sttModel: "whisper-1",
+  // Natural voices by default — they're the reason this setting exists. Safe as
+  // a default even though they're billed: a spoken reply only happens after
+  // *speech input*, which already needs an OpenAI key for Whisper. With no key
+  // it falls back to the system voice rather than failing.
+  ttsEngine: "openai",
+  ttsModel: "gpt-4o-mini-tts",
+  openaiVoice: "",
+  speechRate: 1,
+  preferredVoices: {},
   language: "system",
 };
 

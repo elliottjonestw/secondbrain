@@ -1,13 +1,15 @@
 // Voice I/O for the Assistant.
 //   - Input:  record the mic in the webview (getUserMedia + MediaRecorder),
 //             then transcribe with OpenAI Whisper via tauri-plugin-http.
-//   - Output: speak replies with the system voice (Web Speech Synthesis).
+//   - Output: speak replies with a system voice (Web Speech Synthesis), picking
+//             the best-quality one installed unless the user chose another.
 //
 // This is purely an I/O layer around the existing askAssistant() flow — the
 // transcript is fed in as a normal user turn, and the text reply is read out.
 
 import { fetch } from "@tauri-apps/plugin-http";
-import { getSettings } from "./settings";
+import { getSettings, clampSpeechRate } from "./settings";
+import { synthesize, DEFAULT_OPENAI_VOICE } from "./openaiTts";
 import i18next from "i18next";
 import { currentLanguage } from "./i18n";
 
@@ -177,51 +179,307 @@ function ensureVoices(): Promise<void> {
   return voicesReady;
 }
 
-/** Best installed voice for a language tag: exact match, then same base language. */
-function pickVoice(lang: string): SpeechSynthesisVoice | undefined {
-  const norm = (s: string) => s.toLowerCase().replace(/_/g, "-");
-  const want = norm(lang);
-  const base = want.split("-")[0];
-  const voices = window.speechSynthesis.getVoices();
-  return voices.find((v) => norm(v.lang) === want)
-    ?? voices.find((v) => norm(v.lang).startsWith(`${base}-`))
-    ?? voices.find((v) => norm(v.lang) === base);
+const norm = (s: string) => s.toLowerCase().replace(/_/g, "-");
+
+/**
+ * macOS exposes joke voices ("Bad News", "Zarvox") through the same API as real
+ * ones, and they match `en` like any other — so without a blocklist the first
+ * English match can be a singing robot. Matched on the name with the quality
+ * suffix stripped.
+ */
+const NOVELTY_VOICES = new Set([
+  "albert", "bad news", "bahh", "bells", "boing", "bubbles", "cellos",
+  "deranged", "good news", "jester", "organ", "superstar", "trinoids",
+  "whisper", "wobble", "zarvox", "fred", "junior", "hysterical", "pipe organ",
+]);
+
+export type VoiceQuality = "premium" | "enhanced" | "standard" | "compact";
+
+/**
+ * Which tier a voice belongs to.
+ *
+ * This is the crux of the "system voices sound robotic" problem: macOS ships a
+ * *compact* voice for every language and downloads the good ones on demand, so
+ * the naive "first voice matching the language" pick sounds synthetic even when
+ * a far better voice is installed alongside it. The tier is only exposed as a
+ * parenthesised suffix on the name ("Ava (Premium)"), so that's what we read.
+ */
+function qualityOf(voice: SpeechSynthesisVoice): VoiceQuality {
+  const n = voice.name.toLowerCase();
+  if (n.includes("premium") || n.includes("neural")) return "premium";
+  if (n.includes("enhanced")) return "enhanced";
+  if (n.includes("compact")) return "compact";
+  return "standard";
 }
 
-/** Whether the OS has a voice installed for a language. */
+const QUALITY_RANK: Record<VoiceQuality, number> = {
+  premium: 3, enhanced: 2, standard: 1, compact: 0,
+};
+
+/** Name without the quality suffix: "Ava (Premium)" → "ava". */
+function baseName(voice: SpeechSynthesisVoice): string {
+  return voice.name.replace(/\s*\([^)]*\)\s*$/, "").trim().toLowerCase();
+}
+
+/** 2 = exact tag, 1 = same base language, 0 = unusable for this language. */
+function langScore(voice: SpeechSynthesisVoice, want: string): number {
+  const have = norm(voice.lang);
+  const base = want.split("-")[0];
+  if (have === want) return 2;
+  if (have === base || have.startsWith(`${base}-`)) return 1;
+  return 0;
+}
+
+/** A user-selectable voice. */
+export interface VoiceOption {
+  uri: string;
+  name: string;
+  lang: string;
+  quality: VoiceQuality;
+}
+
+/** Usable voices for a language, best first. Novelty voices are excluded. */
+function candidates(lang: string): SpeechSynthesisVoice[] {
+  const want = norm(lang);
+  return window.speechSynthesis.getVoices()
+    .filter((v) => langScore(v, want) > 0 && !NOVELTY_VOICES.has(baseName(v)))
+    .sort((a, b) =>
+      langScore(b, want) - langScore(a, want) ||
+      QUALITY_RANK[qualityOf(b)] - QUALITY_RANK[qualityOf(a)] ||
+      a.name.localeCompare(b.name));
+}
+
+/** Voices the user can choose from for a language, best first. */
+export async function listVoices(lang: string): Promise<VoiceOption[]> {
+  if (!isSpeechSupported()) return [];
+  await ensureVoices();
+  return candidates(lang).map((v) => ({
+    uri: v.voiceURI, name: v.name, lang: v.lang, quality: qualityOf(v),
+  }));
+}
+
+/**
+ * Voice to speak a language with: the user's saved choice if it's still
+ * installed, otherwise the highest-quality installed match.
+ */
+function pickVoice(lang: string): SpeechSynthesisVoice | undefined {
+  const options = candidates(lang);
+  const saved = getSettings().preferredVoices?.[lang];
+  const chosen = saved ? options.find((v) => v.voiceURI === saved) : undefined;
+  return chosen ?? options[0];
+}
+
+/** Whether the OS has a usable voice installed for a language. */
 export async function hasVoiceFor(lang: string): Promise<boolean> {
   if (!isSpeechSupported()) return false;
   await ensureVoices();
   return !!pickVoice(lang);
 }
 
-/** Speak text with the system voice, cancelling anything already playing. */
-export function speak(text: string): void {
+/**
+ * Sample sentences for the voice picker's preview button.
+ *
+ * Deliberately NOT run through t(): this text is spoken *by the voice being
+ * previewed*, so it has to be in that voice's language regardless of the UI
+ * language — previewing a Chinese voice from an English UI must still speak
+ * Chinese, or the preview proves nothing.
+ */
+const VOICE_SAMPLES: Record<string, string> = {
+  en: "Your next meeting starts at three this afternoon.",
+  zh: "你今天下午三點有一場會議。",
+};
+
+/** Speak a short sample with a specific system voice, so a choice can be heard. */
+export function previewVoice(lang: string, uri: string, rate?: number): void {
   if (!isSpeechSupported()) return;
-  const spoken = stripMarkdown(text);
-  if (!spoken) return;
-
-  const synth = window.speechSynthesis;
-  synth.cancel();
-
+  stopSpeaking();
+  const id = ++speechId;
   void ensureVoices().then(() => {
-    const lang = speechLang(spoken);
-    const utter = new SpeechSynthesisUtterance(spoken);
+    if (id !== speechId) return;
+    const voice = candidates(lang).find((v) => v.voiceURI === uri);
+    const utter = new SpeechSynthesisUtterance(
+      VOICE_SAMPLES[lang.split("-")[0]] ?? VOICE_SAMPLES.en,
+    );
+    utter.lang = lang;
+    utter.rate = clampSpeechRate(rate ?? getSettings().speechRate);
+    if (voice) utter.voice = voice;
+    window.speechSynthesis.speak(utter);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Playback
+//
+// Two engines, one lifecycle. Every utterance takes a ticket from `speechId`;
+// anything that finishes holding a stale ticket is discarded. That's what stops
+// a slow Edge request from talking over a newer reply, or its failure from
+// falling back onto a reply the user has already moved past.
+// ---------------------------------------------------------------------------
+let speechId = 0;
+let currentAudio: HTMLAudioElement | null = null;
+let currentFetch: AbortController | null = null;
+
+/** Tear down whatever is playing or being fetched, without bumping the ticket. */
+function haltPlayback(): void {
+  if (isSpeechSupported()) window.speechSynthesis.cancel();
+  currentFetch?.abort();
+  currentFetch = null;
+  if (currentAudio) {
+    currentAudio.pause();
+    URL.revokeObjectURL(currentAudio.src);
+    currentAudio = null;
+  }
+}
+
+/**
+ * Callbacks for one utterance.
+ *
+ * `onStart` fires when audio actually begins. The Assistant holds the reply
+ * text back until then, so these carry a hard guarantee: **onStart always
+ * happens before onEnd, and both always happen** — including when there's no
+ * voice, no network, or an outright failure. Otherwise a speech problem would
+ * silently swallow a perfectly good reply.
+ */
+export interface SpeakCallbacks {
+  onStart?: () => void;
+  onEnd?: () => void;
+}
+
+/** Fire-once wrappers enforcing the start-before-end guarantee above. */
+function guard(id: number, cb?: SpeakCallbacks) {
+  let started = false;
+  let ended = false;
+  const start = () => {
+    if (started || id !== speechId) return;
+    started = true;
+    cb?.onStart?.();
+  };
+  return {
+    start,
+    end: () => {
+      if (ended || id !== speechId) return;
+      start();
+      ended = true;
+      cb?.onEnd?.();
+    },
+  };
+}
+
+/** Speak with an OS voice. */
+function speakWithSystem(text: string, lang: string, id: number, cb?: SpeakCallbacks): void {
+  const g = guard(id, cb);
+  void ensureVoices().then(() => {
+    if (id !== speechId) return;
+    const utter = new SpeechSynthesisUtterance(text);
     // Without an explicit lang the utterance inherits <html lang>, so a Chinese
     // reply was being handed to an English voice — which reads nothing at all.
     utter.lang = lang;
+    utter.rate = clampSpeechRate(getSettings().speechRate);
     const voice = pickVoice(lang);
     if (voice) {
       utter.voice = voice;
     } else {
       // Nothing installed for this language: macOS ships most non-system
-      // voices on demand, so this is the usual reason for silence.
+      // voices on demand, so this is the usual reason for silence. Nothing will
+      // be spoken, so release the reply immediately rather than making the
+      // caller wait on an utterance that produces no audio.
       console.warn(`No installed speech voice for "${lang}" — reply not spoken.`);
+      g.end();
+      return;
     }
-    synth.speak(utter);
+    utter.onstart = g.start;
+    utter.onend = g.end;
+    utter.onerror = g.end;
+    window.speechSynthesis.speak(utter);
   });
 }
 
+/** Speak with an OpenAI neural voice. Rejects so the caller can fall back. */
+async function speakWithOpenai(
+  text: string, lang: string, id: number, cb?: SpeakCallbacks,
+): Promise<void> {
+  const { openaiVoice, speechRate } = getSettings();
+  const voice = openaiVoice || DEFAULT_OPENAI_VOICE;
+  const controller = new AbortController();
+  currentFetch = controller;
+  const blob = await synthesize(text, voice, lang, speechRate, controller.signal);
+  if (id !== speechId) return;
+
+  const audio = new Audio(URL.createObjectURL(blob));
+  currentAudio = audio;
+  const g = guard(id, cb);
+  const finish = () => {
+    if (currentAudio === audio) {
+      URL.revokeObjectURL(audio.src);
+      currentAudio = null;
+    }
+    g.end();
+  };
+  // `onplay` rather than the play() promise: it's the moment sound actually
+  // starts, which is what the reply text is waiting for.
+  audio.onplay = g.start;
+  audio.onended = finish;
+  audio.onerror = finish;
+  await audio.play();
+}
+
+/**
+ * Speak a reply, cancelling anything already playing. The callbacks don't fire
+ * once this utterance is superseded or stopped, because whoever stopped it
+ * already knows — see `SpeakCallbacks` for the ordering guarantee.
+ */
+export function speak(text: string, cb?: SpeakCallbacks): void {
+  const spoken = stripMarkdown(text);
+  if (!spoken) { cb?.onStart?.(); cb?.onEnd?.(); return; }
+
+  haltPlayback();
+  const id = ++speechId;
+  const lang = speechLang(spoken);
+
+  if (getSettings().ttsEngine === "openai") {
+    void speakWithOpenai(spoken, lang, id, cb).catch((err) => {
+      if (id !== speechId) return;
+      // Offline, no key, rate-limited, or a bad request. The reply still gets
+      // spoken — that's the whole point of keeping system voices.
+      console.warn("OpenAI TTS failed, falling back to a system voice:", err);
+      lastNaturalError = err instanceof Error ? err.message : String(err);
+      speakWithSystem(spoken, lang, id, cb);
+    });
+    return;
+  }
+  speakWithSystem(spoken, lang, id, cb);
+}
+
 export function stopSpeaking(): void {
-  if (isSpeechSupported()) window.speechSynthesis.cancel();
+  speechId++;
+  haltPlayback();
+}
+
+/**
+ * Why the last natural-voice attempt fell back, for Settings to surface.
+ * Without this the degradation is completely invisible — the reply still
+ * speaks, just in the old robotic voice, and the user can't tell that happened.
+ */
+let lastNaturalError: string | null = null;
+export function getLastNaturalError(): string | null {
+  return lastNaturalError;
+}
+
+/** Speak a sample with a specific OpenAI voice, so a choice can be heard. */
+export async function previewNaturalVoice(
+  lang: string, voice: string, rate?: number,
+): Promise<void> {
+  stopSpeaking();
+  const id = ++speechId;
+  const text = VOICE_SAMPLES[lang.split("-")[0]] ?? VOICE_SAMPLES.en;
+  const controller = new AbortController();
+  currentFetch = controller;
+  const blob = await synthesize(text, voice, lang, rate, controller.signal);
+  if (id !== speechId) return;
+  const audio = new Audio(URL.createObjectURL(blob));
+  currentAudio = audio;
+  audio.onended = () => {
+    if (currentAudio === audio) { URL.revokeObjectURL(audio.src); currentAudio = null; }
+  };
+  await audio.play();
 }

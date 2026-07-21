@@ -158,7 +158,31 @@
       "description": "Talk to the assistant and it replies aloud; type and it replies in text. Voice uses the same tools as the chat, so it can answer questions and make changes.",
       "sttModel": "Speech-to-text model",
       "sttHint": "e.g.",
+      "rate": "Speaking rate",
+      "rateReset": "Reset",
+      "rateHint": "How fast replies are read out, from half speed to double. Applies to both engines. Preview to hear it.",
+      "engine": "Voice quality",
+      "engineOpenai": "Natural (OpenAI)",
+      "engineSystem": "System (offline)",
+      "engineHintOpenai": "Uses OpenAI's neural voices with your existing API key. Much more natural than the built-in voices, and steered towards Taiwanese Mandarin for Chinese replies. Billed per character (roughly a cent a minute) and needs an internet connection — replies fall back to a system voice automatically when it's unavailable.",
+      "engineHintSystem": "Uses the voices installed on this Mac. Works offline and sends nothing over the network, but sounds noticeably more synthetic.",
+      "naturalVoice": "Voice",
+      "naturalHint": "One voice reads both English and Chinese. If it can't be reached, the best installed system voice takes over automatically. Preview costs a fraction of a cent.",
+      "defaultVoice": "Default ({{name}})",
+      "naturalFailed": "Natural voices are unavailable, so replies used a system voice instead. {{detail}}",
+      "ttsModel": "Text-to-speech model",
+      "outputVoice": "Voice for {{language}} replies",
+      "bestAvailable": "Best available",
+      "preview": "Preview",
+      "voiceHint": "macOS uses a basic voice unless a better one is installed. Enhanced and Premium voices sound far more natural and are a free download in System Settings › Accessibility › Spoken Content › System Voice › Manage Voices.",
+      "quality": {
+        "premium": "Premium",
+        "enhanced": "Enhanced",
+        "standard": "Standard",
+        "compact": "Compact"
+      },
       "privacyNote": "Voice input sends audio to OpenAI for transcription (billed per minute). Spoken replies are generated locally by your OS, so they're free and work offline. The microphone is only available in a packaged build.",
+      "privacyNoteOpenai": "Voice input sends audio to OpenAI for transcription (billed per minute), and natural voices send the text of each spoken reply to OpenAI to be read aloud (billed per character). Both leave this device. Switch to System voices to keep spoken replies local, offline and free. The microphone is only available in a packaged build.",
       "noVoice": "Your Mac has no speech voice installed for {{language}}, so replies in that language will be silent. Add one in System Settings › Accessibility › Spoken Content › System Voice › Manage Voices."
     },
     "saved": "Saved",
@@ -407,6 +431,7 @@
     "deletePerson": "Deleting a contact…",
     "deleteList": "Deleting a list…",
     "working": "Working…",
-    "thinking": "Thinking…"
+    "thinking": "Thinking…",
+    "speaking": "Speaking…"
   }
 }

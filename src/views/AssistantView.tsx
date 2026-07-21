@@ -24,6 +24,13 @@ const SUGGESTION_KEYS = [
  *  extra field never reaches the model. */
 export type UiMessage = ChatMessage & { items?: ItemRef[] };
 
+/**
+ * How long to wait for speech to begin before showing the reply anyway.
+ * Generous: a slow synthesis round-trip should still get the timing right, and
+ * this only exists so a pathological hang can't lose the text entirely.
+ */
+const SPEECH_START_TIMEOUT_MS = 10000;
+
 export default function AssistantView({
   messages, setMessages, goTo,
 }: {
@@ -47,6 +54,9 @@ export default function AssistantView({
   // runaway model (or a hung Ollama load) instead of waiting on MAX_TOOL_ROUNDS.
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Set while a finished reply is being held back waiting for speech to start.
+  // Calling it prints the reply immediately; see deliver().
+  const revealRef = useRef<(() => void) | null>(null);
 
   const voiceOutput = isSpeechSupported();
 
@@ -60,6 +70,7 @@ export default function AssistantView({
   // Aborting the in-flight turn also prevents a reply landing after unmount.
   useEffect(() => () => {
     stopSpeaking();
+    revealRef.current?.();
     abortRef.current?.abort();
     recRef.current?.cancel();
     recRef.current = null;
@@ -146,14 +157,35 @@ export default function AssistantView({
           }
         },
       });
-      setMessages([...next, { role: "assistant", content: reply, items: shown.length ? shown : undefined }]);
+      const showReply = () =>
+        setMessages([...next, {
+          role: "assistant", content: reply, items: shown.length ? shown : undefined,
+        }]);
+
       if (spoken && voiceOutput) {
+        // Hold the text back until the voice actually starts. Natural voices
+        // need a network round-trip to synthesise, so printing the reply on
+        // arrival left it sitting on screen for a second or two of silence
+        // before being read out — as if the app were reading it back to you.
         setSpeaking(true);
-        speak(reply);
-        // Poll speechSynthesis to clear the speaking indicator when done.
-        const timer = window.setInterval(() => {
-          if (!window.speechSynthesis.speaking) { setSpeaking(false); window.clearInterval(timer); }
-        }, 300);
+        setStatus(t("status.speaking"));
+        await new Promise<void>((resolve) => {
+          const release = () => { window.clearTimeout(timer); revealRef.current = null; resolve(); };
+          // Backstop: never let a speech problem swallow the reply. voice.ts
+          // guarantees onStart fires even when it can't speak, so this only
+          // covers something pathological — but "reply never appears" is far
+          // too high a price for a timing nicety.
+          const timer = window.setTimeout(() => { showReply(); release(); }, SPEECH_START_TIMEOUT_MS);
+          // Stopping mid-wait should show the text immediately, not strand it
+          // until the backstop fires.
+          revealRef.current = () => { showReply(); release(); };
+          speak(reply, {
+            onStart: () => { showReply(); release(); },
+            onEnd: () => { setSpeaking(false); },
+          });
+        });
+      } else {
+        showReply();
       }
     } catch (e) {
       // A user cancel is not an error to surface — they asked for it.
@@ -188,6 +220,7 @@ export default function AssistantView({
     // key even when the text assistant is answering through Ollama.
     if (!hasOpenAiKey()) { setError(t("assistant.voiceNeedsKey")); return; }
     stopSpeaking();
+    revealRef.current?.();
     setSpeaking(false);
     startingRef.current = true;
     stopPendingRef.current = false;
@@ -248,6 +281,9 @@ export default function AssistantView({
 
   function stopVoice() {
     stopSpeaking();
+    // Stopping the voice must never cost the text: if the reply is still being
+    // held for speech to begin, show it now.
+    revealRef.current?.();
     setSpeaking(false);
   }
 
