@@ -57,6 +57,17 @@ function readExdates(ve: ICAL.Component): string | null {
   return out.length ? JSON.stringify(out) : null;
 }
 
+/**
+ * The zone DTSTART was authored in, if it has one worth keeping. All-day
+ * (VALUE=DATE), floating and already-UTC times have nothing to preserve.
+ */
+function readTzid(start: ICAL.Time | null): string | null {
+  if (!start || start.isDate) return null;
+  const tzid = start.zone?.tzid;
+  if (!tzid || tzid === "floating" || tzid === "UTC" || tzid === "Z") return null;
+  return tzid;
+}
+
 function readCategories(ve: ICAL.Component): string | null {
   const cats = ve.getAllProperties("categories").flatMap((p) => p.getValues() as unknown as string[]);
   return cats.length ? JSON.stringify(cats) : null;
@@ -83,6 +94,7 @@ function toUnified(
     location: event.location || null,
     dtstart: event.startDate ? event.startDate.toJSDate().toISOString() : new Date().toISOString(),
     dtend: event.endDate ? event.endDate.toJSDate().toISOString() : null,
+    tzid: readTzid(event.startDate ?? null),
     all_day: allDay ? 1 : 0,
     rrule: readRrule(ve),
     exdates: readExdates(ve),
@@ -168,16 +180,64 @@ export function expandRemoteEvent(
 // ---------------------------------------------------------------------------
 
 /**
+ * The zone we can honestly write an event in, or null for "use UTC".
+ *
+ * RFC 5545 requires the VTIMEZONE definition to travel with any TZID
+ * reference, and we don't ship a timezone database — so we can only emit a
+ * TZID for a zone that's registered in ICAL.TimezoneService. Reads register
+ * every VTIMEZONE they see, so any event we fetched can be written back in its
+ * own zone; anything else (a brand-new event, a zone we've never read) falls
+ * back to the UTC encoding rather than throwing.
+ */
+function writableZone(ev: UnifiedEvent): ICAL.Timezone | null {
+  if (ev.all_day || !ev.tzid) return null;
+  try {
+    if (!ICAL.TimezoneService.has(ev.tzid)) return null;
+    const zone = ICAL.TimezoneService.get(ev.tzid);
+    return zone?.component ? zone : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write a timed property (DTSTART/DTEND/EXDATE) either as the instant in UTC,
+ * or — when we have the zone — as wall clock plus TZID. The distinction only
+ * matters for recurring events: RFC 5545 expands an RRULE in DTSTART's frame,
+ * so a UTC DTSTART pins a 9am weekly series to an instant and drifts it an
+ * hour across a DST change, while TZID keeps it at 9am.
+ */
+function addTimed(
+  comp: ICAL.Component,
+  name: string,
+  d: Date,
+  zone: ICAL.Timezone | null,
+): void {
+  const utc = ICAL.Time.fromJSDate(d, true);
+  if (!zone) {
+    comp.addPropertyWithValue(name, utc);
+    return;
+  }
+  const prop = comp.addPropertyWithValue(name, utc.convertToZone(zone));
+  prop.setParameter("tzid", zone.tzid);
+}
+
+/**
  * Render a UnifiedEvent as a one-VEVENT VCALENDAR.
  *
- * Timed events are written in UTC so we never have to emit a VTIMEZONE; the
- * instant is unambiguous either way. All-day events are written as VALUE=DATE.
- * (Emitting local TZID + VTIMEZONE is a fidelity upgrade for later.)
+ * Timed events keep the zone they were authored in when we know it (`tzid` +
+ * an embedded VTIMEZONE), and otherwise fall back to UTC — unambiguous, and
+ * all we can say about an event whose zone we never saw. All-day events are
+ * written as VALUE=DATE.
  */
 export function buildCalendarData(ev: UnifiedEvent): string {
   const vcal = new ICAL.Component("vcalendar");
   vcal.addPropertyWithValue("version", "2.0");
   vcal.addPropertyWithValue("prodid", "-//Second Brain//CalDAV//EN");
+
+  const zone = writableZone(ev);
+  // Clone: addSubcomponent reparents, and the registered zone is shared.
+  if (zone) vcal.addSubcomponent(new ICAL.Component(structuredClone(zone.component.toJSON())));
 
   const ve = new ICAL.Component("vevent");
   vcal.addSubcomponent(ve);
@@ -196,8 +256,8 @@ export function buildCalendarData(ev: UnifiedEvent): string {
     const end = ev.dtend ? new Date(ev.dtend) : new Date(start.getTime() + 864e5);
     ve.addPropertyWithValue("dtend", ICAL.Time.fromDateString(toDateString(end)));
   } else {
-    ve.addPropertyWithValue("dtstart", ICAL.Time.fromJSDate(new Date(ev.dtstart), true));
-    if (ev.dtend) ve.addPropertyWithValue("dtend", ICAL.Time.fromJSDate(new Date(ev.dtend), true));
+    addTimed(ve, "dtstart", new Date(ev.dtstart), zone);
+    if (ev.dtend) addTimed(ve, "dtend", new Date(ev.dtend), zone);
   }
 
   if (ev.rrule) {
@@ -213,10 +273,10 @@ export function buildCalendarData(ev: UnifiedEvent): string {
       for (const iso of JSON.parse(ev.exdates) as string[]) {
         const d = new Date(iso);
         if (isNaN(d.getTime())) continue;
-        ve.addPropertyWithValue(
-          "exdate",
-          ev.all_day ? ICAL.Time.fromDateString(toDateString(d)) : ICAL.Time.fromJSDate(d, true),
-        );
+        // EXDATE must match DTSTART's value type and zone, or it may fail to
+        // suppress the occurrence and the skipped event comes back.
+        if (ev.all_day) ve.addPropertyWithValue("exdate", ICAL.Time.fromDateString(toDateString(d)));
+        else addTimed(ve, "exdate", d, zone);
       }
     } catch {
       /* ignore malformed exdates */

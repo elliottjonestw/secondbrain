@@ -66,7 +66,7 @@ npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
 - **Two expansion paths on purpose:** local uses `rrule`, remote uses **ical.js** for the `TZID` + `VTIMEZONE` only it resolves. Unifying them breaks cross-timezone events.
 - **Writes are ETag-guarded** (`If-Match`, `If-None-Match: *`). A 412 is a real conflict — surface it, never blind-retry.
 - **Reads fail soft:** `getOccurrences` returns `{ occurrences, errors }`; a dead iCloud must never break the local calendar.
-- **Writes emit UTC `DTSTART`, not `TZID`** (v1), so re-saving a recurring Apple event drifts an hour across DST. Fixing it needs `VTIMEZONE` too — dropping the UTC conversion alone gives floating times, which is worse.
+- **Writes preserve the source zone via `UnifiedEvent.tzid`.** `dtstart` is still an absolute instant; `tzid` is a *write-back hint only*, set in `toUnified` from `startDate.zone.tzid` (null for all-day/floating/UTC/local). `buildCalendarData` emits `DTSTART;TZID=` + the `VTIMEZONE` **only when the zone is registered in `ICAL.TimezoneService`** — reads register every VTIMEZONE they see, so a fetched event can round-trip; anything else falls back to UTC. **We ship no tz database, so events created in-app still write UTC and a new recurring timed series still drifts across DST.** Never "fix" that by dropping the `fromJSDate(d, true)` — `false` emits a floating time, which is worse. `EXDATE` must carry the same value type and zone as `DTSTART` or the skipped occurrence comes back.
 
 **Platform**
 - **External APIs use `@tauri-apps/plugin-http`'s `fetch`**, not the webview's (CORS from `tauri://`), and the URL must be scoped in `capabilities/default.json`.

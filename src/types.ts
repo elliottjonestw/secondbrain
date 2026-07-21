@@ -200,6 +200,10 @@ export interface UnifiedEvent {
   location: string | null;
   dtstart: string; // ISO 8601, absolute instant (TZID already resolved)
   dtend: string | null;
+  // The zone `dtstart` was authored in, when we know it (remote events only).
+  // Purely a write-back hint so a recurring series keeps its wall-clock time —
+  // `dtstart` stays an absolute instant and nothing should read this to render.
+  tzid?: string | null;
   all_day: number; // 0 | 1
   rrule: string | null;
   exdates: string | null; // JSON array of ISO dates
