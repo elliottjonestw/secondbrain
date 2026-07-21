@@ -10,6 +10,7 @@ import {
   getSettings, saveSettings, getCalendarSettings, saveCalendarSettings,
   DEFAULT_OLLAMA_URL,
   MIN_SPEECH_RATE, MAX_SPEECH_RATE, clampSpeechRate,
+  MIN_SUMMARY_MAX_AGE_HOURS, MAX_SUMMARY_MAX_AGE_HOURS, clampSummaryMaxAge,
   type AppSettings, type AssistantProvider, type CalDavAccount, type TtsEngine,
   type TemperatureUnit, type WeatherLocation, type StockSymbol,
 } from "../lib/settings";
@@ -54,6 +55,10 @@ export default function SettingsView() {
   const [saved, setSaved] = useState(false);
   const patch = (p: Partial<AppSettings>) => setDraft((d) => ({ ...d, ...p }));
 
+  // Field by field, not `saveSettings(draft)`: the draft is a whole AppSettings,
+  // so spreading it would let this button write back the General pane's values
+  // as they were when this view mounted. A new field on these panes must be
+  // added here too, or Save silently ignores it.
   function save() {
     saveSettings({
       assistantProvider: draft.assistantProvider,
@@ -67,6 +72,8 @@ export default function SettingsView() {
       openaiVoice: draft.openaiVoice,
       speechRate: clampSpeechRate(draft.speechRate),
       preferredVoices: draft.preferredVoices,
+      summaryThrottle: draft.summaryThrottle,
+      summaryMaxAgeHours: clampSummaryMaxAge(draft.summaryMaxAgeHours),
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -575,8 +582,60 @@ function AssistantSettings({ draft, patch, onSave, saved }: PaneProps) {
         ? <OpenAiFields draft={draft} patch={patch} />
         : <OllamaFields draft={draft} patch={patch} />}
 
+      <SummaryThrottleFields draft={draft} patch={patch} />
+
       <SaveRow onSave={onSave} saved={saved} />
     </>
+  );
+}
+
+/**
+ * How long the Today briefing is held before a change to the day rewrites it.
+ *
+ * Lives with the assistant rather than on the Today page because it's a spend
+ * control, not a layout one — that card is the only request the app makes
+ * without being asked.
+ *
+ * The hours field keeps its own text so a half-typed value ("", "1") isn't
+ * clamped out from under the cursor; the draft only takes a number it can use.
+ */
+function SummaryThrottleFields({ draft, patch }: Pick<PaneProps, "draft" | "patch">) {
+  const { t } = useTranslation();
+  const [hours, setHours] = useState(String(draft.summaryMaxAgeHours));
+
+  return (
+    <Field label={t("settings.assistant.summaryThrottle")} hint={t("settings.assistant.summaryThrottleHint")}>
+      <label className="flex cursor-pointer items-center gap-3 text-sm">
+        <input
+          type="checkbox"
+          checked={draft.summaryThrottle}
+          onChange={(e) => patch({ summaryThrottle: e.target.checked })}
+          className="h-4 w-4 accent-blue-600"
+        />
+        <span>{t("settings.assistant.summaryThrottleLabel")}</span>
+      </label>
+
+      {draft.summaryThrottle && (
+        <div className="mt-3 flex items-center gap-2">
+          <input
+            type="number"
+            min={MIN_SUMMARY_MAX_AGE_HOURS}
+            max={MAX_SUMMARY_MAX_AGE_HOURS}
+            value={hours}
+            onChange={(e) => {
+              setHours(e.target.value);
+              const n = Number(e.target.value);
+              if (e.target.value.trim() && Number.isFinite(n)) {
+                patch({ summaryMaxAgeHours: clampSummaryMaxAge(n) });
+              }
+            }}
+            onBlur={() => setHours(String(draft.summaryMaxAgeHours))}
+            className={`${INPUT_CLASS} w-24`}
+          />
+          <span className="text-sm text-neutral-500">{t("settings.assistant.summaryHours")}</span>
+        </div>
+      )}
+    </Field>
   );
 }
 

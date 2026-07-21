@@ -84,6 +84,7 @@ npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
 - **`useAsync` keeps the previous value during a reload** — blanking it flashes a skeleton on every checkbox tick. Same reason there's no Suspense.
 - **Rules two widgets share live in `derive.ts`** (day-scoping, overdue, birthdays) — the card shows them and the summary describes them, so two copies drift.
 - **Order/visibility live in `settings.todayLayout`, read via `mergeTodayLayout`** — stored ids are a *preference*, not an inventory, so new widgets must be appended and removed ones dropped. Renaming an id resets that card's position for everyone.
+- **The summary cache is keyed by day (`lang|date`), not by its fact signature** — the entry an aged-out day has to be compared against is "the briefing this day already has", which a signature-keyed cache can't find. The entry carries `sig` (exact match = always reusable) and `at` (a changed day reuses it while inside `summaryMaxAgeMs()`, default 6h, off in Settings). Age is only checked when the facts change or the card mounts — no timer, so nothing is billed while nobody's looking. Changing the entry shape means bumping `CACHE_KEY`.
 - **Hiding a card stops its fetch, not just its render** (the summary is billed, the forecast is a free service). Keep fetches inside widgets; hoisting one to `TodayView` makes hidden cards pay again.
 
 **UI**

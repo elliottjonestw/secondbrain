@@ -229,7 +229,11 @@
       "unreachable": "無法連線到 {{url}} 的 Ollama。請確認它正在執行（`ollama serve`）。",
       "pickModel": "選擇模型…",
       "ollamaModelHint": "需要支援工具呼叫的模型，例如 llama3.1 或 qwen2.5。",
-      "toolsNote": "助理需透過工具呼叫來讀取與修改你的資料。請選擇支援工具的模型（llama3.1、qwen2.5、mistral-nemo…）—— 不支援工具的模型將無法作答。"
+      "toolsNote": "助理需透過工具呼叫來讀取與修改你的資料。請選擇支援工具的模型（llama3.1、qwen2.5、mistral-nemo…）—— 不支援工具的模型將無法作答。",
+      "summaryThrottle": "今日摘要",
+      "summaryThrottleLabel": "已產生的摘要保留一段時間",
+      "summaryThrottleHint": "今日頁面的「你的一天」是本程式唯一未經你要求就自動產生的內容。保留期間內，即使當天的資料有變動（勾選待辦、新增行程），也不會重新產生；超過這個時數才會。卡片上的重新整理按鈕則一律重寫。",
+      "summaryHours": "小時"
     },
     "calendars": {
       "description": "連接 iCloud 後，你的 Apple 行事曆會與內建行事曆一起顯示。行程會即時從 iCloud 讀取與寫入，不會複製到此裝置，因此 Apple 行事曆需要連線才會出現。",

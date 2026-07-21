@@ -77,6 +77,34 @@ export interface AppSettings {
    * array means "never customised", i.e. every card in its default order.
    */
   todayLayout: TodayCardPref[];
+  /**
+   * Hold the Today page's "Your day" briefing for `summaryMaxAgeHours` after it
+   * was written, instead of rewriting it whenever the day's facts change. Purely
+   * a spend control — that card is the app's only *automatic* billed request, so
+   * ticking off four todos otherwise buys four summaries. Off means the old
+   * behaviour: any change to the day regenerates. The refresh button ignores
+   * this either way.
+   */
+  summaryThrottle: boolean;
+  /** How long a written briefing stays good for, in hours. */
+  summaryMaxAgeHours: number;
+}
+
+export const MIN_SUMMARY_MAX_AGE_HOURS = 1;
+export const MAX_SUMMARY_MAX_AGE_HOURS = 168; // a week
+
+export function clampSummaryMaxAge(hours: number): number {
+  if (!Number.isFinite(hours)) return DEFAULTS.summaryMaxAgeHours;
+  return Math.min(MAX_SUMMARY_MAX_AGE_HOURS, Math.max(MIN_SUMMARY_MAX_AGE_HOURS, Math.round(hours)));
+}
+
+/**
+ * How long a cached briefing may be reused even after the day's facts change,
+ * in ms. 0 when the throttle is off, i.e. only an exact fact match is reusable.
+ */
+export function summaryMaxAgeMs(): number {
+  const s = getSettings();
+  return s.summaryThrottle ? clampSummaryMaxAge(s.summaryMaxAgeHours) * 3600_000 : 0;
 }
 
 /** One card's placement on the Today page. Order is the array's own order. */
@@ -158,6 +186,8 @@ const DEFAULTS: AppSettings = {
     { symbol: "GOOGL", name: "Alphabet Inc." },
   ],
   todayLayout: [],
+  summaryThrottle: true,
+  summaryMaxAgeHours: 6,
 };
 
 export function getSettings(): AppSettings {

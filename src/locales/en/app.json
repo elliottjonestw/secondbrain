@@ -230,7 +230,11 @@
       "unreachable": "Can't reach Ollama at {{url}}. Make sure it's running (`ollama serve`).",
       "pickModel": "Select a model…",
       "ollamaModelHint": "A tools-capable model is required, e.g. llama3.1 or qwen2.5.",
-      "toolsNote": "The assistant relies on tool calling to read and edit your data. Pick a model that supports tools (llama3.1, qwen2.5, mistral-nemo…) — a model without tool support won't be able to answer."
+      "toolsNote": "The assistant relies on tool calling to read and edit your data. Pick a model that supports tools (llama3.1, qwen2.5, mistral-nemo…) — a model without tool support won't be able to answer.",
+      "summaryThrottle": "Today briefing",
+      "summaryThrottleLabel": "Keep the written briefing for a while",
+      "summaryThrottleHint": "The Today page's “Your day” card is the only thing the app writes without being asked. Holding it means a change to your day — ticking off a todo, adding an event — won't rewrite it until it's this old. The refresh button on the card always rewrites it.",
+      "summaryHours": "hours"
     },
     "calendars": {
       "description": "Connect iCloud to see your Apple calendars alongside the built-in one. Events are read from and written to iCloud live — nothing is copied to this device, so Apple calendars need a connection to appear.",

@@ -19,7 +19,7 @@ import { dueTodosFor, dueRemindersFor, reminderWhen, upcomingBirthdays } from ".
 import type { TodayWidget, TodayWidgetProps } from "./types";
 import { summarizeDay, hasDayContent, type DaySummaryInput } from "../../lib/ai";
 import { englishCondition, isForecastable } from "../../lib/weather";
-import { isAssistantConfigured } from "../../lib/settings";
+import { isAssistantConfigured, summaryMaxAgeMs } from "../../lib/settings";
 import { currentLanguage } from "../../lib/i18n";
 import { isOverdue, ageFromBirthday, toDateInput } from "../../lib/format";
 
@@ -31,29 +31,53 @@ const BIRTHDAY_HORIZON_DAYS = 7;
 // Versioned like the weather cache: the cached value is prose built from a
 // `DaySummaryInput`, so a build that changes that shape (or the prompt, or the
 // model) must retire what earlier builds wrote rather than serve stale text.
-const CACHE_KEY = "secondbrain.daySummary.v1";
+// v2 also changed the key and the value's shape — see below.
+const CACHE_KEY = "secondbrain.daySummary.v2";
 /** How many days' summaries to keep. Enough to step around a week and back
  *  without paying for any of it twice; small enough to stay a tidy blob. */
 const CACHE_MAX = 20;
 
-type SummaryCache = Record<string, string>;
+/**
+ * One written briefing, kept under a *day* key (`language|date`) rather than
+ * under its own fact signature.
+ *
+ * Keying by day is what makes the age throttle possible at all: the entry a
+ * changed day has to be compared against is "the briefing this day already has",
+ * which a signature-keyed cache can't find. `sig` still rides along so an exact
+ * fact match is always reusable regardless of age, and `at` is when it was
+ * written.
+ */
+interface SummaryEntry {
+  sig: string;
+  text: string;
+  at: number;
+}
+
+type SummaryCache = Record<string, SummaryEntry>;
+
+function isEntry(v: unknown): v is SummaryEntry {
+  const e = v as SummaryEntry | null;
+  return !!e && typeof e.sig === "string" && typeof e.text === "string" && typeof e.at === "number";
+}
 
 function readCache(): SummaryCache {
   try {
     const raw = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
-    return raw && typeof raw === "object" ? (raw as SummaryCache) : {};
+    if (!raw || typeof raw !== "object") return {};
+    // Drop anything an older/newer shape wrote, same as the weather cache.
+    return Object.fromEntries(Object.entries(raw).filter(([, v]) => isEntry(v))) as SummaryCache;
   } catch {
     return {}; // an unreadable cache is just a miss
   }
 }
 
-function writeCache(sig: string, text: string): void {
+function writeCache(dayKey: string, entry: SummaryEntry): void {
   try {
     const cache = readCache();
     // Re-inserting moves an entry to the end, so the oldest *untouched* one is
     // what falls off the front.
-    delete cache[sig];
-    cache[sig] = text;
+    delete cache[dayKey];
+    cache[dayKey] = entry;
     const keys = Object.keys(cache);
     for (const k of keys.slice(0, Math.max(0, keys.length - CACHE_MAX))) delete cache[k];
     localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
@@ -67,7 +91,14 @@ function writeCache(sig: string, text: string): void {
  *
  * Keyed on the facts plus the UI language: navigating back to Today, stepping
  * between days, or ticking something off elsewhere and returning must not spend
- * a request re-saying the same thing. Any real change to the day regenerates.
+ * a request re-saying the same thing.
+ *
+ * A real change to the day regenerates it — but only once the standing briefing
+ * is older than `summaryMaxAgeMs()` (6 hours by default, off in Settings for
+ * anyone who'd rather have it always current). This is the app's only request
+ * the user didn't ask for, and without the hold, a morning of ticking todos off
+ * buys a rewrite per tick. Age is checked when the facts change or the card
+ * mounts, not on a timer: nothing is billed while nobody is looking.
  *
  * A failure isn't worth shouting about — the other cards carry the same
  * information — so it degrades to a quiet "couldn't write one" line.
@@ -87,16 +118,20 @@ function useDaySummary(input: DaySummaryInput, ready: boolean) {
   // into loading for a moment; letting that hide the card would make it vanish
   // and reappear on every checkbox tick. Prose already on screen keeps it up.
   const show = configured && (hasDayContent(input) || !!text);
+  const lang = currentLanguage();
   const sig = ready && configured && hasDayContent(input)
-    ? `${currentLanguage()}|${JSON.stringify(input)}`
+    ? `${lang}|${JSON.stringify(input)}`
     : "";
+  const dayKey = `${lang}|${input.date}`;
 
   useEffect(() => {
     if (!sig) return;
     // A manual refresh (nonce > 0) deliberately ignores the cache.
-    const cached = nonce === 0 ? readCache()[sig] : undefined;
-    if (typeof cached === "string") {
-      setText(cached);
+    const cached = nonce === 0 ? readCache()[dayKey] : undefined;
+    // Same facts: always reusable. Different facts: reusable while the standing
+    // briefing is still inside the throttle window.
+    if (cached && (cached.sig === sig || Date.now() - cached.at < summaryMaxAgeMs())) {
+      setText(cached.text);
       setFailed(false);
       return;
     }
@@ -111,12 +146,12 @@ function useDaySummary(input: DaySummaryInput, ready: boolean) {
       .then((t) => {
         if (!live) return;
         setText(t);
-        writeCache(sig, t);
+        writeCache(dayKey, { sig, text: t, at: Date.now() });
       })
       .catch(() => { if (live) { setText(null); setFailed(true); } })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; ctl.abort(); };
-  }, [sig, nonce]);
+  }, [sig, dayKey, nonce]);
 
   return { show, text, loading, failed, refresh: () => setNonce((n) => n + 1) };
 }
