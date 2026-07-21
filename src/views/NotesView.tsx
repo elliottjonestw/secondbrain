@@ -7,6 +7,7 @@ import type { NoteRow } from "../types";
 import { listNotes, upsertNote, deleteNote, searchNotes, allLinkTargets, insertNoteImage } from "../db";
 import { Button } from "../components/ui";
 import MarkdownToolbar, { mdActions, MdEdit } from "../components/MarkdownToolbar";
+import DictateButton from "../components/DictateButton";
 import NoteImage, { SBIMG, primeNoteImage, releaseNoteImages, noteUrlTransform } from "../components/NoteImage";
 import { encodeNoteImage } from "../lib/images";
 import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/ItemMeta";
@@ -123,6 +124,8 @@ function NoteEditor({
   const bodyRef = useRef(body);
   const imageSeq = useRef(0);
   const [imageError, setImageError] = useState(false);
+  const dictateSeq = useRef(0);
+  const [dictateError, setDictateError] = useState("");
 
   function scheduleSave(next: { title?: string; body?: string; pinned?: boolean }) {
     const draft = {
@@ -194,6 +197,35 @@ function NoteEditor({
       ? current.replace(new RegExp(`!\\[[^\\]]*\\]\\(${token}\\)`), "")
       : current.replace(`(${token})`, `(${replacement})`);
     if (next === current) return; // the user deleted the placeholder mid-flight
+    setBody(next);
+    bodyRef.current = next;
+    scheduleSave({ body: next });
+  }
+
+  /**
+   * Dictation lands where you *started* speaking.
+   *
+   * Same problem as an image insert — the transcription round-trip is async and
+   * the caret moves meanwhile — so the same answer: a marker goes in
+   * synchronously at the caret and is swapped for the transcript when it
+   * arrives. It doubles as feedback about where the words are going to appear.
+   */
+  function beginDictation(): string {
+    const el = textareaRef.current;
+    const at = el ? [el.selectionStart, el.selectionEnd] : [body.length, body.length];
+    // Bracketed, so the marker for dictation 1 can't match inside dictation 11.
+    const token = `⟦${t("notes.md.dictating")} ${++dictateSeq.current}⟧`;
+    const next = body.slice(0, at[0]) + token + body.slice(at[1]);
+    applyEdit({ body: next, start: at[0] + token.length, end: at[0] + token.length });
+    return token;
+  }
+
+  /** Swap a dictation marker for its transcript (or drop it on failure). */
+  function endDictation(token: string, text: string | null) {
+    const current = bodyRef.current;
+    // A function replacement, so `$&` and friends in a transcript stay literal.
+    const next = current.replace(token, () => text ?? "");
+    if (next === current) return; // the marker was deleted mid-flight
     setBody(next);
     bodyRef.current = next;
     scheduleSave({ body: next });
@@ -272,16 +304,31 @@ function NoteEditor({
             onEdit={applyEdit}
             onInsertImage={(file) => { setImageError(false); void insertImage(file); }}
           />
-          <textarea
-            ref={textareaRef}
-            value={body}
-            onChange={(e) => { setBody(e.target.value); bodyRef.current = e.target.value; scheduleSave({ body: e.target.value }); }}
-            onKeyDown={onBodyKeyDown}
-            onPaste={onBodyPaste}
-            placeholder={t("notes.bodyPlaceholder")}
-            className="h-96 w-full resize-none rounded-b-lg border border-neutral-200 p-4 font-mono text-sm outline-none focus:border-blue-400 dark:border-neutral-700 dark:bg-neutral-800"
-          />
+          {/* Relative so the mic can sit in the corner of the field itself; the
+              textarea's extra bottom padding keeps long text out from under it. */}
+          <div className="relative">
+            {/* `block` on the textarea matters: as an inline element it leaves a
+                few pixels of descender gap under it, so the wrapper ends up
+                taller than the field and the mic's bottom offset no longer
+                matches its right one. */}
+            <textarea
+              ref={textareaRef}
+              value={body}
+              onChange={(e) => { setBody(e.target.value); bodyRef.current = e.target.value; scheduleSave({ body: e.target.value }); }}
+              onKeyDown={onBodyKeyDown}
+              onPaste={onBodyPaste}
+              placeholder={t("notes.bodyPlaceholder")}
+              className="block h-96 w-full resize-none rounded-b-lg border border-neutral-200 p-4 pb-14 font-mono text-sm outline-none focus:border-blue-400 dark:border-neutral-700 dark:bg-neutral-800"
+            />
+            <DictateButton
+              onStart={beginDictation}
+              onResult={endDictation}
+              onError={setDictateError}
+              className="absolute bottom-3 right-3"
+            />
+          </div>
           {imageError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{t("notes.md.imageError")}</p>}
+          {dictateError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{dictateError}</p>}
         </div>
       )}
 

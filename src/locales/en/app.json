@@ -460,7 +460,9 @@
       "image": "Insert image",
       "imageAlt": "image",
       "imageError": "That image couldn't be added.",
-      "imageMissing": "Image not found"
+      "imageMissing": "Image not found",
+      "dictate": "Dictate",
+      "dictating": "Dictating…"
     }
   },
   "assistant": {

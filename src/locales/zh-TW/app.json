@@ -458,7 +458,9 @@
       "image": "插入圖片",
       "imageAlt": "圖片",
       "imageError": "無法加入這張圖片。",
-      "imageMissing": "找不到圖片"
+      "imageMissing": "找不到圖片",
+      "dictate": "語音輸入",
+      "dictating": "聽寫中…"
     }
   },
   "assistant": {
