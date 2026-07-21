@@ -420,7 +420,20 @@ async function speakWithOpenai(
   audio.onplay = g.start;
   audio.onended = finish;
   audio.onerror = finish;
-  await audio.play();
+  try {
+    await audio.play();
+  } catch (err) {
+    // A NotAllowedError (or any play() failure) means no audio will ever come,
+    // so finish() won't run. Revoke the blob URL and drop our hold on the
+    // element here, then rethrow so speak() can fall back to a system voice —
+    // without this the orphaned element could fire onerror later and run the
+    // callbacks a second time over the fallback's own guard (same id).
+    if (currentAudio === audio) {
+      URL.revokeObjectURL(audio.src);
+      currentAudio = null;
+    }
+    throw err;
+  }
 }
 
 /**
@@ -430,9 +443,12 @@ async function speakWithOpenai(
  */
 export function speak(text: string, cb?: SpeakCallbacks): void {
   const spoken = stripMarkdown(text);
+  // Cancel the prior utterance even when this one is empty — the function's
+  // contract is "speak this, cancelling anything already playing", and an
+  // empty/all-markdown reply shouldn't leave the last audio running.
+  haltPlayback();
   if (!spoken) { cb?.onStart?.(); cb?.onEnd?.(); return; }
 
-  haltPlayback();
   const id = ++speechId;
   const lang = speechLang(spoken);
 
@@ -481,5 +497,15 @@ export async function previewNaturalVoice(
   audio.onended = () => {
     if (currentAudio === audio) { URL.revokeObjectURL(audio.src); currentAudio = null; }
   };
-  await audio.play();
+  try {
+    await audio.play();
+  } catch (err) {
+    // Same cleanup rationale as speakWithOpenai: finish() never runs on a
+    // play() rejection, so revoke here before letting the caller see the error.
+    if (currentAudio === audio) {
+      URL.revokeObjectURL(audio.src);
+      currentAudio = null;
+    }
+    throw err;
+  }
 }

@@ -16,7 +16,7 @@ import { Button, Modal } from "../components/ui";
 import { Avatar } from "../components/Avatar";
 import { PhotoPicker } from "../components/PhotoPicker";
 import { TagEditor, LinksPanel, LinkTarget } from "../components/ItemMeta";
-import { fmtFullDate, ageFromBirthday } from "../lib/format";
+import { fmtFullDate, fmtMonthDay, ageFromBirthday, parseBirthday } from "../lib/format";
 
 // Type presets for the multi-value editors (matches vCard TYPE params).
 const EMAIL_TYPES = ["home", "work", "other"];
@@ -409,12 +409,22 @@ function PersonEditor({
 // Empty fields are omitted entirely, sections included: a sparse contact shows
 // a short page, not a page of blanks.
 
-/** A birthday is a bare `yyyy-mm-dd`; build a *local* date so it doesn't render
- *  a day early west of UTC (`new Date("1990-05-04")` parses as UTC midnight). */
+/**
+ * A birthday is a bare `yyyy-mm-dd`; build a *local* date so it doesn't render
+ * a day early west of UTC (`new Date("1990-05-04")` parses as UTC midnight).
+ *
+ * Also accepts vCard's no-year form (`--05-14`, "we know the day, not the age")
+ * via the shared parser, rendering month/day only with the same helper the
+ * Today dashboard uses for birthdays. `ageFromBirthday` already returns null
+ * for these, so the Age row stays hidden; only the Birthday row needs this.
+ */
 function birthdayLabel(value: string): string | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value.trim());
-  if (!m) return null;
-  return fmtFullDate(new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  const b = parseBirthday(value);
+  if (!b) return null;
+  // 2000 is an arbitrary leap-year placeholder for the no-year case; only
+  // month/day are rendered then.
+  const date = new Date(b.year ?? 2000, b.month - 1, b.day);
+  return b.year ? fmtFullDate(date) : fmtMonthDay(date);
 }
 
 function formatAddress(a: PersonAddress): string {

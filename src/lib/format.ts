@@ -148,8 +148,10 @@ export function toDateInput(d: Date): string {
 }
 
 /** Parsed `yyyy-mm-dd` birthday. `year` is null for a vCard date with no year
- *  (`--05-14`), which is legal and means "we know the day, not the age". */
-function parseBirthday(value: string): { year: number | null; month: number; day: number } | null {
+ *  (`--05-14`), which is legal and means "we know the day, not the age".
+ *  Exported so the People read-only label and the age/next-birthday helpers
+ *  below share one parser — two parsers would inevitably drift on edge cases. */
+export function parseBirthday(value: string): { year: number | null; month: number; day: number } | null {
   // `-` as the year is vCard's "unknown year" marker, giving `--05-14`.
   const m = /^(\d{4}|-)-(\d{2})-(\d{2})/.exec(value.trim());
   if (!m) return null;

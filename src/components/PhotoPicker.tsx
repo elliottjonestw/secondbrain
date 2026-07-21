@@ -87,7 +87,9 @@ export function PhotoPicker({
             onClick={() => { setError(false); onChange(""); }}
             aria-label={t("people.removePhoto")}
             title={t("people.removePhoto")}
-            className="absolute -right-1 -top-1 hidden rounded-full bg-neutral-800 p-1 text-white group-hover:block"
+            // Same reveal-on-hover/focus pattern as the camera overlay above, so
+            // the button is also reachable by keyboard rather than mouse-only.
+            className="absolute -right-1 -top-1 rounded-full bg-neutral-800 p-1 text-white opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 focus:outline-none"
           >
             <Trash2 size={12} />
           </button>

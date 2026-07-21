@@ -486,7 +486,7 @@ function VoiceSettings({ draft, patch, onSave, saved }: PaneProps) {
             aria-label={t("settings.voice.rate")}
           />
           <span className="w-12 shrink-0 text-right text-sm tabular-nums text-neutral-500">
-            {draft.speechRate.toFixed(2).replace(/0$/, "")}×
+            {draft.speechRate.toFixed(2).replace(/\.?0+$/, "")}×
           </span>
           {draft.speechRate !== 1 && (
             <Button onClick={() => patch({ speechRate: 1 })}>
