@@ -437,7 +437,24 @@
     "pin": "釘選",
     "edit": "編輯",
     "preview": "預覽",
-    "updated": "更新於 {{when}}"
+    "updated": "更新於 {{when}}",
+    "md": {
+      "toolbar": "格式",
+      "bold": "粗體",
+      "italic": "斜體",
+      "strikethrough": "刪除線",
+      "h1": "標題 1",
+      "h2": "標題 2",
+      "h3": "標題 3",
+      "bulletList": "項目符號清單",
+      "numberedList": "編號清單",
+      "checklist": "待辦清單",
+      "link": "連結",
+      "code": "程式碼",
+      "quote": "引用",
+      "linkText": "文字",
+      "linkUrl": "網址"
+    }
   },
   "assistant": {
     "title": "AI 助理",

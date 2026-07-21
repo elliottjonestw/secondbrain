@@ -439,7 +439,24 @@
     "pin": "Pin",
     "edit": "Edit",
     "preview": "Preview",
-    "updated": "Updated {{when}}"
+    "updated": "Updated {{when}}",
+    "md": {
+      "toolbar": "Formatting",
+      "bold": "Bold",
+      "italic": "Italic",
+      "strikethrough": "Strikethrough",
+      "h1": "Heading 1",
+      "h2": "Heading 2",
+      "h3": "Heading 3",
+      "bulletList": "Bullet list",
+      "numberedList": "Numbered list",
+      "checklist": "Checklist",
+      "link": "Link",
+      "code": "Code",
+      "quote": "Quote",
+      "linkText": "text",
+      "linkUrl": "url"
+    }
   },
   "assistant": {
     "title": "AI Assistant",

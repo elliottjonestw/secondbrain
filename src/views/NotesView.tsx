@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Plus, Pin, PinOff, Eye, Pencil, Trash2 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { NoteRow } from "../types";
 import { listNotes, upsertNote, deleteNote, searchNotes, allLinkTargets } from "../db";
 import { Button } from "../components/ui";
+import MarkdownToolbar, { mdActions, MdEdit } from "../components/MarkdownToolbar";
 import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/ItemMeta";
 import { fmtDateTime } from "../lib/format";
 
@@ -107,6 +108,10 @@ function NoteEditor({
   const [preview, setPreview] = useState(() => !!(note.title?.trim() || note.body?.trim()));
   const saveTimer = useRef<number | null>(null);
   const pending = useRef<{ title: string; body: string; pinned: boolean } | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // React owns the textarea's value, so a toolbar edit's caret position can only
+  // be restored after the re-render that carries the new text.
+  const pendingSel = useRef<[number, number] | null>(null);
 
   function scheduleSave(next: { title?: string; body?: string; pinned?: boolean }) {
     const draft = {
@@ -121,6 +126,34 @@ function NoteEditor({
       await upsertNote({ id: note.id, title: draft.title, body: draft.body, pinned: draft.pinned ? 1 : 0 });
       onChanged();
     }, 400);
+  }
+
+  useLayoutEffect(() => {
+    const sel = pendingSel.current;
+    if (!sel || !textareaRef.current) return;
+    pendingSel.current = null;
+    textareaRef.current.focus();
+    textareaRef.current.setSelectionRange(sel[0], sel[1]);
+  }, [body]);
+
+  /** Toolbar/shortcut edits go through the same debounced save as typing. */
+  function applyEdit(edit: MdEdit) {
+    pendingSel.current = [edit.start, edit.end];
+    setBody(edit.body);
+    scheduleSave({ body: edit.body });
+  }
+
+  function onBodyKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+    const key = e.key.toLowerCase();
+    if (key !== "b" && key !== "i" && key !== "k") return;
+    const el = e.currentTarget;
+    const actions = mdActions(body, el.selectionStart, el.selectionEnd, {
+      text: t("notes.md.linkText"),
+      url: t("notes.md.linkUrl"),
+    });
+    e.preventDefault();
+    applyEdit(key === "b" ? actions.bold() : key === "i" ? actions.italic() : actions.link());
   }
 
   // Flush any pending save exactly once, when the editor unmounts (switching
@@ -158,12 +191,17 @@ function NoteEditor({
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{body || t("notes.noContent")}</ReactMarkdown>
         </div>
       ) : (
-        <textarea
-          value={body}
-          onChange={(e) => { setBody(e.target.value); scheduleSave({ body: e.target.value }); }}
-          placeholder={t("notes.bodyPlaceholder")}
-          className="h-96 w-full resize-none rounded-lg border border-neutral-200 p-4 font-mono text-sm outline-none focus:border-blue-400 dark:border-neutral-700 dark:bg-neutral-800"
-        />
+        <div>
+          <MarkdownToolbar textareaRef={textareaRef} body={body} onEdit={applyEdit} />
+          <textarea
+            ref={textareaRef}
+            value={body}
+            onChange={(e) => { setBody(e.target.value); scheduleSave({ body: e.target.value }); }}
+            onKeyDown={onBodyKeyDown}
+            placeholder={t("notes.bodyPlaceholder")}
+            className="h-96 w-full resize-none rounded-b-lg border border-neutral-200 p-4 font-mono text-sm outline-none focus:border-blue-400 dark:border-neutral-700 dark:bg-neutral-800"
+          />
+        </div>
       )}
 
       <div className="mt-4 grid grid-cols-3 gap-4 rounded-lg border border-neutral-200 p-4 dark:border-neutral-700">
