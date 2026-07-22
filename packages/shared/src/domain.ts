@@ -53,6 +53,24 @@ export interface ReminderRow {
   updated_at: string | null;
 }
 
+export interface EventRow {
+  id: string;
+  summary: string;
+  description: string | null;
+  location: string | null;
+  dtstart: string;              // ISO 8601
+  dtend: string | null;
+  all_day: number;              // 0 | 1
+  rrule: string | null;         // RFC 5545
+  exdates: string | null;       // JSON array of ISO dates
+  status: string;               // CONFIRMED | TENTATIVE | CANCELLED
+  categories: string | null;    // JSON array
+  color: string | null;
+  sequence: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 export interface PersonRow {
   id: string;
   full_name: string;
@@ -96,6 +114,9 @@ const isoOrNull = z.string().datetime({ offset: true }).nullable();
 /** SQLite booleans are 0/1; kept as such on the wire so rows round-trip. */
 const boolInt = z.union([z.literal(0), z.literal(1)]);
 const priority = z.number().int().min(0).max(3);
+/** A bounded JSON-or-plain text column (exdates, categories, person emails …).
+ *  Validated only as text — its internal shape is the client's concern. */
+const jsonText = z.string().max(100_000).nullable();
 
 // ---------------------------------------------------------------------------
 // Lists
@@ -213,12 +234,52 @@ export type ReminderUpdate = z.infer<typeof reminderUpdateSchema>;
 export type ReminderQuery = z.infer<typeof reminderQuerySchema>;
 
 // ---------------------------------------------------------------------------
+// Events (iCalendar VEVENT shape). This is the LOCAL ("Second Brain") calendar
+// only — CalDAV calendars are never stored here, so they need no schema.
+// dtstart is a required ISO instant; all_day/rrule/exdates carry the recurrence.
+// ---------------------------------------------------------------------------
+
+const eventFields = {
+  summary: z.string().max(2000),
+  description: z.string().max(100_000).nullable(),
+  location: z.string().max(2000).nullable(),
+  dtstart: z.string().datetime({ offset: true }),
+  dtend: isoOrNull,
+  all_day: boolInt,
+  rrule: z.string().max(2000).nullable(),
+  exdates: jsonText,
+  status: z.string().max(40),
+  categories: jsonText,
+  color: z.string().max(32).nullable(),
+};
+
+export const eventCreateSchema = z.object({ id: idSchema, ...eventFields });
+
+export const eventUpdateSchema = z.object({
+  summary: eventFields.summary.optional(),
+  description: eventFields.description.optional(),
+  location: eventFields.location.optional(),
+  dtstart: eventFields.dtstart.optional(),
+  dtend: eventFields.dtend.optional(),
+  all_day: eventFields.all_day.optional(),
+  rrule: eventFields.rrule.optional(),
+  exdates: eventFields.exdates.optional(),
+  status: eventFields.status.optional(),
+  categories: eventFields.categories.optional(),
+  color: eventFields.color.optional(),
+});
+
+export const eventQuerySchema = z.object({ q: z.string().max(200).optional() });
+
+export type EventCreate = z.infer<typeof eventCreateSchema>;
+export type EventUpdate = z.infer<typeof eventUpdateSchema>;
+export type EventQuery = z.infer<typeof eventQuerySchema>;
+
+// ---------------------------------------------------------------------------
 // People (vCard-shaped). Multi-value fields are JSON strings, validated only as
 // bounded text here — their internal shape is the client's concern.
 // ---------------------------------------------------------------------------
 
-/** Bounded JSON-or-plain text column. */
-const jsonText = z.string().max(100_000).nullable();
 /**
  * A person's photo is a data URI. Bounded well under D1's 2 MB row cap so a
  * whole person row can't blow the limit — PhotoPicker downscales before this,

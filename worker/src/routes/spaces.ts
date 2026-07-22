@@ -2,6 +2,9 @@ import { Hono } from "hono";
 import {
   customFieldCreateSchema,
   customFieldReorderSchema,
+  eventCreateSchema,
+  eventQuerySchema,
+  eventUpdateSchema,
   listCreateSchema,
   listUpdateSchema,
   personCreateSchema,
@@ -46,6 +49,13 @@ import {
   reorderCustomFields,
   updatePerson,
 } from "../db/people";
+import {
+  createEvent,
+  deleteEvent,
+  getEvent,
+  listEvents,
+  updateEvent,
+} from "../db/events";
 
 /**
  * Space-scoped domain routes: `/v1/spaces/:spaceId/(lists|todos)`.
@@ -248,5 +258,42 @@ spaces.patch("/spaces/:spaceId/people/:id", async (c) => {
 spaces.delete("/spaces/:spaceId/people/:id", async (c) => {
   await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
   await deletePerson(c.env.DB, spaceId(c), c.req.param("id"));
+  return c.body(null, 204);
+});
+
+// ---------------------------------------------------------------------------
+// Events (the built-in calendar; CalDAV lives only on the client)
+// ---------------------------------------------------------------------------
+
+spaces.get("/spaces/:spaceId/events", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "read");
+  const query = eventQuerySchema.parse(Object.fromEntries(new URL(c.req.url).searchParams));
+  return c.json(await listEvents(c.env.DB, spaceId(c), query));
+});
+
+spaces.post("/spaces/:spaceId/events", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  const input = eventCreateSchema.parse(await c.req.json());
+  return c.json(await createEvent(c.env.DB, spaceId(c), input), 201);
+});
+
+spaces.get("/spaces/:spaceId/events/:id", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "read");
+  const row = await getEvent(c.env.DB, spaceId(c), c.req.param("id"));
+  if (!row) throw notFound("No such event.");
+  return c.json(row);
+});
+
+spaces.patch("/spaces/:spaceId/events/:id", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  const body = await c.req.json().catch(() => null);
+  if (body === null || typeof body !== "object") throw badRequest("Expected a JSON object.");
+  const patch = eventUpdateSchema.parse(body);
+  return c.json(await updateEvent(c.env.DB, spaceId(c), c.req.param("id"), patch));
+});
+
+spaces.delete("/spaces/:spaceId/events/:id", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  await deleteEvent(c.env.DB, spaceId(c), c.req.param("id"));
   return c.body(null, 204);
 });

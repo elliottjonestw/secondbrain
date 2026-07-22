@@ -30,7 +30,7 @@ import { networkFirst } from "./lib/cache";
 // code (one copy of the phrasing-bug fix CLAUDE.md documents). Re-exported here
 // because ai.ts and SearchView import them from db.
 export { queryTerms, escapeLike, anyTermClause, matchQuery } from "@secondbrain/shared";
-import { queryTerms, escapeLike, anyTermClause, matchQuery } from "@secondbrain/shared";
+import { queryTerms, escapeLike } from "@secondbrain/shared";
 
 /** Build a space-scoped API path, or throw if no session is active. The throw
  *  is a programmer-error guard: the AuthGate guarantees a session before any
@@ -130,15 +130,23 @@ function byName<T>(rows: T[], key: (row: T) => string): T[] {
 }
 
 // ---------------------------------------------------------------------------
-// Events
+// Events — the built-in calendar, served by the Worker (M3c). CalDAV calendars
+// are unaffected: calendars.ts still fetches those live and merges them with
+// these. Only calendars.ts and ai.ts call these helpers (architecture rule 3).
 // ---------------------------------------------------------------------------
 export async function listEvents(): Promise<EventRow[]> {
-  return (await db()).select<EventRow[]>("SELECT * FROM events ORDER BY dtstart ASC");
+  return networkFirst(`events:${getCurrentSpaceId()}`, () =>
+    apiRequest<EventRow[]>(spacePath("/events")),
+  );
 }
 
 export async function getEvent(id: string): Promise<EventRow | undefined> {
-  const rows = await (await db()).select<EventRow[]>("SELECT * FROM events WHERE id = ?", [id]);
-  return rows[0];
+  try {
+    return await apiRequest<EventRow>(spacePath(`/events/${id}`));
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return undefined;
+    throw e;
+  }
 }
 
 export type EventInput = Omit<
@@ -146,78 +154,51 @@ export type EventInput = Omit<
   "id" | "sequence" | "created_at" | "updated_at"
 > & { id?: string };
 
+/** The writable event fields, in one place so create and update agree. */
+function eventBody(input: EventInput): Omit<EventInput, "id"> {
+  const { id: _id, ...fields } = input;
+  return fields;
+}
+
 export async function upsertEvent(input: EventInput): Promise<string> {
-  const d = await db();
-  const now = nowIso();
   if (input.id) {
-    await d.execute(
-      `UPDATE events SET summary=?, description=?, location=?, dtstart=?, dtend=?,
-         all_day=?, rrule=?, exdates=?, status=?, categories=?, color=?,
-         sequence=sequence+1, updated_at=? WHERE id=?`,
-      [
-        input.summary, input.description, input.location, input.dtstart, input.dtend,
-        input.all_day, input.rrule, input.exdates, input.status, input.categories,
-        input.color, now, input.id,
-      ],
-    );
+    await apiRequest<EventRow>(spacePath(`/events/${input.id}`), { method: "PATCH", body: eventBody(input) });
     return input.id;
   }
   const id = newId();
-  await d.execute(
-    `INSERT INTO events (id, summary, description, location, dtstart, dtend, all_day,
-       rrule, exdates, status, categories, color, sequence, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)`,
-    [
-      id, input.summary, input.description, input.location, input.dtstart, input.dtend,
-      input.all_day, input.rrule, input.exdates, input.status, input.categories,
-      input.color, now, now,
-    ],
-  );
+  await apiRequest<EventRow>(spacePath("/events"), { method: "POST", body: { id, ...eventBody(input) } });
   return id;
 }
 
 /**
- * Insert-or-update an event while preserving a caller-supplied id (= iCal UID).
- * Used by ICS import so imported events keep their original stable UID as the
- * primary key, which CalDAV sync depends on.
+ * Insert-or-update an event while preserving a caller-supplied id (= iCal UID),
+ * for ICS import. Create-with-id when new, PATCH when it exists.
  */
-export async function upsertEventWithId(
-  id: string,
-  input: EventInput,
-): Promise<void> {
-  const existing = await getEvent(id);
-  if (existing) {
-    await upsertEvent({ ...input, id });
+export async function upsertEventWithId(id: string, input: EventInput): Promise<void> {
+  if (await getEvent(id)) {
+    await apiRequest<EventRow>(spacePath(`/events/${id}`), { method: "PATCH", body: eventBody(input) });
     return;
   }
-  const now = nowIso();
-  await (await db()).execute(
-    `INSERT INTO events (id, summary, description, location, dtstart, dtend, all_day,
-       rrule, exdates, status, categories, color, sequence, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)`,
-    [
-      id, input.summary, input.description, input.location, input.dtstart, input.dtend,
-      input.all_day, input.rrule, input.exdates, input.status, input.categories,
-      input.color, now, now,
-    ],
-  );
+  await apiRequest<EventRow>(spacePath("/events"), { method: "POST", body: { id, ...eventBody(input) } });
 }
 
-/** Add an EXDATE (excluded ISO date) to a recurring event. */
+/** Add an EXDATE (excluded ISO date) to a recurring event. Read-modify-write:
+ *  the server has no exdate-append endpoint, and this isn't a hot path. */
 export async function addExdate(eventId: string, iso: string): Promise<void> {
   const ev = await getEvent(eventId);
   if (!ev) return;
   const list: string[] = ev.exdates ? JSON.parse(ev.exdates) : [];
-  if (!list.includes(iso)) list.push(iso);
-  await (await db()).execute(
-    "UPDATE events SET exdates=?, sequence=sequence+1, updated_at=? WHERE id=?",
-    [JSON.stringify(list), nowIso(), eventId],
-  );
+  if (list.includes(iso)) return;
+  list.push(iso);
+  await apiRequest<EventRow>(spacePath(`/events/${eventId}`), {
+    method: "PATCH",
+    body: { exdates: JSON.stringify(list) },
+  });
 }
 
 export async function deleteEvent(id: string): Promise<void> {
-  await (await db()).execute("DELETE FROM events WHERE id=?", [id]);
-  await removeItemRelations("event", id);
+  await apiRequest<void>(spacePath(`/events/${id}`), { method: "DELETE" });
+  await removeItemRelations("event", id); // links/tags still local until M3d
 }
 
 // ---------------------------------------------------------------------------
@@ -504,24 +485,9 @@ function ftsMatchExpr(query: string): string | null {
   return terms.map((t) => `"${t}"`).join(" AND ");
 }
 
-/**
- * Term-based search over one table's text columns: SQL narrows to rows hitting
- * any term, `matchQuery` ranks. The ranking helpers come from
- * @secondbrain/shared (see the re-export at the top of this file), so the
- * global search bar, the Worker and the assistant all agree on what matches.
- */
-async function searchRows<T>(
-  table: string,
-  columns: string[],
-  query: string,
-  fields: (row: T) => (string | null | undefined)[],
-): Promise<T[]> {
-  const terms = queryTerms(query.trim());
-  if (terms.length === 0) return [];
-  const { clause, params } = anyTermClause(terms, columns);
-  const rows = await (await db()).select<T[]>(`SELECT * FROM ${table} WHERE ${clause}`, params);
-  return matchQuery(rows, query, fields).rows;
-}
+// searchRows (the local term-search-over-a-table helper) is gone: todos,
+// reminders and events all search server-side now, each ranking with the same
+// shared matchQuery. Notes keep their own FTS path (still local until M4).
 
 /** Global-search helpers: one row per match, ranked, no filters. */
 export async function searchReminders(query: string): Promise<ReminderRow[]> {
@@ -550,14 +516,17 @@ export async function searchTodos(query: string): Promise<TodoRow[]> {
   }
 }
 
-/** Local events only — the remote half is windowed and lives in calendars.ts. */
-export function searchEventRows(query: string): Promise<EventRow[]> {
-  return searchRows<EventRow>(
-    "events",
-    ["summary", "description", "location", "categories"],
-    query,
-    (e) => [e.summary, e.description, e.location, e.categories],
-  );
+/** Built-in-calendar events only, ranked server-side. The remote (CalDAV) half
+ *  is windowed and lives in calendars.ts. Offline degrades to empty. */
+export async function searchEventRows(query: string): Promise<EventRow[]> {
+  const q = query.trim();
+  if (!q) return [];
+  try {
+    return await apiRequest<EventRow[]>(spacePath(`/events?q=${encodeURIComponent(q)}`));
+  } catch (e) {
+    if (e instanceof OfflineError) return [];
+    throw e;
+  }
 }
 
 /**

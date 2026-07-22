@@ -23,9 +23,9 @@ import { ageFromBirthday, nextBirthday } from "./format";
 // The daily summary is the one model output shown verbatim to the user, so it
 // needs the UI language by name.
 import { LANGUAGES, currentLanguage } from "./i18n";
-import type { EventRow, ItemRef, ItemType, UnifiedEvent } from "../types";
+import type { ItemRef, ItemType, UnifiedEvent } from "../types";
 import {
-  db, listLists, listTodos, getTodo, listReminders, getReminder, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
+  db, listLists, listEvents, listTodos, getTodo, listReminders, getReminder, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
   matchQuery,
   upsertTodo, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
   deleteTodo, deleteReminder, deleteNote, deleteList,
@@ -756,14 +756,16 @@ async function toolGetOverview() {
   // zero todos. Other domains are still local.
   // Todos and reminders are remote (M2/M3); count from the fetched lists rather
   // than a local SELECT on an empty table. Other domains are still local.
-  const [lists, tags, todos, reminders, people] = await Promise.all([
-    listLists(), listTags(), listTodos(), listReminders(), listPeople(),
+  const [lists, tags, todos, reminders, people, events] = await Promise.all([
+    listLists(), listTags(), listTodos(), listReminders(), listPeople(), listEvents(),
   ]);
   return {
     now: toLocalIso(new Date().toISOString()),
     now_readable: format(new Date(), "EEEE MMMM d, yyyy, h:mm a"),
     counts: {
-      events: await one("SELECT COUNT(*) n FROM events"),
+      // Built-in calendar only; connected CalDAV events aren't counted (they're
+      // a live windowed fetch, not a stored total).
+      events: events.length,
       todos: todos.length,
       todos_active: todos.filter((t) => t.completed === 0).length,
       reminders: reminders.length,
@@ -864,16 +866,12 @@ async function toolSearchEvents(args: Record<string, unknown>) {
   const start = parseDate(args.start) ?? startOfDay(new Date());
   const end = parseDate(args.end, true) ?? new Date(Date.now() + 30 * 864e5);
 
-  // Scale-conscious pre-filter for the local calendar: always load recurring
-  // events (they must be expanded), but only the non-recurring ones that
-  // overlap the window. Connected calendars are filtered server-side by the
-  // CalDAV time-range query, so they need no equivalent here.
-  const d = await db();
-  const rows = await d.select<EventRow[]>(
-    `SELECT * FROM events WHERE rrule IS NOT NULL
-       OR (dtstart <= ? AND COALESCE(dtend, dtstart) >= ?)`,
-    [end.toISOString(), start.toISOString()],
-  );
+  // The built-in calendar is remote now (M3c). Fetch all its events and expand
+  // client-side — recurrence expansion is client-side by design (rrule), so the
+  // window can't be pushed to the server without re-implementing it, and the
+  // single-user dataset is small. Connected calendars are still filtered
+  // server-side by the CalDAV time-range query.
+  const rows = await listEvents();
 
   const remote = await getRemoteOccurrences(start, end);
   let occs = [

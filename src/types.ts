@@ -42,23 +42,8 @@ export interface NavTarget {
 
 export type GoTo = (view: string, target?: NavTarget) => void;
 
-export interface EventRow {
-  id: string;
-  summary: string;
-  description: string | null;
-  location: string | null;
-  dtstart: string; // ISO 8601
-  dtend: string | null;
-  all_day: number; // 0 | 1
-  rrule: string | null; // RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO,WE,FR"
-  exdates: string | null; // JSON array of ISO dates
-  status: string; // CONFIRMED | TENTATIVE | CANCELLED
-  categories: string | null; // JSON array
-  color: string | null;
-  sequence: number;
-  created_at: string | null;
-  updated_at: string | null;
-}
+// EventRow is defined in @secondbrain/shared (like the other row types).
+export type { EventRow } from "@secondbrain/shared";
 
 // ReminderRow is defined in @secondbrain/shared (see TodoRow/ListRow above).
 export type { ReminderRow } from "@secondbrain/shared";
