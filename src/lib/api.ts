@@ -1,5 +1,5 @@
 import type { ApiErrorBody, ErrorCode } from "@secondbrain/shared";
-import { isTauri } from "../db";
+import { isTauri } from "./platform";
 import {
   clearAuth,
   getAccessToken,

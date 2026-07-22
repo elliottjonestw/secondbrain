@@ -1,7 +1,11 @@
-// Data access layer. All business logic lives here in TypeScript, calling
-// SQLite through tauri-plugin-sql. This is the ONLY module that touches the DB,
-// which keeps the app portable to a plain browser build later (swap this file's
-// backend without touching the UI).
+// Data access layer. The public facade the whole UI calls; its function
+// signatures are the app's contract.
+//
+// MID-MIGRATION (M2): todos and lists are served by the Cloudflare Worker (see
+// lib/api.ts); everything else still uses local SQLite through
+// tauri-plugin-sql. The switch is invisible to callers because the exported
+// signatures are unchanged — a view calling listTodos() cannot tell which
+// backend answered. Remaining domains follow in M3.
 
 import Database from "@tauri-apps/plugin-sql";
 import { v4 as uuid } from "uuid";
@@ -18,6 +22,25 @@ import type {
   PersonCustomField,
   ItemType,
 } from "./types";
+import type { TodoCreate, TodoUpdate } from "@secondbrain/shared";
+import { apiRequest, ApiError, OfflineError } from "./lib/api";
+import { getCurrentSpaceId } from "./lib/authStore";
+import { networkFirst } from "./lib/cache";
+
+// Ranking helpers now live in @secondbrain/shared so the Worker runs the same
+// code (one copy of the phrasing-bug fix CLAUDE.md documents). Re-exported here
+// because ai.ts and SearchView import them from db.
+export { queryTerms, escapeLike, anyTermClause, matchQuery } from "@secondbrain/shared";
+import { queryTerms, escapeLike, anyTermClause, matchQuery } from "@secondbrain/shared";
+
+/** Build a space-scoped API path, or throw if no session is active. The throw
+ *  is a programmer-error guard: the AuthGate guarantees a session before any
+ *  view that calls these mounts. */
+function spacePath(suffix: string): string {
+  const spaceId = getCurrentSpaceId();
+  if (!spaceId) throw new Error("No active space — not signed in.");
+  return `/v1/spaces/${spaceId}${suffix}`;
+}
 
 /** The slice of `tauri-plugin-sql`'s Database this module actually uses. Both
  *  the native backend and the browser dev backend satisfy it. */
@@ -33,10 +56,10 @@ let _db: SqlDb | null = null;
 // the seeder's own db() call could re-enter before `_db` is assigned).
 let _dbPromise: Promise<SqlDb> | null = null;
 
-/** True inside the Tauri webview; false under `npm run dev` in a browser. */
-export function isTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-}
+// isTauri lives in lib/platform.ts (so the API client can use it without a
+// cycle) and is re-exported here for the callers that import it from db.
+export { isTauri } from "./lib/platform";
+import { isTauri } from "./lib/platform";
 
 /**
  * Lazily open the DB. Migrations run automatically on first load.
@@ -260,72 +283,74 @@ export async function deleteReminder(id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Lists + Todos
+// Lists + Todos — served by the Cloudflare Worker (M2). Signatures unchanged.
+//
+// Reads go through networkFirst: fresh from the server when online, the last
+// snapshot when offline. Writes have no offline fallback by design — they throw
+// OfflineError, which the UI surfaces as "can't save, you're offline". Client-
+// generated ids (newId) make every create idempotent on retry.
 // ---------------------------------------------------------------------------
+
 export async function listLists(): Promise<ListRow[]> {
-  const rows = await (await db()).select<ListRow[]>("SELECT * FROM lists");
+  const rows = await networkFirst(`lists:${getCurrentSpaceId()}`, () =>
+    apiRequest<ListRow[]>(spacePath("/lists")),
+  );
+  // Sort client-side with Intl.Collator: D1 has no ICU, so the server's
+  // ORDER BY name is only a stable default, not locale-correct.
   return byName(rows, (l) => l.name);
 }
 
 export async function upsertList(input: Partial<ListRow> & { name: string }): Promise<string> {
-  const d = await db();
   const name = normalizeKey(input.name);
-  // Case-insensitive uniqueness is enforced at the DB (idx_lists_name_nocase);
-  // this pre-check gives a readable error instead of a raw constraint failure
-  // and lets callers distinguish "name taken" from other failures. The id<>?
-  // guard permits renaming a list to its own name (a no-op update).
-  const clash = await d.select<{ id: string }[]>(
-    `SELECT id FROM lists WHERE name=? COLLATE NOCASE${input.id ? " AND id<>?" : ""}`,
-    input.id ? [name, input.id] : [name],
-  );
-  if (clash[0]) throw new Error(`A list named "${name}" already exists.`);
   if (input.id) {
-    await d.execute("UPDATE lists SET name=?, color=? WHERE id=?", [
-      name, input.color ?? null, input.id,
-    ]);
+    await apiRequest<ListRow>(spacePath(`/lists/${input.id}`), {
+      method: "PATCH",
+      body: { name, color: input.color ?? null },
+    });
     return input.id;
   }
   const id = newId();
-  await d.execute("INSERT INTO lists (id, name, color) VALUES (?,?,?)", [
-    id, name, input.color ?? null,
-  ]);
+  await apiRequest<ListRow>(spacePath("/lists"), {
+    method: "POST",
+    body: { id, name, color: input.color ?? null },
+  });
   return id;
 }
 
 export async function deleteList(id: string): Promise<void> {
-  const d = await db();
-  // Keep at least one list; rehome this list's tasks into another one.
-  const others = await d.select<ListRow[]>("SELECT * FROM lists WHERE id != ? ORDER BY name", [id]);
-  if (others.length === 0) return;
-  await d.execute("UPDATE todos SET list_id=? WHERE list_id=?", [others[0].id, id]);
-  await d.execute("DELETE FROM lists WHERE id=?", [id]);
+  // The server rehomes this list's todos onto a survivor and refuses to delete
+  // the last one (409). The old local guard "silently do nothing if it's the
+  // last list" is gone on purpose — a refusal the UI can report beats a delete
+  // that looks like it worked and didn't.
+  await apiRequest<void>(spacePath(`/lists/${id}`), { method: "DELETE" });
 }
 
 /**
- * Seed the default Personal/Work lists if none exist. The app invariant is
- * "always at least one list" (deleteList refuses the last one, and todos need a
- * list_id), but clearAllData wipes `lists` and migration 002 only runs once —
- * so after a reset (or a restore of a backup with no lists) the invariant is
- * broken unless we re-seed here. OR IGNORE keeps it a no-op when rows exist or
- * the ids already came back from a restore.
+ * Formerly seeded Personal/Work into local SQLite. The Worker now creates both
+ * (with per-space UUID ids) when an account registers, so this is a no-op kept
+ * only so existing callers — the demo seeder — still compile. The "always at
+ * least one list" invariant now lives in registration and the server's
+ * last-list delete refusal.
  */
 export async function ensureDefaultLists(): Promise<void> {
-  const d = await db();
-  await d.execute(
-    "INSERT OR IGNORE INTO lists (id, name, color) VALUES (?,?,?), (?,?,?)",
-    ["personal", "Personal", "#3b82f6", "work", "Work", "#ef4444"],
-  );
+  /* no-op: lists are provisioned server-side at registration */
 }
 
 export async function listTodos(): Promise<TodoRow[]> {
-  return (await db()).select<TodoRow[]>(
-    "SELECT * FROM todos ORDER BY position IS NULL, position ASC, created_at ASC",
+  return networkFirst(`todos:${getCurrentSpaceId()}`, () =>
+    apiRequest<TodoRow[]>(spacePath("/todos")),
   );
 }
 
 export async function getTodo(id: string): Promise<TodoRow | undefined> {
-  const rows = await (await db()).select<TodoRow[]>("SELECT * FROM todos WHERE id = ?", [id]);
-  return rows[0];
+  try {
+    return await apiRequest<TodoRow>(spacePath(`/todos/${id}`));
+  } catch (e) {
+    // A missing todo is `undefined` here, matching the old SELECT-returns-empty
+    // contract; anything else (offline, auth) still throws.
+    if (e instanceof ApiError && e.status === 404) return undefined;
+    throw e;
+  }
 }
 
 export type TodoInput = Omit<
@@ -334,53 +359,57 @@ export type TodoInput = Omit<
 > & { id?: string };
 
 export async function upsertTodo(input: TodoInput): Promise<string> {
-  const d = await db();
-  const now = nowIso();
   if (input.id) {
-    await d.execute(
-      `UPDATE todos SET title=?, notes=?, list_id=?, due_at=?, priority=?,
-         completed=?, completed_at=?, parent_todo_id=?, position=?,
-         sequence=sequence+1, updated_at=? WHERE id=?`,
-      [
-        input.title, input.notes, input.list_id, input.due_at, input.priority,
-        input.completed, input.completed_at, input.parent_todo_id, input.position,
-        now, input.id,
-      ],
-    );
+    // A full-field PATCH: the caller (TodosView, ai.ts) has already merged, so
+    // every field is present and this replaces them. The partial-merge
+    // machinery still applies — absent keys would be left alone — it just
+    // happens that none are absent here.
+    const patch: TodoUpdate = {
+      title: input.title,
+      notes: input.notes,
+      list_id: input.list_id,
+      due_at: input.due_at,
+      priority: input.priority,
+      completed: input.completed as 0 | 1,
+      completed_at: input.completed_at,
+      parent_todo_id: input.parent_todo_id,
+      position: input.position,
+    };
+    await apiRequest<TodoRow>(spacePath(`/todos/${input.id}`), { method: "PATCH", body: patch });
     return input.id;
   }
   const id = newId();
-  await d.execute(
-    `INSERT INTO todos (id, title, notes, list_id, due_at, priority, completed,
-       completed_at, parent_todo_id, position, sequence, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?)`,
-    [
-      id, input.title, input.notes, input.list_id, input.due_at, input.priority,
-      input.completed, input.completed_at, input.parent_todo_id, input.position,
-      now, now,
-    ],
-  );
+  const body: TodoCreate = {
+    id,
+    title: input.title,
+    notes: input.notes,
+    list_id: input.list_id,
+    due_at: input.due_at,
+    priority: input.priority,
+    completed: input.completed as 0 | 1,
+    completed_at: input.completed_at,
+    parent_todo_id: input.parent_todo_id,
+    position: input.position,
+  };
+  await apiRequest<TodoRow>(spacePath("/todos"), { method: "POST", body });
   return id;
 }
 
 export async function toggleTodo(id: string, completed: boolean): Promise<void> {
-  await (await db()).execute(
-    "UPDATE todos SET completed=?, completed_at=?, sequence=sequence+1, updated_at=? WHERE id=?",
-    [completed ? 1 : 0, completed ? nowIso() : null, nowIso(), id],
-  );
+  await apiRequest<TodoRow>(spacePath(`/todos/${id}`), {
+    method: "PATCH",
+    body: { completed: completed ? 1 : 0, completed_at: completed ? nowIso() : null },
+  });
 }
 
 export async function reorderTodos(ids: string[]): Promise<void> {
-  const d = await db();
-  for (let i = 0; i < ids.length; i++) {
-    await d.execute("UPDATE todos SET position=? WHERE id=?", [i, ids[i]]);
-  }
+  await apiRequest<void>(spacePath("/todos/reorder"), { method: "POST", body: { ids } });
 }
 
 export async function deleteTodo(id: string): Promise<void> {
-  const d = await db();
-  await d.execute("DELETE FROM todos WHERE parent_todo_id=?", [id]); // subtasks
-  await d.execute("DELETE FROM todos WHERE id=?", [id]);
+  await apiRequest<void>(spacePath(`/todos/${id}`), { method: "DELETE" });
+  // Links and tags for this todo still live in local SQLite until M3, so they
+  // are cleaned up here; the server already removed the todo and its subtasks.
   await removeItemRelations("todo", id);
 }
 
@@ -476,70 +505,11 @@ function ftsMatchExpr(query: string): string | null {
   return terms.map((t) => `"${t}"`).join(" AND ");
 }
 
-/** Split a free-text query into search terms. Shared with ai.ts's search tools
- *  so every search in the app agrees on what a "term" is. */
-export function queryTerms(query: string): string[] {
-  return query.split(/\s+/).map((t) => t.replace(/"/g, "")).filter(Boolean);
-}
-
-/**
- * Escape the LIKE wildcard characters so a user's `%` or `_` is matched
- * literally. Pair with `ESCAPE '\'` on the LIKE clause. Backslash is the
- * escape char, so it must be escaped first. `\` itself is not special to
- * SQLite patterns otherwise.
- */
-export function escapeLike(s: string): string {
-  return s.replace(/[\\%_]/g, (c) => "\\" + c);
-}
-
-/**
- * SQL prefilter matching ANY term, so the JS ranking below has candidates to
- * work with without loading the whole table.
- */
-export function anyTermClause(
-  terms: string[],
-  columns: string[],
-): { clause: string; params: string[] } {
-  const one = `(${columns.map((c) => `${c} LIKE ? ESCAPE '\\'`).join(" OR ")})`;
-  return {
-    clause: `(${terms.map(() => one).join(" OR ")})`,
-    params: terms.flatMap((t) => columns.map(() => `%${escapeLike(t)}%`)),
-  };
-}
-
-/**
- * Rank rows against a query: every term must match, else the best partial
- * matches closest-first with `partial` set.
- *
- * Lives here rather than in a caller because every search in the app has to
- * agree: matching the query as one substring means `%lunch with Alex meeting%`
- * finds nothing when the event is "Lunch with Alex". `partial` matters to the
- * assistant, which must confirm a loose match before acting on it.
- */
-export function matchQuery<T>(
-  rows: T[],
-  query: string,
-  fields: (row: T) => (string | null | undefined)[],
-): { rows: T[]; partial: boolean } {
-  const terms = queryTerms(query.trim().toLowerCase());
-  if (terms.length === 0) return { rows, partial: false };
-
-  const scored = rows.map((row) => {
-    const hay = fields(row).filter(Boolean).join(" ").toLowerCase();
-    return { row, hits: terms.filter((t) => hay.includes(t)).length };
-  });
-
-  const strict = scored.filter((s) => s.hits === terms.length);
-  if (strict.length > 0) return { rows: strict.map((s) => s.row), partial: false };
-
-  const loose = scored.filter((s) => s.hits > 0).sort((a, b) => b.hits - a.hits);
-  return { rows: loose.map((s) => s.row), partial: loose.length > 0 };
-}
-
 /**
  * Term-based search over one table's text columns: SQL narrows to rows hitting
- * any term, `matchQuery` ranks. Shared by the global search bar so it agrees
- * with the assistant's tools about what matches.
+ * any term, `matchQuery` ranks. The ranking helpers come from
+ * @secondbrain/shared (see the re-export at the top of this file), so the
+ * global search bar, the Worker and the assistant all agree on what matches.
  */
 async function searchRows<T>(
   table: string,
@@ -559,8 +529,19 @@ export function searchReminders(query: string): Promise<ReminderRow[]> {
   return searchRows<ReminderRow>("reminders", ["title", "notes"], query, (r) => [r.title, r.notes]);
 }
 
-export function searchTodos(query: string): Promise<TodoRow[]> {
-  return searchRows<TodoRow>("todos", ["title", "notes"], query, (r) => [r.title, r.notes]);
+/** Remote search (M2). The server ranks with the same shared helpers, so the
+ *  result order matches the other search paths. Offline it degrades to empty
+ *  rather than throwing — the global search bar just omits todos until the
+ *  network returns, which reads better than a whole-search error. */
+export async function searchTodos(query: string): Promise<TodoRow[]> {
+  const q = query.trim();
+  if (!q) return [];
+  try {
+    return await apiRequest<TodoRow[]>(spacePath(`/todos?q=${encodeURIComponent(q)}`));
+  } catch (e) {
+    if (e instanceof OfflineError) return [];
+    throw e;
+  }
 }
 
 /** Local events only — the remote half is windowed and lives in calendars.ts. */

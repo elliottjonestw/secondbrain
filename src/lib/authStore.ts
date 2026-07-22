@@ -62,6 +62,18 @@ export function setCachedSession(session: Session): void {
   localStorage.setItem(SESSION_KEY, JSON.stringify(session));
 }
 
+/**
+ * The space whose data the app is currently showing.
+ *
+ * Today this is simply the user's first (personal) space — there is one per
+ * account until sharing lands. It is a single function so that when a space
+ * switcher arrives, every data call picks up the change from one place rather
+ * than threading a space id through the whole app.
+ */
+export function getCurrentSpaceId(): string | null {
+  return getCachedSession()?.spaces[0]?.space_id ?? null;
+}
+
 /** Wipe every trace of the session on this device. */
 export function clearAuth(): void {
   accessToken = null;

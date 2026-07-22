@@ -25,7 +25,7 @@ import { ageFromBirthday, nextBirthday } from "./format";
 import { LANGUAGES, currentLanguage } from "./i18n";
 import type { EventRow, ItemRef, ItemType, UnifiedEvent } from "../types";
 import {
-  db, listLists, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
+  db, listLists, listTodos, getTodo, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
   matchQuery, anyTermClause,
   upsertTodo, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
   deleteTodo, deleteReminder, deleteNote, deleteList,
@@ -135,6 +135,9 @@ const WRITE_TABLES = { event: "events", reminder: "reminders", todo: "todos", no
 
 async function getRowById(table: string, id: unknown): Promise<any | null> {
   if (typeof id !== "string" || !id) return null;
+  // Todos are remote (M2): a local SELECT would hit an empty table and make
+  // update_todo / delete_todo report "no such todo" for todos that exist.
+  if (table === "todos") return (await getTodo(id)) ?? null;
   const d = await db();
   const rows = await d.select<any[]>(`SELECT * FROM ${table} WHERE id = ?`, [id]);
   return rows[0] ?? null;
@@ -746,14 +749,17 @@ const TOOLS = [
 async function toolGetOverview() {
   const d = await db();
   const one = async (sql: string) => (await d.select<{ n: number }[]>(sql))[0]?.n ?? 0;
-  const [lists, tags] = await Promise.all([listLists(), listTags()]);
+  // Todos are remote (M2); count them from the fetched list rather than a local
+  // SELECT, which would now count an empty table and make the assistant report
+  // zero todos. Other domains are still local.
+  const [lists, tags, todos] = await Promise.all([listLists(), listTags(), listTodos()]);
   return {
     now: toLocalIso(new Date().toISOString()),
     now_readable: format(new Date(), "EEEE MMMM d, yyyy, h:mm a"),
     counts: {
       events: await one("SELECT COUNT(*) n FROM events"),
-      todos: await one("SELECT COUNT(*) n FROM todos"),
-      todos_active: await one("SELECT COUNT(*) n FROM todos WHERE completed = 0"),
+      todos: todos.length,
+      todos_active: todos.filter((t) => t.completed === 0).length,
       reminders: await one("SELECT COUNT(*) n FROM reminders"),
       reminders_active: await one("SELECT COUNT(*) n FROM reminders WHERE completed = 0"),
       notes: await one("SELECT COUNT(*) n FROM notes"),
@@ -765,48 +771,57 @@ async function toolGetOverview() {
 }
 
 async function toolSearchTodos(args: Record<string, unknown>) {
-  const d = await db();
-  const where: string[] = [];
-  const params: unknown[] = [];
+  // Todos are remote (M2). Rather than push these filters into the API — which
+  // would mean designing the full query surface before it is needed — the small
+  // single-user todo set is fetched once and filtered here. The ranking still
+  // runs through the shared matchQuery, so results agree with every other
+  // search path. Tags are still local (until M3), so idsForTag stays a local
+  // lookup.
+  const [allTodos, lists] = await Promise.all([listTodos(), listLists()]);
+  const listName = (id: string | null) => (id ? lists.find((l) => l.id === id)?.name ?? null : null);
+  let rows: any[] = allTodos.map((t) => ({ ...t, list_name: listName(t.list_id) }));
 
   const status = (args.status as string) ?? "active";
-  if (status === "active") where.push("t.completed = 0");
-  else if (status === "completed") where.push("t.completed = 1");
+  if (status === "active") rows = rows.filter((r) => r.completed === 0);
+  else if (status === "completed") rows = rows.filter((r) => r.completed === 1);
 
-  // Prefilter on ANY term so SQL still does the narrowing; matchQuery below
-  // decides between a strict all-term match and a ranked partial one.
   const queryTermList = typeof args.query === "string" ? queryTerms(args.query.trim()) : [];
   if (queryTermList.length > 0) {
-    const { clause, params: p } = anyTermClause(queryTermList, ["t.title", "t.notes"]);
-    where.push(clause);
-    params.push(...p);
+    // Prefilter to rows hitting ANY term; matchQuery below decides strict vs
+    // ranked-partial, exactly as the SQL prefilter used to.
+    const lowered = queryTermList.map((t) => t.toLowerCase());
+    rows = rows.filter((r) => {
+      const hay = `${r.title ?? ""} ${r.notes ?? ""}`.toLowerCase();
+      return lowered.some((t) => hay.includes(t));
+    });
   }
   if (typeof args.list === "string" && args.list.trim()) {
-    where.push("l.name = ?");
-    params.push(args.list.trim());
+    rows = rows.filter((r) => r.list_name === args.list);
   }
   if (typeof args.min_priority === "number") {
-    where.push("t.priority >= ?");
-    params.push(args.min_priority);
+    rows = rows.filter((r) => r.priority >= (args.min_priority as number));
   }
   const dueBefore = parseDate(args.due_before, true);
-  if (dueBefore) { where.push("t.due_at IS NOT NULL AND t.due_at <= ?"); params.push(dueBefore.toISOString()); }
+  if (dueBefore) rows = rows.filter((r) => r.due_at && r.due_at <= dueBefore.toISOString());
   const dueAfter = parseDate(args.due_after);
-  if (dueAfter) { where.push("t.due_at IS NOT NULL AND t.due_at >= ?"); params.push(dueAfter.toISOString()); }
+  if (dueAfter) rows = rows.filter((r) => r.due_at && r.due_at >= dueAfter.toISOString());
 
-  let tagIds: Set<string> | null = null;
-  if (typeof args.tag === "string" && args.tag.trim()) tagIds = await idsForTag("todo", args.tag.trim());
+  if (typeof args.tag === "string" && args.tag.trim()) {
+    const tagIds = await idsForTag("todo", args.tag.trim());
+    rows = rows.filter((r) => tagIds.has(r.id));
+  }
 
-  const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  const rows = await d.select<any[]>(
-    `SELECT t.*, l.name AS list_name FROM todos t LEFT JOIN lists l ON l.id = t.list_id
-     ${clause} ORDER BY t.completed ASC, t.due_at IS NULL, t.due_at ASC`,
-    params,
+  // Order: incomplete first, then by due date with nulls last — the same order
+  // the SQL used to produce.
+  rows.sort((a, b) =>
+    a.completed - b.completed ||
+    (a.due_at ? 0 : 1) - (b.due_at ? 0 : 1) ||
+    String(a.due_at).localeCompare(String(b.due_at)),
   );
-  const tagged = tagIds ? rows.filter((r) => tagIds!.has(r.id)) : rows;
+
   const m = queryTermList.length > 0
-    ? matchQuery(tagged, args.query as string, (t) => [t.title, t.notes])
-    : { rows: tagged, partial: false };
+    ? matchQuery(rows, args.query as string, (t) => [t.title, t.notes])
+    : { rows, partial: false };
   const filtered = m.rows;
   const limit = clampLimit(args.limit);
   return {

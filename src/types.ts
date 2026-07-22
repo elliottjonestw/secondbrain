@@ -76,27 +76,10 @@ export interface ReminderRow {
   updated_at: string | null;
 }
 
-export interface ListRow {
-  id: string;
-  name: string;
-  color: string | null;
-}
-
-export interface TodoRow {
-  id: string;
-  title: string;
-  notes: string | null;
-  list_id: string | null;
-  due_at: string | null;
-  priority: number;
-  completed: number;
-  completed_at: string | null;
-  parent_todo_id: string | null;
-  position: number | null;
-  sequence: number;
-  created_at: string | null;
-  updated_at: string | null;
-}
+// TodoRow and ListRow are defined in @secondbrain/shared so the Worker returns
+// exactly the shape the client consumes. Re-exported here because the whole app
+// imports its domain types from "./types".
+export type { TodoRow, ListRow } from "@secondbrain/shared";
 
 export interface NoteRow {
   id: string;

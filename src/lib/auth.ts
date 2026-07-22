@@ -5,6 +5,7 @@ import {
   type TokenPair,
 } from "@secondbrain/shared";
 import { apiRequest, ApiError } from "./api";
+import { clearCache } from "./cache";
 import { DEFAULT_KDF_PARAMS, deriveKey, newKdfSalt } from "./kdf";
 import {
   clearAuth,
@@ -102,6 +103,10 @@ export async function logout(): Promise<void> {
     }
   }
   clearAuth();
+  // The response cache persists in IndexedDB across the reload sign-out
+  // triggers, so it must be wiped explicitly — otherwise one account's cached
+  // todos could render for the next person to sign in on this device.
+  await clearCache().catch(() => {});
 }
 
 /**

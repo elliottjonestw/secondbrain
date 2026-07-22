@@ -1,4 +1,4 @@
-import type { ListCreate, ListRow, ListUpdate } from "@secondbrain/shared";
+import { normalizeKey, type ListCreate, type ListRow, type ListUpdate } from "@secondbrain/shared";
 import { conflict, notFound } from "../http";
 
 /**
@@ -22,21 +22,24 @@ export async function createList(
   spaceId: string,
   input: ListCreate,
 ): Promise<ListRow> {
-  // Pre-check for a readable 409 instead of a raw UNIQUE failure. The index
-  // (space_id, name COLLATE NOCASE) is the real guard against the check-then-
-  // insert race two devices can now hit; this only improves the message.
-  await assertNameFree(db, spaceId, input.name, null);
+  // NFC-normalize server-side: macOS IMEs emit NFD, D1 compares byte-wise, and
+  // a client-side-only normalization is unenforceable once several devices
+  // write. This is the authoritative normalization; the index is
+  // (space_id, name COLLATE NOCASE).
+  const name = normalizeKey(input.name);
+  // Pre-check for a readable 409 instead of a raw UNIQUE failure.
+  await assertNameFree(db, spaceId, name, null);
   try {
     await db
       .prepare("INSERT INTO lists (id, space_id, name, color) VALUES (?,?,?,?)")
-      .bind(input.id, spaceId, input.name, input.color ?? null)
+      .bind(input.id, spaceId, name, input.color ?? null)
       .run();
   } catch (e) {
     // A concurrent insert that beat the pre-check still lands here.
-    if (isUniqueViolation(e)) throw conflict(`A list named "${input.name}" already exists.`);
+    if (isUniqueViolation(e)) throw conflict(`A list named "${name}" already exists.`);
     throw e;
   }
-  return { id: input.id, name: input.name, color: input.color ?? null };
+  return { id: input.id, name, color: input.color ?? null };
 }
 
 export async function updateList(
@@ -48,13 +51,14 @@ export async function updateList(
   const existing = await getList(db, spaceId, id);
   if (!existing) throw notFound("No such list.");
 
-  if ("name" in patch && patch.name !== undefined && patch.name !== existing.name) {
-    await assertNameFree(db, spaceId, patch.name, id);
+  const name = patch.name !== undefined ? normalizeKey(patch.name) : undefined;
+  if (name !== undefined && name !== existing.name) {
+    await assertNameFree(db, spaceId, name, id);
   }
 
   const next: ListRow = {
     id,
-    name: patch.name ?? existing.name,
+    name: name ?? existing.name,
     color: "color" in patch ? patch.color ?? null : existing.color,
   };
 

@@ -5,20 +5,28 @@
 
 import {
   db, nowIso,
-  DATA_TABLES, ensureDefaultLists,
-  upsertList, upsertEvent, upsertTodo, upsertReminder, upsertNote, upsertPerson,
+  DATA_TABLES,
+  upsertEvent, upsertReminder, upsertNote, upsertPerson,
   ensureCustomField, tagItem, createLink,
 } from "../db";
 
-/** Remove every row from every user table, then re-seed the default lists so
- *  the "always ≥1 list" invariant survives a reset. DATA_TABLES is the single
- *  source of truth for "every user table". */
+// M2 note: todos and lists are remote now, so the demo seeder no longer creates
+// them. This seeder auto-runs on every browser dev load (browserDb reseeds each
+// time); seeding todos/lists here would hammer the Worker and pile up duplicates
+// on every reload, since each seed mints fresh ids. The demo therefore covers
+// only the still-local domains — events, reminders, notes, people — and a freshly
+// registered account already has its Personal/Work lists from the server. The
+// few demo cross-links that pointed at todos are dropped until the demo is
+// reworked for the cloud model.
+
+/** Remove every row from every LOCAL user table. DATA_TABLES still lists todos
+ *  and lists, whose local tables are simply empty and unused now — the DELETE is
+ *  a harmless no-op there, and the remote copies are untouched. */
 export async function clearAllData(): Promise<void> {
   const d = await db();
   for (const table of DATA_TABLES) {
     await d.execute(`DELETE FROM ${table}`);
   }
-  await ensureDefaultLists();
 }
 
 /** Build a vCard-style birthday (yyyy-mm-dd) from a day offset + year. */
@@ -41,14 +49,6 @@ function iso(dayOffset: number, hour: number, minute = 0): string {
 
 export async function resetAndSeedDemo(): Promise<void> {
   await clearAllData();
-
-  // ---- Lists ----
-  // clearAllData() above already seeded 'personal'/'work' via ensureDefaultLists;
-  // pass those stable ids so this updates them in place instead of inserting
-  // duplicate-named rows (lists.name is now unique, see migration 007).
-  const personal = await upsertList({ id: "personal", name: "Personal", color: "#3b82f6" });
-  const work = await upsertList({ id: "work", name: "Work", color: "#ef4444" });
-  const projects = await upsertList({ name: "Projects", color: "#8b5cf6" });
 
   // ---- Events (incl. recurring) ----
   const standup = await upsertEvent({
@@ -88,34 +88,6 @@ export async function resetAndSeedDemo(): Promise<void> {
     categories: JSON.stringify(["Personal"]), color: "#ec4899",
   });
 
-  // ---- Todos (with subtasks + completed items) ----
-  const report = await upsertTodo({
-    title: "Finish Q3 report", notes: "Include revenue breakdown by region.",
-    list_id: work, due_at: iso(1, 17, 0), priority: 3, completed: 0,
-    completed_at: null, parent_todo_id: null, position: 0,
-  });
-  await upsertTodo({ title: "Pull the numbers", notes: null, list_id: work, due_at: null, priority: 0, completed: 1, completed_at: nowIso(), parent_todo_id: report, position: 0 });
-  await upsertTodo({ title: "Draft summary", notes: null, list_id: work, due_at: null, priority: 0, completed: 0, completed_at: null, parent_todo_id: report, position: 1 });
-  await upsertTodo({ title: "Get sign-off", notes: null, list_id: work, due_at: null, priority: 0, completed: 0, completed_at: null, parent_todo_id: report, position: 2 });
-
-  await upsertTodo({ title: "Review teammate's PR", notes: null, list_id: work, due_at: iso(0, 16, 0), priority: 2, completed: 0, completed_at: null, parent_todo_id: null, position: 1 });
-  await upsertTodo({ title: "Reply to client email", notes: null, list_id: work, due_at: null, priority: 1, completed: 1, completed_at: nowIso(), parent_todo_id: null, position: 2 });
-
-  const groceries = await upsertTodo({
-    title: "Buy groceries", notes: "Weekend meal prep.", list_id: personal,
-    due_at: iso(2, 11, 0), priority: 1, completed: 0, completed_at: null,
-    parent_todo_id: null, position: 0,
-  });
-  await upsertTodo({ title: "Vegetables", notes: null, list_id: personal, due_at: null, priority: 0, completed: 0, completed_at: null, parent_todo_id: groceries, position: 0 });
-  await upsertTodo({ title: "Chicken", notes: null, list_id: personal, due_at: null, priority: 0, completed: 0, completed_at: null, parent_todo_id: groceries, position: 1 });
-  await upsertTodo({ title: "Coffee", notes: null, list_id: personal, due_at: null, priority: 0, completed: 1, completed_at: nowIso(), parent_todo_id: groceries, position: 2 });
-
-  const callMom = await upsertTodo({ title: "Call mom", notes: null, list_id: personal, due_at: null, priority: 2, completed: 0, completed_at: null, parent_todo_id: null, position: 1 });
-  await upsertTodo({ title: "Renew passport", notes: "Expires next month.", list_id: personal, due_at: iso(14, 12, 0), priority: 2, completed: 0, completed_at: null, parent_todo_id: null, position: 2 });
-
-  await upsertTodo({ title: "Ship v1.0 of side project", notes: null, list_id: projects, due_at: iso(7, 18, 0), priority: 3, completed: 0, completed_at: null, parent_todo_id: null, position: 0 });
-  await upsertTodo({ title: "Write launch blog post", notes: null, list_id: projects, due_at: null, priority: 1, completed: 0, completed_at: null, parent_todo_id: null, position: 1 });
-
   // ---- Reminders ----
   const meds = await upsertReminder({
     title: "Take vitamins", notes: null, due_at: null, remind_at: iso(0, 8, 0),
@@ -133,7 +105,7 @@ export async function resetAndSeedDemo(): Promise<void> {
   await upsertReminder({
     title: "Submit expense report", notes: null, due_at: iso(-1, 17, 0),
     remind_at: iso(-1, 17, 0), rrule: null, priority: 2, completed: 0,
-    completed_at: null, linked_todo_id: report,
+    completed_at: null, linked_todo_id: null,
   });
   await upsertReminder({
     title: "Book flights", notes: "Done!", due_at: iso(-3, 12, 0), remind_at: null,
@@ -189,7 +161,7 @@ export async function resetAndSeedDemo(): Promise<void> {
     phones: JSON.stringify([{ type: "cell", value: "+1 555 010 3131" }]),
     notes: null, custom_fields: null, favorite: 0,
   });
-  const mom = await upsertPerson({
+  await upsertPerson({
     ...emptyName, full_name: "Linda (Mom)", given_name: "Linda", family_name: null,
     nickname: "Mom", organization: null, title: null,
     birthday: bday(40, 1961),
@@ -199,21 +171,16 @@ export async function resetAndSeedDemo(): Promise<void> {
   });
 
   // ---- Tags (shared across types) ----
-  await tagItem("urgent", "todo", report);
-  await tagItem("work", "todo", report);
+  // Todo tags are omitted in M2 — todos are remote and not seeded here.
   await tagItem("work", "event", standup);
   await tagItem("work", "event", oneOnOne);
   await tagItem("health", "reminder", meds);
-  await tagItem("personal", "todo", groceries);
   await tagItem("ideas", "note", ideas);
-
   await tagItem("work", "person", alex);
 
   // ---- Links (any item <-> any item, including people) ----
+  // Links to todos are omitted in M2 for the same reason.
   await createLink("note", standupNotes, "event", standup);   // meeting notes on the standup
-  await createLink("note", ideas, "todo", report);            // idea note references the report task
-  await createLink("event", oneOnOne, "todo", report);        // discuss the report in the 1:1
   await createLink("person", alex, "event", lunch);           // Alex is at lunch
   await createLink("person", sarah, "event", sarahBday);      // Sarah's birthday
-  await createLink("person", mom, "todo", callMom);           // call mom
 }

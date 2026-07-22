@@ -61,14 +61,20 @@ open "src-tauri/target/release/bundle/macos/Second Brain.app"
 > [`docs/cloud-migration-plan.md`](docs/cloud-migration-plan.md) for the design
 > and [`worker/README.md`](worker/README.md) for the backend.
 >
-> **Milestones 0 and 1 of 5 are done.** M0 built the infrastructure and the
-> multi-tenant schema; M1 added accounts — the app now opens on a sign-in /
-> register screen, and no view mounts without a session.
+> **Milestones 0–2 of 5 are done.** M0 built the infrastructure and the
+> multi-tenant schema; M1 added accounts; **M2 moved the first domain —
+> to-dos and lists — to the cloud** as the vertical slice that sets the pattern
+> for the rest.
 >
-> **App data has not moved yet.** Accounts, spaces and sessions live in
-> Cloudflare D1, but your calendar, reminders, to-dos, notes and people are
-> still read from the local SQLite file described below. That switchover is M2
-> and M3, so the sections below stay accurate until then.
+> **To-dos and lists now live in Cloudflare D1**, reached through a typed
+> Worker API. They sync across devices, and reads fall back to a local
+> IndexedDB cache when you're offline (writes are disabled offline and say so).
+> **Calendar, reminders, notes and people are still local SQLite** until M3, so
+> those sections below stay accurate. This hybrid is deliberate and temporary.
+>
+> One interim consequence: the demo-data easter egg no longer seeds to-dos or
+> lists (they're remote now), only the still-local domains. A fresh account
+> starts with the server-created Personal and Work lists.
 >
 > **Passwords are never sent to the server.** The client derives an argon2id key
 > from your password and sends only that; the server stores a keyed hash of it.
@@ -277,17 +283,24 @@ packages/shared/        # types + zod schemas + normalization, imported by BOTH
                         #   the client and the Worker, as TypeScript source, so
                         #   the two cannot drift
 src/
-  db.ts                 # data-access layer (only module that touches SQLite)
+  db.ts                 # data-access facade. Todos+lists call the Worker;
+                        #   other domains still use local SQLite (mid-migration)
   lib/
     api.ts              # the only path to the Worker: auth headers, token
                         #   refresh (deduplicated), offline detection
     auth.ts             # register / login / logout / restore, in UI terms
-    authStore.ts        # where the session lives on this device (swap this
+    authStore.ts        # session + current space on this device (swap this
                         #   one file for an OS keychain on mobile)
     kdf.ts              # client-side argon2id — the password never leaves here
+    cache.ts            # IndexedDB snapshot of remote reads, for offline
+    platform.ts         # isTauri(), split out to avoid an import cycle
   components/auth/
     AuthGate.tsx        # decides whether <App> mounts at all
   views/AuthView.tsx    # sign in / create account
+worker/src/
+  authorize.ts          # the single tenancy choke point (membership + role)
+  db/                    # all SQL, every query scoped by space_id
+  routes/spaces.ts       # /v1/spaces/:spaceId/(lists|todos)
   types.ts              # domain types mirroring the schema
   locales/
     en/app.json         # translation catalogs (English is the source of truth)

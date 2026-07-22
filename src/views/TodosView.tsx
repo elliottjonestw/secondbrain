@@ -9,6 +9,7 @@ import {
 import { Button, Modal, PriorityFlag, priorityKey, CATEGORY_COLORS } from "../components/ui";
 import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/ItemMeta";
 import { fmtDateTime, isOverdue, toLocalInput, fromLocalInput } from "../lib/format";
+import { OfflineError, ApiError } from "../lib/api";
 
 export default function TodosView({ onChange, initialId }: { onChange: () => void; initialId?: string }) {
   const { t: tr } = useTranslation();
@@ -19,13 +20,42 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
   const [newTitle, setNewTitle] = useState("");
   const [addingList, setAddingList] = useState(false);
   const [newListName, setNewListName] = useState("");
+  // A single banner for any write that couldn't reach the server. Todos and
+  // lists are remote now (M2), so a mutation can fail where a local SQLite
+  // write never could — offline above all. Reads fall back to the cache
+  // silently; writes must say so, because a save that looked like it worked and
+  // didn't is the failure that destroys trust.
+  const [mutError, setMutError] = useState<string | null>(null);
+
+  /** Turn a caught error into a user-facing sentence. */
+  const explain = (e: unknown): string =>
+    e instanceof OfflineError ? tr("todos.offlineSave")
+      : e instanceof ApiError ? e.message
+      : tr("todos.saveFailed");
+
+  /** Run a write, then reload; on failure show the banner instead of throwing. */
+  const mutate = async (fn: () => Promise<void>) => {
+    setMutError(null);
+    try {
+      await fn();
+      bump();
+    } catch (e) {
+      setMutError(explain(e));
+    }
+  };
 
   const reload = async () => {
-    setTodos(await listTodos());
-    const ls = await listLists();
-    setLists(ls);
-    // Keep a valid active list selected (first one by default).
-    setActiveList((cur) => (ls.some((l) => l.id === cur) ? cur : ls[0]?.id ?? ""));
+    try {
+      setTodos(await listTodos());
+      const ls = await listLists();
+      setLists(ls);
+      // Keep a valid active list selected (first one by default).
+      setActiveList((cur) => (ls.some((l) => l.id === cur) ? cur : ls[0]?.id ?? ""));
+    } catch (e) {
+      // Offline with no snapshot yet, or the server is down. Surface it rather
+      // than leaving an empty list that looks like "you have no todos".
+      setMutError(explain(e));
+    }
   };
   useEffect(() => { void reload(); }, []);
 
@@ -62,13 +92,19 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
   async function addTodo() {
     const title = newTitle.trim();
     if (!title) return;
-    await upsertTodo({
-      title, notes: null, list_id: activeList, due_at: null, priority: 0,
-      completed: 0, completed_at: null, parent_todo_id: null,
-      position: topLevel.length,
-    });
-    setNewTitle("");
-    bump();
+    setMutError(null);
+    try {
+      await upsertTodo({
+        title, notes: null, list_id: activeList, due_at: null, priority: 0,
+        completed: 0, completed_at: null, parent_todo_id: null,
+        position: topLevel.length,
+      });
+      setNewTitle("");
+      bump();
+    } catch (e) {
+      // Keep the typed title so an offline user doesn't lose it.
+      setMutError(explain(e));
+    }
   }
 
   async function addList() {
@@ -84,10 +120,12 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
     try {
       id = await upsertList({ name, color });
     } catch (err) {
-      // Name already taken (lists.name is unique). Keep the input open so the
-      // user can rename rather than silently losing what they typed.
-      alert(err instanceof Error && /already exists/.test(err.message)
+      // A duplicate name (409) keeps the input open so the user can rename
+      // rather than lose what they typed. Offline / other failures fall through
+      // to the same alert with the server's message.
+      alert(err instanceof ApiError && err.code === "conflict"
         ? tr("todos.listAlreadyExists", { name })
+        : err instanceof OfflineError ? tr("todos.offlineSave")
         : err instanceof Error ? err.message : String(err));
       // Release the guard only AFTER the alert has been dismissed, and one task
       // later: alert() steals focus from the input, and that blur — whether it
@@ -117,8 +155,7 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
     const to = index + delta;
     if (to < 0 || to >= ids.length) return;
     ids.splice(to, 0, ids.splice(index, 1)[0]);
-    await reorderTodos(ids);
-    bump();
+    await mutate(() => reorderTodos(ids));
   }
 
   return (
@@ -145,7 +182,7 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
             </span>
             {lists.length > 1 && (
               <button
-                onClick={async (e) => { e.stopPropagation(); if (confirm(tr("todos.confirmDeleteList", { name: l.name }))) { await deleteList(l.id); bump(); } }}
+                onClick={(e) => { e.stopPropagation(); if (confirm(tr("todos.confirmDeleteList", { name: l.name }))) void mutate(() => deleteList(l.id)); }}
                 className="hidden text-neutral-400 hover:text-red-500 group-hover:block"
                 title={tr("todos.deleteList")}
               ><X size={14} /></button>
@@ -168,6 +205,14 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
       {/* Tasks */}
       <div className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-2xl">
+          {mutError && (
+            <div role="alert" className="mb-3 flex items-center justify-between gap-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+              <span>{mutError}</span>
+              <button onClick={() => setMutError(null)} className="shrink-0 text-amber-600 hover:text-amber-800 dark:hover:text-amber-200" title={tr("common.close")}>
+                <X size={14} />
+              </button>
+            </div>
+          )}
           <div className="mb-4 flex gap-2">
             <input
               value={newTitle}
@@ -184,9 +229,9 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
               <div key={t.id}>
                 <TodoItem
                   todo={t}
-                  onToggle={async (c) => { await toggleTodo(t.id, c); bump(); }}
+                  onToggle={(c) => mutate(() => toggleTodo(t.id, c))}
                   onOpen={() => setEditing(t)}
-                  onDelete={async () => { if (confirm(tr("todos.confirmDeleteTask", { title: t.title }))) { await deleteTodo(t.id); bump(); } }}
+                  onDelete={() => { if (confirm(tr("todos.confirmDeleteTask", { title: t.title }))) void mutate(() => deleteTodo(t.id)); }}
                   onMoveUp={i === 0 ? undefined : () => void moveTodo(i, -1)}
                   onMoveDown={i === topLevel.length - 1 ? undefined : () => void moveTodo(i, 1)}
                 />
@@ -197,9 +242,9 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
                       key={s.id}
                       todo={s}
                       small
-                      onToggle={async (c) => { await toggleTodo(s.id, c); bump(); }}
+                      onToggle={(c) => mutate(() => toggleTodo(s.id, c))}
                       onOpen={() => setEditing(s)}
-                      onDelete={async () => { if (confirm(tr("todos.confirmDeleteSubtask", { title: s.title }))) { await deleteTodo(s.id); bump(); } }}
+                      onDelete={() => { if (confirm(tr("todos.confirmDeleteSubtask", { title: s.title }))) void mutate(() => deleteTodo(s.id)); }}
                     />
                   ))}
                 </div>

@@ -302,7 +302,9 @@
     "priority": "優先順序",
     "dueDate": "到期日（顯示於行事曆）",
     "subtasks": "子任務",
-    "addSubtask": "新增子任務…"
+    "addSubtask": "新增子任務…",
+    "offlineSave": "你目前離線 — 重新連線後才能儲存變更。",
+    "saveFailed": "無法儲存，請再試一次。"
   },
   "recurrence": {
     "none": "不重複",

@@ -304,7 +304,9 @@
     "priority": "Priority",
     "dueDate": "Due date (shows on calendar)",
     "subtasks": "Subtasks",
-    "addSubtask": "Add subtask…"
+    "addSubtask": "Add subtask…",
+    "offlineSave": "You're offline — changes can't be saved until you reconnect.",
+    "saveFailed": "Couldn't save that. Please try again."
   },
   "recurrence": {
     "none": "Does not repeat",
