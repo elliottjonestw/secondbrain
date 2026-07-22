@@ -30,9 +30,15 @@ export interface Bindings {
   AUTH_PEPPER?: string;
 }
 
-/** Request-scoped values set by middleware. Populated from M1 onward. */
+/** Request-scoped values set by middleware. */
 export interface Variables {
   requestId: string;
+  /**
+   * Set by `requireAuth`. Typed as always-present rather than optional so that
+   * reading it in a route that forgot the middleware is a type error instead of
+   * a runtime `undefined` that silently reads as "no user".
+   */
+  userId: string;
 }
 
 export type AppEnv = { Bindings: Bindings; Variables: Variables };
