@@ -1,6 +1,12 @@
-// App settings, persisted in localStorage. Kept out of the SQLite data file on
-// purpose: the demo-reset wipes the database but must NOT erase the user's API
-// key, and settings aren't part of the syncable calendar data model.
+// App settings, persisted in localStorage, scoped per signed-in account (see
+// the note on KEY). Kept out of the database on purpose: "clear all data" must
+// not erase the user's API key, and settings aren't part of the syncable
+// calendar data model — which also means they don't follow you to a new device.
+//
+// The authStore import is safe in both directions: authStore depends only on
+// @secondbrain/shared, so this cannot close a cycle.
+
+import { getCachedSession } from "./authStore";
 
 /** Where the assistant's *text* model runs. Voice/STT is always OpenAI. */
 export type AssistantProvider = "openai" | "ollama";
@@ -153,7 +159,58 @@ export interface WeatherLocation {
   longitude: number;
 }
 
+/**
+ * Settings are stored PER ACCOUNT, not per device.
+ *
+ * They used to be one shared bucket, which was harmless when the app had a
+ * single user and no accounts. It stopped being harmless the moment anyone
+ * could sign out and someone else could register on the same machine: the
+ * second person inherited the first person's OpenAI API key and their iCloud
+ * app-specific password, because a new account never cleared localStorage.
+ *
+ * Namespacing by user id fixes that, and also means a shared device keeps each
+ * person's weather location, watchlist and Today layout separate.
+ *
+ * Signed out, reads and writes go to an `anon` bucket. That is why the login
+ * screen shows the default language rather than the last user's: a preference
+ * is not worth leaking which account was last used on a shared machine.
+ *
+ * **This is isolation, not secrecy.** Everything here is still plaintext in
+ * localStorage, readable from devtools by anyone at the keyboard and by any
+ * XSS on the origin. The real fix for the two secret-bearing values is the OS
+ * keychain (see the note in `authStore.ts`), and on the web build it is not to
+ * hold them at all.
+ */
 const KEY = "secondbrain.settings";
+
+/** The signed-in user's id, or null. Read through authStore so this module
+ *  never has to know how a session is persisted. */
+function currentUserId(): string | null {
+  return getCachedSession()?.user?.id ?? null;
+}
+
+/**
+ * The storage key for this account, migrating the pre-account bucket into it
+ * on first touch.
+ *
+ * The migration is lazy rather than a step in the sign-in flow because it must
+ * hold whatever order things load in: whoever reads settings first after an
+ * upgrade adopts the old values, and the shared copy is removed so no later
+ * account can inherit it.
+ */
+function scopedKey(base: string): string {
+  const uid = currentUserId();
+  const key = `${base}.${uid ?? "anon"}`;
+  if (uid) {
+    const legacy = localStorage.getItem(base);
+    if (legacy !== null) {
+      // Don't clobber a bucket this account already has.
+      if (localStorage.getItem(key) === null) localStorage.setItem(key, legacy);
+      localStorage.removeItem(base);
+    }
+  }
+  return key;
+}
 
 /** Default Ollama address. Only the port is realistically customised. */
 export const DEFAULT_OLLAMA_URL = "http://localhost:11434";
@@ -192,7 +249,7 @@ const DEFAULTS: AppSettings = {
 
 export function getSettings(): AppSettings {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(scopedKey(KEY));
     if (!raw) return { ...DEFAULTS };
     return { ...DEFAULTS, ...JSON.parse(raw) };
   } catch {
@@ -202,7 +259,7 @@ export function getSettings(): AppSettings {
 
 export function saveSettings(patch: Partial<AppSettings>): AppSettings {
   const next = { ...getSettings(), ...patch };
-  localStorage.setItem(KEY, JSON.stringify(next));
+  localStorage.setItem(scopedKey(KEY), JSON.stringify(next));
   return next;
 }
 
@@ -270,7 +327,7 @@ const CAL_DEFAULTS: CalendarSettings = {
 
 export function getCalendarSettings(): CalendarSettings {
   try {
-    const raw = localStorage.getItem(CAL_KEY);
+    const raw = localStorage.getItem(scopedKey(CAL_KEY));
     if (!raw) return { ...CAL_DEFAULTS };
     return { ...CAL_DEFAULTS, ...JSON.parse(raw) };
   } catch {
@@ -280,7 +337,7 @@ export function getCalendarSettings(): CalendarSettings {
 
 export function saveCalendarSettings(patch: Partial<CalendarSettings>): CalendarSettings {
   const next = { ...getCalendarSettings(), ...patch };
-  localStorage.setItem(CAL_KEY, JSON.stringify(next));
+  localStorage.setItem(scopedKey(CAL_KEY), JSON.stringify(next));
   return next;
 }
 

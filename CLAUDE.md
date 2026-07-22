@@ -141,7 +141,7 @@ npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
 - **Recurring reminders have the same trap, fixed card-side** — they store the series' base time, so a daily 8am reminder rendered yesterday flagged overdue. `ItemCard` resolves via `nextOccurrenceFrom` and **never** flags a recurring reminder overdue. Elsewhere reminder rrule is display-only.
 - **The prompt tells the model to preserve `sbimg:` refs verbatim** — an `update_note` that "tidies" the markdown orphans the image for good.
 - **Adding a tool:** `TOOLS` entry + `executeTool` case + `statusFor` string.
-- Settings live in `localStorage` (`settings.ts`), not the database, so "clear all data" doesn't wipe the API key or calendar account.
+- Settings live in `localStorage` (`settings.ts`), not the database, so "clear all data" doesn't wipe the API key or calendar account. **They are keyed per signed-in account** (`secondbrain.settings.<userId>`) — one shared bucket meant the next person to register on a device inherited the previous user's OpenAI key and iCloud password. Signed out, reads go to an `anon` bucket. This is isolation, not secrecy: it is still plaintext localStorage.
 
 ## Weather (`src/lib/weather.ts`)
 
