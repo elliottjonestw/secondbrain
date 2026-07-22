@@ -1,0 +1,16 @@
+# Local stand-in for `wrangler secret put`. Copy to `.dev.vars` (gitignored).
+#
+# In deployed environments these are set as real secrets, NOT as [vars] in
+# wrangler.toml — anything in wrangler.toml is committed to the repo and
+# visible in the Cloudflare dashboard.
+#
+#   npx wrangler secret put JWT_SECRET --env staging
+#
+# Generate a value with:
+#
+#   openssl rand -base64 48
+#
+# Used from M1 onward to sign access-token JWTs. Rotating it invalidates every
+# outstanding access token (refresh tokens survive — they're stored hashed in
+# D1 and are not signed with this).
+JWT_SECRET=dev-only-do-not-use-in-any-deployed-environment

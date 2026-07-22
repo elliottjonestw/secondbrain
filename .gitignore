@@ -12,6 +12,15 @@ dist
 dist-ssr
 *.local
 
+# Cloudflare Worker
+# .wrangler holds the local Miniflare D1 state — a disposable dev database that
+# is rebuilt by `npm run worker:migrate`.
+.wrangler
+# .dev.vars is the local stand-in for `wrangler secret put`. It holds real
+# signing keys; never commit it. See worker/.dev.vars.example.
+.dev.vars
+worker/worker-configuration.d.ts
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

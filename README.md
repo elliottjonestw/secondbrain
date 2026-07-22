@@ -1,6 +1,6 @@
 # 🧠 Second Brain
 
-A local-first personal life-management desktop app: **Calendar, Reminders, To-Do, Notes, and People** in one integrated tool, with an optional **AI assistant** that can answer questions about your data *and* create, update, or delete items on your behalf. Built with Tauri v2 + React + TypeScript + SQLite. Local-first and offline by default — no account, no cloud sync. The only network calls are the ones you opt into: OpenAI (assistant/voice) and your own **iCloud calendar** if you connect one.
+A personal life-management desktop app: **Calendar, Reminders, To-Do, Notes, and People** in one integrated tool, with an optional **AI assistant** that can answer questions about your data *and* create, update, or delete items on your behalf. Built with Tauri v2 + React + TypeScript on a Cloudflare Worker + D1 backend, so your data follows you between devices. You sign in with an account; reads fall back to a local cache when you're offline, and writes fail loudly rather than pretending to succeed. The other network calls are the ones you opt into: OpenAI (assistant/voice) and your own **iCloud calendar** if you connect one.
 
 ## Stack
 
@@ -10,16 +10,18 @@ A local-first personal life-management desktop app: **Calendar, Reminders, To-Do
 | Frontend | React 19 + TypeScript + Vite + Tailwind CSS |
 | Icons | `lucide-react` |
 | Languages | `i18next` + `react-i18next` (English, 繁體中文) |
-| Database | SQLite via `tauri-plugin-sql` (sqlx) |
+| Database | Cloudflare D1 (SQLite) behind a Hono Worker; image bytes in Workers KV |
+| Auth | Own implementation — client-side argon2id KDF, server-side keyed verifier, JWT + rotating refresh tokens |
+| Read cache | IndexedDB, stale-while-revalidate |
 | Notifications | `tauri-plugin-notification` |
 | Recurrence | `rrule` (RFC 5545) for local events; `ical.js` for remote (TZID-aware) |
 | ICS import/export | `ical-generator` (export) + `ical.js` (import) |
 | Calendar sync | CalDAV (RFC 4791) over `tauri-plugin-http`; `ical.js` for VEVENT parse/serialize |
 | File I/O | `tauri-plugin-dialog` + `tauri-plugin-fs` |
-| Networking | `tauri-plugin-http` (bypasses webview CORS to reach OpenAI, iCloud, and a local Ollama server) |
+| Networking | `lib/httpFetch.ts` — `tauri-plugin-http` in the app (bypasses webview CORS), native `fetch` on the web |
 | Voice | `getUserMedia`/`MediaRecorder` + OpenAI Whisper (STT); OpenAI `audio/speech` or Web `speechSynthesis` (TTS) |
 
-The Rust side is intentionally thin — just plugin registration + versioned migrations (`src-tauri/src/lib.rs`, `src-tauri/migrations/`). **All business logic lives in TypeScript** (`src/db.ts` is the only module that touches the DB), so a plain-browser or Windows build later is a packaging change, not a rewrite.
+The Rust side is intentionally thin — plugin registration only (`src-tauri/src/lib.rs`), with no database and no migrations. **All business logic lives in TypeScript** (`src/db.ts` is the only module that calls the data API; `worker/src/db/` is the only place SQL is written), so a plain-browser, Windows or iOS build is a packaging change, not a rewrite.
 
 ## Prerequisites
 
@@ -53,13 +55,74 @@ open "src-tauri/target/release/bundle/macos/Second Brain.app"
 
 ## Where your data lives
 
-A single SQLite file, `secondbrain.db`, in Tauri's app-data directory:
+> **Moved to a Cloudflare backend** (branch `cloud-migration`). Data used to
+> live only on the device that created it and so couldn't follow you between
+> devices; it now lives in a Cloudflare D1 database behind a Workers API, with
+> user accounts and a local read cache. See
+> [`docs/cloud-migration-plan.md`](docs/cloud-migration-plan.md) for the design
+> and [`worker/README.md`](worker/README.md) for the backend. **What's left is
+> M5 (password reset, email verification, account deletion)** — see the end of
+> this note.
+>
+> **Every domain now lives in the cloud.** M0 built the infrastructure and the
+> multi-tenant schema; M1 added accounts; M2–M4 moved all the data —
+> to-dos, lists, reminders, people, events, tags, links, and notes — to
+> **Cloudflare D1**, reached through a typed Worker API, with **note-image
+> bytes in Workers KV** (D1 caps a row at 2 MB). Everything syncs across
+> devices; reads fall back to a local IndexedDB cache when offline, and writes
+> are disabled offline and say so.
+>
+> The whole backend runs on **free-plan products with no payment method on the
+> account**, which is a deliberate safety property rather than a cost-saving
+> one: free plans return quota errors instead of billing overages, so a traffic
+> spike — including a malicious one — can take the app offline until the daily
+> counter resets, but can never produce a bill. That is why note images use KV
+> (included free, no card) rather than R2, which requires a card on file even to
+> use its own free tier. The cost of that choice is a 1 GB image budget and
+> 1,000 uploads/day.
+>
+> **The local SQLite stack is gone.** `tauri-plugin-sql`, `browserDb.ts`,
+> `src-tauri/migrations/`, the demo seeder and the `sql:*` capabilities have all
+> been deleted, and `lib.rs` is plugin wiring only — architecture rule 1 held
+> more completely than before the migration, and the side effect is that iOS is
+> unblocked (`tauri-plugin-sql` never supported it). Backup/restore and
+> Settings' "clear all data" are now server-side: a *logical* export that walks
+> the tables one page at a time, because `wrangler d1 export` refuses a database
+> containing virtual tables and `notes_fts` is one.
+>
+> **Staging and production are both deployed and verified**, each with its own
+> D1 database, KV namespace and secrets, so nothing crosses between them.
+> Packaged builds read `VITE_API_URL` from `.env.production` and target
+> production; the dev app runs client and Worker together locally
+> (`npm run tauri dev`). **What's left is M5: password reset, email
+> verification and account deletion — nobody else should register until those
+> exist**, because a forgotten password currently means a lost account.
+>
+> **The app is no longer standalone.** It now depends on the deployed Worker
+> being reachable — no Worker, no login. That is the trade the cloud migration
+> makes for cross-device sync.
+>
+> **Passwords are never sent to the server.** The client derives an argon2id key
+> from your password and sends only that; the server stores a keyed hash of it.
+> This is the same design Bitwarden and 1Password use. It means offline
+> cracking resistance is unchanged while the server never sees a plaintext
+> password — and it fits Cloudflare's free plan, whose 10 ms CPU cap per request
+> cannot accommodate a correctly tuned password hash.
+>
+> **There is no password reset yet** (planned for M5). Until then a forgotten
+> password means an unrecoverable account — the sign-up screen says so.
 
-- macOS: `~/Library/Application Support/com.elliottjones.secondbrain/`
+In **Cloudflare D1**, scoped to your account's space, reached only through the
+Worker — nothing is kept on the device but a read cache. Migrations live in
+`worker/migrations/` and are applied with `wrangler d1 migrations apply`.
 
-Migrations are versioned and idempotent (managed by `tauri-plugin-sql`); they run automatically on startup. App **settings** (your OpenAI key + model, your calendar-account configuration, your weather location, and your stock watchlist) live separately in the webview's `localStorage`, not in the database — so they survive a data reset and stay out of the syncable calendar data.
+App **settings** (your OpenAI key + model, your calendar-account configuration,
+your weather location, and your stock watchlist) live in the webview's
+`localStorage`, not in the database — so they survive a data wipe and never
+travel in a backup file. The flip side is that they don't follow you to a new
+device either; you re-enter them once per machine.
 
-**Note images are stored in their own table, not in the note text.** The markdown body holds only a reference (`![alt](sbimg:<id>)`); the bytes live in `note_images` and are read only by the preview that renders them. Inlining them as data URIs would put every image on the `notes` row — which the sidebar re-reads on every keystroke in the search box — and feed them to a *trigram* full-text index. Measured on one 300 KB image, that's a 638 KB search index versus 331 bytes.
+**Note images are stored separately from the note text.** The markdown body holds only a reference (`![alt](sbimg:<id>)`); the bytes live in Workers KV, with only metadata in D1, and are fetched by the preview that renders them. Inlining them as data URIs would put every image on the `notes` row — which the sidebar re-reads on every keystroke in the search box — and feed them to a *trigram* full-text index. Measured on one 300 KB image, that's a 638 KB search index versus 331 bytes.
 
 **Connected Apple calendars are not stored here.** They're fetched from iCloud live whenever the visible date range changes, and edits are written straight back — nothing is copied to disk. That's why connecting a calendar needs no migration and no schema change, and also why Apple events need a connection to show up (see [Limitations](#notes--current-limitations)).
 
@@ -118,7 +181,7 @@ Connect your iCloud account and your Apple calendars work alongside the built-in
 
 **How it works:**
 
-- **Live fetch, no local copy.** Events are read with a window-scoped CalDAV `calendar-query` `REPORT` whenever the visible date range changes, and written back with `PUT`/`DELETE`. Nothing is persisted to SQLite, so there's no migration, no schema change, and no stale-copy problem — but also no offline access to Apple events.
+- **Live fetch, no stored copy.** Events are read with a window-scoped CalDAV `calendar-query` `REPORT` whenever the visible date range changes, and written back with `PUT`/`DELETE`. Nothing is persisted, so there's no migration, no schema change, and no stale-copy problem — but also no offline access to Apple events. This is why the cloud migration left `calendars.ts` untouched.
 - **Conflict-safe writes.** Every write carries the event's `ETag` as `If-Match`. If the event changed on another device in the meantime the server returns `412` and the app tells you to reload rather than silently overwriting.
 - **Fails soft.** If iCloud is unreachable or the credentials are wrong, the built-in calendar and every other feature keep working; the Calendar view shows a *"Some calendars unavailable"* chip instead of erroring.
 - **Provider-agnostic seams.** The client is generic CalDAV behind a small provider abstraction (`src/lib/caldav/`), with iCloud the only implementation shipped. Google/Fastmail/Nextcloud/generic-URL accounts are a provider entry plus a capability scope.
@@ -239,9 +302,35 @@ Calendar sync is built (**CalDAV, iCloud** — see above). The schema was design
 
 ## Project layout
 
+The repo is npm workspaces: the root package is the app, plus two workspaces
+added by the cloud migration.
+
 ```
+worker/                 # Cloudflare Worker — the API (see worker/README.md)
+  migrations/           #   D1 schema; 0001 squashes local 001–007 + tenancy
+  src/                  #   Hono app, error boundary, CORS, routes
+packages/shared/        # types + zod schemas + normalization, imported by BOTH
+                        #   the client and the Worker, as TypeScript source, so
+                        #   the two cannot drift
 src/
-  db.ts                 # data-access layer (only module that touches SQLite)
+  db.ts                 # data-access facade — every domain calls the Worker;
+                        #   the only module that talks to the data API
+  lib/
+    api.ts              # the only path to the Worker: auth headers, token
+                        #   refresh (deduplicated), offline detection
+    auth.ts             # register / login / logout / restore, in UI terms
+    authStore.ts        # session + current space on this device (swap this
+                        #   one file for an OS keychain on mobile)
+    kdf.ts              # client-side argon2id — the password never leaves here
+    cache.ts            # IndexedDB snapshot of remote reads, for offline
+    platform.ts         # isTauri(), split out to avoid an import cycle
+  components/auth/
+    AuthGate.tsx        # decides whether <App> mounts at all
+  views/AuthView.tsx    # sign in / create account
+worker/src/
+  authorize.ts          # the single tenancy choke point (membership + role)
+  db/                    # all SQL, every query scoped by space_id
+  routes/spaces.ts       # /v1/spaces/:spaceId/(lists|todos)
   types.ts              # domain types mirroring the schema
   locales/
     en/app.json         # translation catalogs (English is the source of truth)
@@ -322,13 +411,13 @@ See [CLAUDE.md](CLAUDE.md) for architecture principles, conventions, and the got
 - Desktop notifications are **poll-based** (checked every 60s while the app is open) — the plugin has no cross-platform "schedule for later" API. Alerts won't fire while the app is closed.
 - **There is no drag-and-drop anywhere in the app**, by decision rather than omission: HTML5 drag doesn't work in the WKWebView the packaged app runs in, and a drag handle that silently does nothing is worse than no handle. Reordering to-dos and custom fields is ▲/▼ buttons (which also work from a keyboard); rescheduling an event means opening it and changing the date.
 - **Apple calendars need a connection** — they're fetched live and never cached to disk, so they don't appear offline (the built-in calendar is unaffected). This is the deliberate trade for having no local copy to keep in sync.
-- **Apple events can't carry tags, links, or people.** Those live in SQLite keyed by a local event id, and a connected event has no local row. The event editor hides those panels for remote events.
-- **Global search covers connected calendars only within a date window.** CalDAV has no unbounded keyword search — the only server-side filter is a time-range — so connected calendars are searched a year either side of today, widened in steps from a control under the results that names the range being searched. The built-in calendar has no such limit; it's SQLite, so it's searched over all time. An event in a connected calendar outside the window is missing rather than absent, which is why the range is stated rather than assumed.
+- **Apple events can't carry tags, links, or people.** Those live in D1 keyed by a built-in event id, and a connected event has no such row. The event editor hides those panels for remote events.
+- **Global search covers connected calendars only within a date window.** CalDAV has no unbounded keyword search — the only server-side filter is a time-range — so connected calendars are searched a year either side of today, widened in steps from a control under the results that names the range being searched. The built-in calendar has no such limit; it's in D1, so it's searched over all time. An event in a connected calendar outside the window is missing rather than absent, which is why the range is stated rather than assumed.
 - **Moving an event between calendars isn't supported in-app** — the calendar picker is fixed once an event exists, because copy-then-delete would silently drop a local event's tags, links, and people. Delete it and recreate it in the target calendar.
 - Remote **timed** events keep the timezone they were authored in on write: re-saving an event that came from Apple writes `DTSTART;TZID=…` (and a matching `EXDATE;TZID=…`) with the original `VTIMEZONE` copied back in, so a 9am weekly standup stays at 9am across a daylight-saving boundary. All-day events use `VALUE=DATE`. **What's still UTC:** events whose source zone we never saw — chiefly **events created in the app**, which have no `TZID` of their own. The app ships no timezone database, and RFC 5545 requires the `VTIMEZONE` definition to travel with any `TZID` reference, so there's nothing honest to emit; a *new recurring timed* event therefore still drifts an hour across a DST change. Single events are unaffected either way (the instant is the same).
 - Per-instance `RECURRENCE-ID` overrides, attendees, and `VALARM` alarms are not synced — an event with per-instance overrides shows its series pattern, and editing it would drop the overrides.
 - Local events have no timezone handling beyond the machine's local zone (fine for single-user local use; remote events *are* resolved from their source zone).
-- **Chinese notes search needs 3+ characters to be ranked.** The notes index uses SQLite FTS5's `trigram` tokenizer, which can't answer queries shorter than 3 characters — and the commonest Chinese words are exactly 2 (北京, 會議). Those queries fall back to a `LIKE` scan, which is correct but unranked and slower on large note sets.
+- **Chinese notes search needs 3+ characters to be ranked.** The notes index uses D1's FTS5 `trigram` tokenizer, which can't answer queries shorter than 3 characters — and the commonest Chinese words are exactly 2 (北京, 會議). Those queries fall back to a `LIKE` scan, which is correct but unranked and slower on large note sets.
 - **A custom (non-preset) RRULE is described in English** even in Chinese. `rrule`'s `toText()` substitutes token by token, and Chinese word order differs enough ("every week on Monday" vs 每週一) that the output would read worse than English. The repeat presets themselves are translated, which covers the common cases.
 - **Profile photos accept PNG/JPEG/WebP/GIF, not HEIC** — the webview can't decode HEIC, so a photo dragged straight out of Apple Photos is rejected with an error rather than silently failing; export it as JPEG first. Photos are stored inline on the person row, so they're included in a Settings → Data backup (and inflate the JSON by ~30 KB each) rather than living as separate files.
 - The demo dataset and the assistant's own prose are **English-only**; the assistant replies in whatever language you write to it in.

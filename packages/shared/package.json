@@ -1,0 +1,15 @@
+{
+  "name": "@secondbrain/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "//": "Consumed as TypeScript source by both sides — Vite compiles it for the client, esbuild (via wrangler) for the Worker. No build step, so there is no stale-dist failure mode. It must therefore stay free of any Cloudflare or Tauri import.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "dependencies": {
+    "zod": "^3.25.76"
+  }
+}

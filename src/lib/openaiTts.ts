@@ -14,7 +14,7 @@
 // valid, and the clock is in sync, so this is deliberate hardening rather than
 // something to work around). Don't reach for it again without re-testing.
 
-import { fetch } from "@tauri-apps/plugin-http";
+import { httpFetch as fetch } from "./httpFetch";
 import i18next from "i18next";
 import { getSettings, clampSpeechRate } from "./settings";
 

@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import { Home, Calendar, Bell, ListChecks, StickyNote, Users, Search, Brain, Sparkles, Settings as SettingsIcon, LucideIcon } from "lucide-react";
-import { Trans, useTranslation } from "react-i18next";
+import { useEffect, useState } from "react";
+import { Home, Calendar, Bell, ListChecks, StickyNote, Users, Search, Brain, Sparkles, Settings as SettingsIcon, LogOut, LucideIcon } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import TodayView from "./views/TodayView";
 import CalendarView from "./views/CalendarView";
 import RemindersView from "./views/RemindersView";
@@ -13,11 +13,10 @@ import AssistantPopup from "./components/assistant/AssistantPopup";
 import { useAssistantChat, type UiMessage } from "./components/assistant/useAssistantChat";
 import SettingsView from "./views/SettingsView";
 import type { NavTarget } from "./types";
-import { startReminderPoller, resetNotificationState } from "./lib/notifications";
+import { startReminderPoller } from "./lib/notifications";
 import { isAssistantConfigured } from "./lib/settings";
-import { db } from "./db";
-import { resetAndSeedDemo } from "./lib/demo";
-import { Modal, Button } from "./components/ui";
+import { logout } from "./lib/auth";
+import { getCachedSession } from "./lib/authStore";
 
 type View = "today" | "calendar" | "reminders" | "todos" | "notes" | "people" | "assistant" | "search" | "settings";
 
@@ -42,12 +41,6 @@ export default function App() {
   const [view, setView] = useState<View>("today");
   const [search, setSearch] = useState("");
   const [ready, setReady] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [showDemoPrompt, setShowDemoPrompt] = useState(false);
-  const [seeding, setSeeding] = useState(false);
-  // Bumped only on a data reset, to force every view to remount and reload.
-  // (Not bumped on ordinary edits, so it never disrupts in-progress editing.)
-  const [resetNonce, setResetNonce] = useState(0);
   // A specific item to open when navigating into a view (e.g. clicking a note
   // on the Today dashboard opens that note). Consumed by the view on mount and
   // cleared on any other navigation so it never mis-fires later.
@@ -78,6 +71,19 @@ export default function App() {
     spaceEnabled: isAssistantConfigured() && (view === "assistant" || popupOpen),
   });
 
+  // Read once per render rather than held in state: AuthGate remounts this
+  // whole tree on a different user, so it cannot go stale underneath us.
+  const account = getCachedSession();
+
+  async function signOut() {
+    await logout();
+    // A full reload is the simplest correct reset. Every module-scoped cache in
+    // the app — dayData's revision counter, the notification poller's fired
+    // set, the assistant transcript — would otherwise survive into the next
+    // session, and enumerating them is a list that silently grows.
+    window.location.reload();
+  }
+
   // Each view reloads its own data after mutations and on mount; switching
   // views remounts the next one, so no global refresh signal is needed.
   const bump = () => {};
@@ -101,72 +107,15 @@ export default function App() {
     setTodoTarget(null); setReminderTarget(null); setPersonTarget(null);
   }
 
+  // No database to open any more — the data lives behind the API, and the
+  // AuthGate above this component has already established a session by the
+  // time it mounts. All that's left is to start the reminder poller.
   useEffect(() => {
-    (async () => {
-      try {
-        await db(); // open DB + run migrations up front
-        startReminderPoller();
-        setReady(true);
-      } catch (e) {
-        setError(String(e));
-      }
-    })();
+    startReminderPoller();
+    setReady(true);
   }, []);
 
-  // Listen for the secret chord: Shift + 8 + 9 held together.
-  const held = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      held.current.add(e.code);
-      if (e.shiftKey && held.current.has("Digit8") && held.current.has("Digit9")) {
-        held.current.clear();
-        setShowDemoPrompt(true);
-      }
-    };
-    const onKeyUp = (e: KeyboardEvent) => held.current.delete(e.code);
-    const clear = () => held.current.clear();
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("blur", clear);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", clear);
-    };
-  }, []);
 
-  async function loadDemo() {
-    setSeeding(true);
-    try {
-      await resetAndSeedDemo();
-      setShowDemoPrompt(false);
-      setSearch("");
-      setView("today");
-      // The chat outlives view remounts now, so the reset has to clear it —
-      // it would otherwise reference items that no longer exist. clear() rather
-      // than setChatMessages([]) so a reply held back for speech can't land in
-      // the emptied transcript.
-      chat.clear();
-      // Same reasoning for the reminder poller's "already fired" memory: the
-      // ids it remembers now refer to deleted/replaced rows.
-      resetNotificationState();
-      clearTargets();
-      setResetNonce((n) => n + 1); // remount views so they pick up the new data
-    } finally {
-      setSeeding(false);
-    }
-  }
-
-  if (error) {
-    return (
-      <div className="flex h-full items-center justify-center p-8 text-center text-red-600">
-        <div>
-          <p className="font-semibold">{t("app.dbError")}</p>
-          <p className="mt-2 text-sm text-neutral-500">{error}</p>
-        </div>
-      </div>
-    );
-  }
   if (!ready) {
     return <div className="flex h-full items-center justify-center text-neutral-400">{t("common.loading")}</div>;
   }
@@ -207,7 +156,23 @@ export default function App() {
             );
           })}
         </div>
-        <div className="px-2 pb-1">
+        {/* Account row. Signing out unmounts the whole tree via AuthGate,
+            which is what clears the assistant transcript and aborts any turn
+            in flight — both correct when someone else may be about to sign in. */}
+        <div className="border-t border-neutral-200 px-4 py-2 dark:border-neutral-700">
+          <p className="truncate text-xs text-neutral-500" title={account?.user.email}>
+            {account?.user.email}
+          </p>
+          <button
+            onClick={signOut}
+            className="mt-1 flex items-center gap-1.5 text-xs font-medium text-neutral-500 hover:text-red-600"
+          >
+            <LogOut size={13} className="shrink-0" />
+            {t("auth.signOut")}
+          </button>
+        </div>
+
+        <div className="px-2 pb-1 pt-1">
           <button
             onClick={() => navigate("settings")}
             className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium ${
@@ -222,15 +187,15 @@ export default function App() {
 
       {/* Main */}
       <main className="flex-1 overflow-hidden bg-neutral-50 dark:bg-neutral-900">
-        {view === "today" && <TodayView key={resetNonce} onChange={bump} goTo={(v, target) => navigate(v as View, target)} />}
-        {view === "calendar" && <CalendarView key={resetNonce} onChange={bump} openEventId={calTarget ?? undefined} openEventStart={calTargetStart ?? undefined} />}
-        {view === "reminders" && <RemindersView key={resetNonce} onChange={bump} initialId={reminderTarget ?? undefined} />}
-        {view === "todos" && <TodosView key={resetNonce} onChange={bump} initialId={todoTarget ?? undefined} />}
-        {view === "notes" && <NotesView key={resetNonce} onChange={bump} initialId={noteTarget ?? undefined} />}
-        {view === "people" && <PeopleView key={resetNonce} onChange={bump} initialId={personTarget ?? undefined} />}
+        {view === "today" && <TodayView onChange={bump} goTo={(v, target) => navigate(v as View, target)} />}
+        {view === "calendar" && <CalendarView onChange={bump} openEventId={calTarget ?? undefined} openEventStart={calTargetStart ?? undefined} />}
+        {view === "reminders" && <RemindersView onChange={bump} initialId={reminderTarget ?? undefined} />}
+        {view === "todos" && <TodosView onChange={bump} initialId={todoTarget ?? undefined} />}
+        {view === "notes" && <NotesView onChange={bump} initialId={noteTarget ?? undefined} />}
+        {view === "people" && <PeopleView onChange={bump} initialId={personTarget ?? undefined} />}
         {view === "assistant" && (
           <AssistantView
-            key={resetNonce}
+           
             chat={chat}
             goTo={(v, target) => navigate(v as View, target)}
           />
@@ -255,28 +220,6 @@ export default function App() {
         />
       )}
 
-      <Modal
-        open={showDemoPrompt}
-        onClose={() => !seeding && setShowDemoPrompt(false)}
-        title={t("demo.title")}
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setShowDemoPrompt(false)}>{t("common.cancel")}</Button>
-            <Button variant="danger" onClick={loadDemo}>
-              <span className="flex items-center gap-1.5">
-                <Sparkles size={15} /> {seeding ? t("common.loading") : t("demo.confirm")}
-              </span>
-            </Button>
-          </>
-        }
-      >
-        {/* <Trans> keeps the <strong> inline rather than splitting the sentence
-            into fragments a translator can't reorder. */}
-        <p className="text-sm text-neutral-600 dark:text-neutral-300">
-          <Trans i18nKey="demo.body" components={{ strong: <strong /> }} />
-        </p>
-        <p className="mt-2 text-sm text-neutral-500">{t("demo.irreversible")}</p>
-      </Modal>
     </div>
   );
 }

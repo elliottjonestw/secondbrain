@@ -11,7 +11,7 @@
 // the browser CORS restriction that blocks calling api.openai.com from the
 // webview.
 
-import { fetch } from "@tauri-apps/plugin-http";
+import { httpFetch as fetch } from "./httpFetch";
 import i18next from "i18next";
 // Deliberately date-fns' unlocalized `format`, not lib/format's locale-aware
 // wrapper: these strings go into the model's prompt, which stays English
@@ -23,13 +23,13 @@ import { ageFromBirthday, nextBirthday } from "./format";
 // The daily summary is the one model output shown verbatim to the user, so it
 // needs the UI language by name.
 import { LANGUAGES, currentLanguage } from "./i18n";
-import type { EventRow, ItemRef, ItemType, UnifiedEvent } from "../types";
+import type { ItemRef, ItemType, UnifiedEvent } from "../types";
 import {
-  db, listLists, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
-  matchQuery, anyTermClause,
+  getEvent, listLists, listEvents, listNotes, getNote, listTodos, getTodo, listReminders, getReminder, listTags, itemIdsForTag, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
+  matchQuery,
   upsertTodo, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
   deleteTodo, deleteReminder, deleteNote, deleteList,
-  listPeople, searchPeople, upsertPerson, deletePerson, createLink, deleteLink,
+  listPeople, getPerson, searchPeople, upsertPerson, deletePerson, createLink, deleteLink,
   ensureCustomField,
 } from "../db";
 import { expandEvents } from "./recurrence";
@@ -135,9 +135,18 @@ const WRITE_TABLES = { event: "events", reminder: "reminders", todo: "todos", no
 
 async function getRowById(table: string, id: unknown): Promise<any | null> {
   if (typeof id !== "string" || !id) return null;
-  const d = await db();
-  const rows = await d.select<any[]>(`SELECT * FROM ${table} WHERE id = ?`, [id]);
-  return rows[0] ?? null;
+  // Every domain is remote now (M2–M4): a local SELECT would hit an empty table
+  // and make existence checks (tag/link/update/delete) report "not found" for
+  // items that exist. Events go through calendars.ts, which also covers the
+  // connected CalDAV calendars, not just the built-in one.
+  switch (table) {
+    case "todos": return (await getTodo(id)) ?? null;
+    case "reminders": return (await getReminder(id)) ?? null;
+    case "people": return (await getPerson(id)) ?? null;
+    case "notes": return (await getNote(id)) ?? null;
+    case "events": return (await findEventById(id)) ?? null;
+    default: return null;
+  }
 }
 
 /** Resolve a list name to its id (case-insensitive); null if not found. */
@@ -177,12 +186,8 @@ function categoryLabels(raw: string | null | undefined): string | null {
 
 /** item_ids that carry a given tag name, for a given item type. */
 async function idsForTag(type: string, tagName: string): Promise<Set<string>> {
-  const d = await db();
-  const rows = await d.select<{ item_id: string }[]>(
-    "SELECT it.item_id FROM item_tags it JOIN tags t ON t.id = it.tag_id WHERE it.item_type = ? AND t.name = ?",
-    [type, tagName],
-  );
-  return new Set(rows.map((r) => r.item_id));
+  // Tags are remote now (M3d). The server resolves item ids for a tag+type.
+  return new Set(await itemIdsForTag(type as ItemType, tagName));
 }
 
 // ---------------------------------------------------------------------------
@@ -744,20 +749,25 @@ const TOOLS = [
 // Tool executors (read-only)
 // ---------------------------------------------------------------------------
 async function toolGetOverview() {
-  const d = await db();
-  const one = async (sql: string) => (await d.select<{ n: number }[]>(sql))[0]?.n ?? 0;
-  const [lists, tags] = await Promise.all([listLists(), listTags()]);
+  // Every domain is remote now (M2–M4); count from the fetched lists. The
+  // built-in calendar's event count only — connected CalDAV events are a live
+  // windowed fetch, not a stored total.
+  const [lists, tags, todos, reminders, people, events, notes] = await Promise.all([
+    listLists(), listTags(), listTodos(), listReminders(), listPeople(), listEvents(), listNotes(),
+  ]);
   return {
     now: toLocalIso(new Date().toISOString()),
     now_readable: format(new Date(), "EEEE MMMM d, yyyy, h:mm a"),
     counts: {
-      events: await one("SELECT COUNT(*) n FROM events"),
-      todos: await one("SELECT COUNT(*) n FROM todos"),
-      todos_active: await one("SELECT COUNT(*) n FROM todos WHERE completed = 0"),
-      reminders: await one("SELECT COUNT(*) n FROM reminders"),
-      reminders_active: await one("SELECT COUNT(*) n FROM reminders WHERE completed = 0"),
-      notes: await one("SELECT COUNT(*) n FROM notes"),
-      people: await one("SELECT COUNT(*) n FROM people"),
+      // Built-in calendar only; connected CalDAV events aren't counted (they're
+      // a live windowed fetch, not a stored total).
+      events: events.length,
+      todos: todos.length,
+      todos_active: todos.filter((t) => t.completed === 0).length,
+      reminders: reminders.length,
+      reminders_active: reminders.filter((r) => r.completed === 0).length,
+      notes: notes.length,
+      people: people.length,
     },
     lists: lists.map((l) => l.name),
     tags: tags.map((t) => t.name),
@@ -765,48 +775,57 @@ async function toolGetOverview() {
 }
 
 async function toolSearchTodos(args: Record<string, unknown>) {
-  const d = await db();
-  const where: string[] = [];
-  const params: unknown[] = [];
+  // Todos are remote (M2). Rather than push these filters into the API — which
+  // would mean designing the full query surface before it is needed — the small
+  // single-user todo set is fetched once and filtered here. The ranking still
+  // runs through the shared matchQuery, so results agree with every other
+  // search path. Tags are still local (until M3), so idsForTag stays a local
+  // lookup.
+  const [allTodos, lists] = await Promise.all([listTodos(), listLists()]);
+  const listName = (id: string | null) => (id ? lists.find((l) => l.id === id)?.name ?? null : null);
+  let rows: any[] = allTodos.map((t) => ({ ...t, list_name: listName(t.list_id) }));
 
   const status = (args.status as string) ?? "active";
-  if (status === "active") where.push("t.completed = 0");
-  else if (status === "completed") where.push("t.completed = 1");
+  if (status === "active") rows = rows.filter((r) => r.completed === 0);
+  else if (status === "completed") rows = rows.filter((r) => r.completed === 1);
 
-  // Prefilter on ANY term so SQL still does the narrowing; matchQuery below
-  // decides between a strict all-term match and a ranked partial one.
   const queryTermList = typeof args.query === "string" ? queryTerms(args.query.trim()) : [];
   if (queryTermList.length > 0) {
-    const { clause, params: p } = anyTermClause(queryTermList, ["t.title", "t.notes"]);
-    where.push(clause);
-    params.push(...p);
+    // Prefilter to rows hitting ANY term; matchQuery below decides strict vs
+    // ranked-partial, exactly as the SQL prefilter used to.
+    const lowered = queryTermList.map((t) => t.toLowerCase());
+    rows = rows.filter((r) => {
+      const hay = `${r.title ?? ""} ${r.notes ?? ""}`.toLowerCase();
+      return lowered.some((t) => hay.includes(t));
+    });
   }
   if (typeof args.list === "string" && args.list.trim()) {
-    where.push("l.name = ?");
-    params.push(args.list.trim());
+    rows = rows.filter((r) => r.list_name === args.list);
   }
   if (typeof args.min_priority === "number") {
-    where.push("t.priority >= ?");
-    params.push(args.min_priority);
+    rows = rows.filter((r) => r.priority >= (args.min_priority as number));
   }
   const dueBefore = parseDate(args.due_before, true);
-  if (dueBefore) { where.push("t.due_at IS NOT NULL AND t.due_at <= ?"); params.push(dueBefore.toISOString()); }
+  if (dueBefore) rows = rows.filter((r) => r.due_at && r.due_at <= dueBefore.toISOString());
   const dueAfter = parseDate(args.due_after);
-  if (dueAfter) { where.push("t.due_at IS NOT NULL AND t.due_at >= ?"); params.push(dueAfter.toISOString()); }
+  if (dueAfter) rows = rows.filter((r) => r.due_at && r.due_at >= dueAfter.toISOString());
 
-  let tagIds: Set<string> | null = null;
-  if (typeof args.tag === "string" && args.tag.trim()) tagIds = await idsForTag("todo", args.tag.trim());
+  if (typeof args.tag === "string" && args.tag.trim()) {
+    const tagIds = await idsForTag("todo", args.tag.trim());
+    rows = rows.filter((r) => tagIds.has(r.id));
+  }
 
-  const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  const rows = await d.select<any[]>(
-    `SELECT t.*, l.name AS list_name FROM todos t LEFT JOIN lists l ON l.id = t.list_id
-     ${clause} ORDER BY t.completed ASC, t.due_at IS NULL, t.due_at ASC`,
-    params,
+  // Order: incomplete first, then by due date with nulls last — the same order
+  // the SQL used to produce.
+  rows.sort((a, b) =>
+    a.completed - b.completed ||
+    (a.due_at ? 0 : 1) - (b.due_at ? 0 : 1) ||
+    String(a.due_at).localeCompare(String(b.due_at)),
   );
-  const tagged = tagIds ? rows.filter((r) => tagIds!.has(r.id)) : rows;
+
   const m = queryTermList.length > 0
-    ? matchQuery(tagged, args.query as string, (t) => [t.title, t.notes])
-    : { rows: tagged, partial: false };
+    ? matchQuery(rows, args.query as string, (t) => [t.title, t.notes])
+    : { rows, partial: false };
   const filtered = m.rows;
   const limit = clampLimit(args.limit);
   return {
@@ -843,16 +862,12 @@ async function toolSearchEvents(args: Record<string, unknown>) {
   const start = parseDate(args.start) ?? startOfDay(new Date());
   const end = parseDate(args.end, true) ?? new Date(Date.now() + 30 * 864e5);
 
-  // Scale-conscious pre-filter for the local calendar: always load recurring
-  // events (they must be expanded), but only the non-recurring ones that
-  // overlap the window. Connected calendars are filtered server-side by the
-  // CalDAV time-range query, so they need no equivalent here.
-  const d = await db();
-  const rows = await d.select<EventRow[]>(
-    `SELECT * FROM events WHERE rrule IS NOT NULL
-       OR (dtstart <= ? AND COALESCE(dtend, dtstart) >= ?)`,
-    [end.toISOString(), start.toISOString()],
-  );
+  // The built-in calendar is remote now (M3c). Fetch all its events and expand
+  // client-side — recurrence expansion is client-side by design (rrule), so the
+  // window can't be pushed to the server without re-implementing it, and the
+  // single-user dataset is small. Connected calendars are still filtered
+  // server-side by the CalDAV time-range query.
+  const rows = await listEvents();
 
   const remote = await getRemoteOccurrences(start, end);
   let occs = [
@@ -911,38 +926,44 @@ async function resolveEvent(args: Record<string, unknown>) {
 }
 
 async function toolSearchReminders(args: Record<string, unknown>) {
-  const d = await db();
-  const where: string[] = [];
-  const params: unknown[] = [];
+  // Reminders are remote (M3): fetch the list and filter in JS, mirroring
+  // toolSearchTodos. Tags stay local until M3d.
+  let rows: any[] = await listReminders();
 
   const status = (args.status as string) ?? "active";
-  if (status === "active") where.push("completed = 0");
-  else if (status === "completed") where.push("completed = 1");
+  if (status === "active") rows = rows.filter((r) => r.completed === 0);
+  else if (status === "completed") rows = rows.filter((r) => r.completed === 1);
 
   const queryTermList = typeof args.query === "string" ? queryTerms(args.query.trim()) : [];
   if (queryTermList.length > 0) {
-    const { clause, params: p } = anyTermClause(queryTermList, ["title", "notes"]);
-    where.push(clause);
-    params.push(...p);
+    const lowered = queryTermList.map((t) => t.toLowerCase());
+    rows = rows.filter((r) => {
+      const hay = `${r.title ?? ""} ${r.notes ?? ""}`.toLowerCase();
+      return lowered.some((t) => hay.includes(t));
+    });
   }
-  if (args.flagged === true) where.push("priority > 0");
+  if (args.flagged === true) rows = rows.filter((r) => r.priority > 0);
+  const coalesce = (r: any) => r.remind_at ?? r.due_at ?? null;
   const dueBefore = parseDate(args.due_before, true);
-  if (dueBefore) { where.push("COALESCE(remind_at, due_at) <= ?"); params.push(dueBefore.toISOString()); }
+  if (dueBefore) rows = rows.filter((r) => coalesce(r) && coalesce(r) <= dueBefore.toISOString());
   const dueAfter = parseDate(args.due_after);
-  if (dueAfter) { where.push("COALESCE(remind_at, due_at) >= ?"); params.push(dueAfter.toISOString()); }
+  if (dueAfter) rows = rows.filter((r) => coalesce(r) && coalesce(r) >= dueAfter.toISOString());
 
-  let tagIds: Set<string> | null = null;
-  if (typeof args.tag === "string" && args.tag.trim()) tagIds = await idsForTag("reminder", args.tag.trim());
+  if (typeof args.tag === "string" && args.tag.trim()) {
+    const tagIds = await idsForTag("reminder", args.tag.trim());
+    rows = rows.filter((r) => tagIds.has(r.id));
+  }
 
-  const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  const rows = await d.select<any[]>(
-    `SELECT * FROM reminders ${clause} ORDER BY completed ASC, COALESCE(remind_at, due_at) IS NULL, COALESCE(remind_at, due_at) ASC`,
-    params,
+  // completed last, then earliest remind_at/due_at first — the old ORDER BY.
+  rows.sort((a, b) =>
+    a.completed - b.completed ||
+    (coalesce(a) ? 0 : 1) - (coalesce(b) ? 0 : 1) ||
+    String(coalesce(a)).localeCompare(String(coalesce(b))),
   );
-  const tagged = tagIds ? rows.filter((r) => tagIds!.has(r.id)) : rows;
+
   const m = queryTermList.length > 0
-    ? matchQuery(tagged, args.query as string, (r) => [r.title, r.notes])
-    : { rows: tagged, partial: false };
+    ? matchQuery(rows, args.query as string, (r) => [r.title, r.notes])
+    : { rows, partial: false };
   const filtered = m.rows;
   const limit = clampLimit(args.limit);
   return {
@@ -958,17 +979,13 @@ async function toolSearchReminders(args: Record<string, unknown>) {
 }
 
 async function toolSearchNotes(args: Record<string, unknown>) {
-  const d = await db();
   const limit = clampLimit(args.limit);
   const q = typeof args.query === "string" ? args.query.trim() : "";
 
-  // Reuse db.ts's searchNotes rather than reimplementing the query. This used
-  // to be an inline copy, which meant the CJK/short-query handling had to be
-  // fixed in two places — and wasn't, so the assistant reported "no notes" for
-  // Chinese notes that existed. The pinned filter is applied afterwards.
-  const found: any[] = q
-    ? await searchNotes(q)
-    : await d.select<any[]>("SELECT * FROM notes ORDER BY pinned DESC, updated_at DESC");
+  // Reuse db.ts's searchNotes (remote FTS) rather than reimplementing the query,
+  // so the CJK/short-query handling lives in one place. No query lists all notes
+  // via listNotes(). The pinned filter is applied afterwards.
+  const found: any[] = q ? await searchNotes(q) : await listNotes();
   const rows = args.pinned === true ? found.filter((n) => n.pinned === 1) : found;
 
   return {
@@ -985,14 +1002,19 @@ async function toolSearchNotes(args: Record<string, unknown>) {
 async function toolGetItem(args: Record<string, unknown>) {
   const type = args.type as string;
   const id = args.id as string;
-  const table = { event: "events", reminder: "reminders", todo: "todos", note: "notes", person: "people" }[type];
-  if (!table || !id) return { error: "Provide a valid type (event|reminder|todo|note|person) and id." };
+  // One getter per type rather than a table name interpolated into SQL: there
+  // is no local database to query any more, and each of these is the same
+  // space-scoped endpoint the UI uses, so the assistant cannot reach a row the
+  // signed-in user couldn't.
+  const getters: Record<string, (id: string) => Promise<Record<string, any> | undefined>> = {
+    event: getEvent, reminder: getReminder, todo: getTodo, note: getNote, person: getPerson,
+  };
+  const getter = getters[type];
+  if (!getter || !id) return { error: "Provide a valid type (event|reminder|todo|note|person) and id." };
 
-  const d = await db();
-  const rows = await d.select<any[]>(`SELECT * FROM ${table} WHERE id = ?`, [id]);
-  const item = rows[0];
+  const item = await getter(id);
 
-  // Events can live in a connected calendar, where there is no SQLite row —
+  // Events can live in a connected calendar, where there is no local row —
   // and no tags/links, which are keyed on local ids.
   if (!item && type === "event") {
     const remote = await resolveEvent(args);

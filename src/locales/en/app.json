@@ -1,8 +1,7 @@
 {
   "app": {
     "name": "Second Brain",
-    "searchPlaceholder": "Search everything…",
-    "dbError": "Failed to open the database."
+    "searchPlaceholder": "Search everything…"
   },
   "nav": {
     "today": "Today",
@@ -304,7 +303,9 @@
     "priority": "Priority",
     "dueDate": "Due date (shows on calendar)",
     "subtasks": "Subtasks",
-    "addSubtask": "Add subtask…"
+    "addSubtask": "Add subtask…",
+    "offlineSave": "You're offline — changes can't be saved until you reconnect.",
+    "saveFailed": "Couldn't save that. Please try again."
   },
   "recurrence": {
     "none": "Does not repeat",
@@ -570,5 +571,23 @@
     "working": "Working…",
     "thinking": "Thinking…",
     "speaking": "Speaking…"
+  },
+  "auth": {
+    "signIn": "Sign in",
+    "signOut": "Sign out",
+    "createAccount": "Create account",
+    "loginSubtitle": "Sign in to reach your data on any device.",
+    "registerSubtitle": "Create an account to sync across your devices.",
+    "email": "Email",
+    "password": "Password",
+    "confirmPassword": "Confirm password",
+    "passwordTooShort": "Password must be at least {{min}} characters.",
+    "passwordMismatch": "Those passwords don't match.",
+    "noRecoveryWarning": "There is no password reset yet — if you forget this password, the account can't be recovered.",
+    "haveAccount": "Already have an account?",
+    "noAccount": "Don't have an account?",
+    "working": "Working…",
+    "offline": "You're offline. Connect to the internet to sign in.",
+    "genericError": "Something went wrong. Please try again."
   }
 }

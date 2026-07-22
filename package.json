@@ -3,13 +3,22 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "worker"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "test:e2e:build": "tauri build --features wdio",
-    "test:e2e": "wdio run wdio.conf.ts"
+    "test:e2e": "wdio run wdio.conf.ts",
+    "worker:dev": "npm run dev -w @secondbrain/worker",
+    "worker:migrate": "npm run migrate:local -w @secondbrain/worker",
+    "typecheck": "tsc --noEmit && npm run typecheck -w @secondbrain/worker",
+    "//dev:app": "Used by tauri.conf.json's beforeDevCommand: the app now needs the Worker running too, so apply local D1 migrations (idempotent) and run Vite + the Worker together. -k kills both if either dies, so closing the app stops the Worker.",
+    "dev:app": "npm run worker:migrate && concurrently -k -n vite,worker \"vite\" \"npm run worker:dev\""
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -18,8 +27,8 @@
     "@tauri-apps/plugin-http": "^2.5.9",
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2",
-    "@tauri-apps/plugin-sql": "^2.4.0",
     "date-fns": "^4.4.0",
+    "hash-wasm": "^4.12.0",
     "i18next": "^26.3.6",
     "ical-generator": "^11.0.0",
     "ical.js": "^2.2.1",
@@ -33,7 +42,6 @@
     "uuid": "^14.0.1"
   },
   "devDependencies": {
-    "@sqlite.org/sqlite-wasm": "^3.53.0-build1",
     "@tailwindcss/typography": "^0.5.20",
     "@tauri-apps/cli": "^2",
     "@types/react": "^19.1.8",
@@ -46,6 +54,7 @@
     "@wdio/spec-reporter": "^9.29.1",
     "@wdio/tauri-service": "^1.2.0",
     "autoprefixer": "^10.5.4",
+    "concurrently": "^10.0.3",
     "i18next-parser": "^9.4.0",
     "postcss": "^8.5.20",
     "tailwindcss": "^3.4.19",

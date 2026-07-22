@@ -6,11 +6,6 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "sql:default",
-    "sql:allow-load",
-    "sql:allow-execute",
-    "sql:allow-select",
-    "sql:allow-close",
     "notification:default",
     "dialog:default",
     "fs:default",
@@ -32,6 +27,8 @@
         { "url": "https://query1.finance.yahoo.com/*" },
         { "url": "https://caldav.icloud.com/*" },
         { "url": "https://*.icloud.com/*" },
+        { "url": "https://secondbrain-api-staging.elliottj.workers.dev/*" },
+        { "url": "https://secondbrain-api.elliottj.workers.dev/*" },
         { "url": "http://localhost:*/*" },
         { "url": "http://127.0.0.1:*/*" },
         { "url": "http://*" }

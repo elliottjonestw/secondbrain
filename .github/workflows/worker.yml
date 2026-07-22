@@ -1,0 +1,87 @@
+# Cloudflare Worker CI + deploy.
+#
+# Separate from deploy.yml (the Tauri desktop release) on purpose: the two have
+# nothing in common, run on different triggers, and a failing Worker deploy must
+# never block shipping an installer.
+#
+# Deploys are NOT automatic on push. Staging and production both go out from the
+# "Run workflow" button, because the database this talks to holds real user data
+# and a migration is not revertible by re-running an older commit.
+#
+# Required repository secrets:
+#   CLOUDFLARE_API_TOKEN   — scoped to Workers Scripts:Edit + D1:Edit
+#   CLOUDFLARE_ACCOUNT_ID
+name: Worker
+
+on:
+  push:
+    branches: [main, cloud-migration]
+    paths:
+      - "worker/**"
+      - "packages/shared/**"
+      - ".github/workflows/worker.yml"
+  pull_request:
+    paths:
+      - "worker/**"
+      - "packages/shared/**"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Which environment to deploy"
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
+      run_migrations:
+        description: "Apply pending D1 migrations before deploying"
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  # Always runs. This is the gate that a deploy depends on.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck worker + shared
+        run: npm run typecheck -w @secondbrain/worker
+      # Proves the squashed schema is valid SQL and that every statement
+      # applies to an empty database — the failure that would otherwise be
+      # discovered against the real staging database.
+      - name: Apply migrations to a throwaway local D1
+        run: npm run migrate:local -w @secondbrain/worker
+
+  deploy:
+    needs: check
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # Migrations run BEFORE the deploy: new code against an old schema fails
+      # on every request, whereas old code against a new schema keeps working
+      # so long as migrations are additive. Keep them additive.
+      - name: Apply D1 migrations
+        if: inputs.run_migrations
+        run: npm run migrate:${{ inputs.environment }} -w @secondbrain/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy
+        run: npm run deploy:${{ inputs.environment }} -w @secondbrain/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

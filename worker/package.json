@@ -1,0 +1,26 @@
+{
+  "name": "@secondbrain/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "migrate:local": "wrangler d1 migrations apply secondbrain-dev --local",
+    "migrate:staging": "wrangler d1 migrations apply secondbrain-staging --env staging --remote",
+    "migrate:production": "wrangler d1 migrations apply secondbrain-prod --env production --remote",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:production": "wrangler deploy --env production",
+    "cf-typegen": "wrangler types"
+  },
+  "dependencies": {
+    "@secondbrain/shared": "*",
+    "hono": "^4.6.14",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "typescript": "~5.8.3",
+    "wrangler": "^4.110.0"
+  }
+}

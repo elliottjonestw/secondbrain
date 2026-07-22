@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import AuthGate from "./components/auth/AuthGate";
 import { initI18n } from "./lib/i18n";
 import "./index.css";
 
@@ -10,7 +11,9 @@ import "./index.css";
 void initI18n().then(() => {
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
-      <App />
+      <AuthGate>
+        <App />
+      </AuthGate>
     </React.StrictMode>,
   );
 });

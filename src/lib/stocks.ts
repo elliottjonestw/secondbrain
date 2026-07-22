@@ -20,7 +20,7 @@
 // own fetch is blocked by CORS from tauri://, and the host is scoped in
 // capabilities/default.json.
 
-import { fetch } from "@tauri-apps/plugin-http";
+import { httpFetch as fetch } from "./httpFetch";
 import type { StockSymbol } from "./settings";
 
 export type { StockSymbol };

@@ -2,7 +2,10 @@
 // Booleans are stored as 0/1 integers in SQLite; we expose them as numbers
 // at the DB boundary and convert where convenient.
 
-export type ItemType = "event" | "reminder" | "todo" | "note" | "person";
+// ItemType lives in @secondbrain/shared (the Worker validates path segments
+// against it). Re-exported here since the whole app imports it from "./types".
+export type { ItemType } from "@secondbrain/shared";
+import type { ItemType } from "@secondbrain/shared";
 
 /**
  * A pointer to one item, used to render it as a card in the assistant chat.
@@ -42,70 +45,19 @@ export interface NavTarget {
 
 export type GoTo = (view: string, target?: NavTarget) => void;
 
-export interface EventRow {
-  id: string;
-  summary: string;
-  description: string | null;
-  location: string | null;
-  dtstart: string; // ISO 8601
-  dtend: string | null;
-  all_day: number; // 0 | 1
-  rrule: string | null; // RFC 5545, e.g. "FREQ=WEEKLY;BYDAY=MO,WE,FR"
-  exdates: string | null; // JSON array of ISO dates
-  status: string; // CONFIRMED | TENTATIVE | CANCELLED
-  categories: string | null; // JSON array
-  color: string | null;
-  sequence: number;
-  created_at: string | null;
-  updated_at: string | null;
-}
+// EventRow is defined in @secondbrain/shared (like the other row types).
+export type { EventRow } from "@secondbrain/shared";
 
-export interface ReminderRow {
-  id: string;
-  title: string;
-  notes: string | null;
-  due_at: string | null;
-  remind_at: string | null;
-  rrule: string | null;
-  priority: number;
-  completed: number;
-  completed_at: string | null;
-  linked_todo_id: string | null;
-  sequence: number;
-  created_at: string | null;
-  updated_at: string | null;
-}
+// ReminderRow is defined in @secondbrain/shared (see TodoRow/ListRow above).
+export type { ReminderRow } from "@secondbrain/shared";
 
-export interface ListRow {
-  id: string;
-  name: string;
-  color: string | null;
-}
+// TodoRow and ListRow are defined in @secondbrain/shared so the Worker returns
+// exactly the shape the client consumes. Re-exported here because the whole app
+// imports its domain types from "./types".
+export type { TodoRow, ListRow } from "@secondbrain/shared";
 
-export interface TodoRow {
-  id: string;
-  title: string;
-  notes: string | null;
-  list_id: string | null;
-  due_at: string | null;
-  priority: number;
-  completed: number;
-  completed_at: string | null;
-  parent_todo_id: string | null;
-  position: number | null;
-  sequence: number;
-  created_at: string | null;
-  updated_at: string | null;
-}
-
-export interface NoteRow {
-  id: string;
-  title: string | null;
-  body: string | null;
-  pinned: number;
-  created_at: string | null;
-  updated_at: string | null;
-}
+// NoteRow is defined in @secondbrain/shared (the Worker returns it).
+export type { NoteRow } from "@secondbrain/shared";
 
 // An image embedded in a note. The markdown in `NoteRow.body` carries only
 // `![alt](sbimg:<id>)`; the bytes live in their own table so the note list and
@@ -137,44 +89,15 @@ export interface PersonUrl { type: string; value: string }
 /** User-defined data point, e.g. { label: "Eye Color", value: "Blue" }. */
 export interface PersonCustomField { label: string; value: string }
 
-export interface PersonRow {
-  id: string;               // UUID, = vCard UID
-  full_name: string;        // vCard FN
-  given_name: string | null;
-  family_name: string | null;
-  additional_names: string | null;
-  honorific_prefix: string | null;
-  honorific_suffix: string | null;
-  nickname: string | null;
-  emails: string | null;    // JSON PersonEmail[]
-  phones: string | null;    // JSON PersonPhone[]
-  addresses: string | null; // JSON PersonAddress[]
-  organization: string | null;
-  title: string | null;
-  birthday: string | null;  // ISO date (vCard BDAY)
-  urls: string | null;      // JSON PersonUrl[]
-  notes: string | null;
-  photo: string | null;     // data URI / URL
-  custom_fields: string | null; // JSON PersonCustomField[]
-  favorite: number;         // 0 | 1
-  sequence: number;
-  created_at: string | null;
-  updated_at: string | null;
-}
+// PersonRow (and CustomFieldDef) are defined in @secondbrain/shared so the
+// Worker returns exactly the client's shape. The JSON sub-shapes above
+// (PersonEmail/Phone/… and PersonCustomField) stay client-only — they describe
+// how the client parses the JSON columns, which the server treats as opaque text.
+export type { PersonRow, CustomFieldDef } from "@secondbrain/shared";
 
-export interface TagRow {
-  id: string;
-  name: string;
-}
-
-export interface LinkRow {
-  id: string;
-  source_type: ItemType;
-  source_id: string;
-  target_type: ItemType;
-  target_id: string;
-  created_at: string | null;
-}
+// TagRow and LinkRow are defined in @secondbrain/shared (the Worker returns
+// them). Re-exported here like the other row types.
+export type { TagRow, LinkRow } from "@secondbrain/shared";
 
 // Priority levels shared by reminders & todos (iCal-ish: 0 none, 1 low..9 high;
 // we keep it simple with 0/1/2/3).
