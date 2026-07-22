@@ -3,8 +3,10 @@
 The backend half of the cloud migration — see [`docs/cloud-migration-plan.md`](../docs/cloud-migration-plan.md)
 for the full plan and the reasoning behind each decision.
 
-**Status: M0 complete.** Infrastructure, tenancy schema, and a health endpoint.
-No auth and no domain endpoints yet.
+**Status: the data migration is complete.** Auth plus every domain — todos,
+lists, reminders, people, events, notes (with trigram FTS), tags, links, note
+images, and backup/export — is served from here. What remains is M5: password
+reset, email verification and account deletion.
 
 ## Local development
 
@@ -110,8 +112,8 @@ Secrets are **write-only** — there is no way to read one back from Cloudflare 
 the dashboard, and `wrangler secret list` shows names only. The moment you
 generate a value is the only chance to keep a copy.
 
-Deploying before the secrets exist is safe: nothing before M1 reads them, and
-they are typed optional precisely so this bootstrap order compiles.
+Deploying before the secrets exist is safe — they are typed optional precisely
+so this bootstrap order compiles — but auth will 500 until they are set.
 
 > **`AUTH_PEPPER` must be set once and never rotated.** `JWT_SECRET` can be
 > rotated freely — it just signs everyone out. Rotating `AUTH_PEPPER`
@@ -153,6 +155,9 @@ Other free-plan ceilings, none of which bite at this project's scale:
 | D1 rows read | 5,000,000/day — counts rows **scanned**, not returned |
 | D1 rows written | 100,000/day |
 | D1 storage | 5 GB |
+| KV storage | 1 GB total |
+| KV reads | 100,000/day |
+| KV writes / deletes | 1,000/day each |
 
 The rows-read rule is why `space_id` leads every index in `0001_init.sql`: an
 unindexed query burns quota proportional to table size, so a full scan is no
@@ -162,11 +167,16 @@ longer merely slow, it is metered.
 
 ```
 migrations/0001_init.sql   squashed local 001–007 + multi-tenancy
+           0002_*.sql      auth throttling
+           0003_*.sql      note_images.r2_key -> blob_key (R2 -> KV)
 src/index.ts               Hono app, error boundary, /v1 mount
 src/env.ts                 bindings + request-scoped variables
 src/http.ts                ApiError — the single failure shape
-src/middleware/cors.ts     per-environment origin allowlist
-src/routes/health.ts
+src/authorize.ts           the ONE access-control choke point
+src/middleware/            cors (per-environment allowlist) · auth
+src/routes/                health · auth · spaces (all domain endpoints)
+src/db/                    the ONLY place SQL is written — one file per domain,
+                           plus backup.ts (logical export/import/wipe)
 ```
 
 ## Rules for this Worker
