@@ -102,6 +102,26 @@ export interface CustomFieldDef {
   position: number;
 }
 
+/** The item kinds that can be tagged and linked. A note's ROW may still be
+ *  local (until M4), but its tags and links live in D1 like everything else —
+ *  item_tags/links only store (type, id) strings. */
+export const ITEM_TYPES = ["event", "reminder", "todo", "note", "person"] as const;
+export type ItemType = (typeof ITEM_TYPES)[number];
+
+export interface TagRow {
+  id: string;
+  name: string;
+}
+
+export interface LinkRow {
+  id: string;
+  source_type: ItemType;
+  source_id: string;
+  target_type: ItemType;
+  target_id: string;
+  created_at: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Shared field validators
 // ---------------------------------------------------------------------------
@@ -339,3 +359,23 @@ export const customFieldReorderSchema = z.object({
 });
 
 export type CustomFieldCreate = z.infer<typeof customFieldCreateSchema>;
+
+// ---------------------------------------------------------------------------
+// Tags + links (cross-cutting; keyed by item_type + item_id)
+// ---------------------------------------------------------------------------
+
+export const itemTypeSchema = z.enum(ITEM_TYPES);
+
+/** Attach a tag to an item by name — ensure-then-link, idempotent. */
+export const tagAttachSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+});
+
+export const linkCreateSchema = z.object({
+  source_type: itemTypeSchema,
+  source_id: idSchema,
+  target_type: itemTypeSchema,
+  target_id: idSchema,
+});
+
+export type LinkCreate = z.infer<typeof linkCreateSchema>;

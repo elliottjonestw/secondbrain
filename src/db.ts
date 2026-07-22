@@ -695,112 +695,111 @@ export async function reorderCustomFields(ids: string[]): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Tags (shared across all item types)
+// Tags + Links — served by the Worker (M3d). These key items by (type, id), so
+// a note's tags/links live in D1 even though the note ROW is still local until
+// M4. removeItemRelations therefore hits the server for every type.
 // ---------------------------------------------------------------------------
 export async function listTags(): Promise<TagRow[]> {
-  const rows = await (await db()).select<TagRow[]>("SELECT * FROM tags");
+  const rows = await networkFirst(`tags:${getCurrentSpaceId()}`, () =>
+    apiRequest<TagRow[]>(spacePath("/tags")),
+  );
   return byName(rows, (t) => t.name);
 }
 
-export async function ensureTag(name: string): Promise<TagRow> {
-  const d = await db();
-  const trimmed = normalizeKey(name);
-  const existing = await d.select<TagRow[]>("SELECT * FROM tags WHERE name=?", [trimmed]);
-  if (existing[0]) return existing[0];
-  const id = newId();
-  await d.execute("INSERT INTO tags (id, name) VALUES (?,?)", [id, trimmed]);
-  return { id, name: trimmed };
-}
+// ensureTag was removed with the M3d migration: a tag only ever exists attached
+// to an item, and the server ensures it as part of tagItem. There is no
+// standalone "create a tag" flow in the app.
 
 export async function tagItem(name: string, type: ItemType, itemId: string): Promise<void> {
-  const tag = await ensureTag(name);
-  await (await db()).execute(
-    "INSERT OR IGNORE INTO item_tags (tag_id, item_type, item_id, created_at) VALUES (?,?,?,?)",
-    [tag.id, type, itemId, nowIso()],
-  );
+  await apiRequest<TagRow>(spacePath(`/items/${type}/${itemId}/tags`), {
+    method: "POST",
+    body: { name: normalizeKey(name) },
+  });
 }
 
 export async function untagItem(tagId: string, type: ItemType, itemId: string): Promise<void> {
-  await (await db()).execute(
-    "DELETE FROM item_tags WHERE tag_id=? AND item_type=? AND item_id=?",
-    [tagId, type, itemId],
-  );
+  await apiRequest<void>(spacePath(`/items/${type}/${itemId}/tags/${tagId}`), { method: "DELETE" });
 }
 
 export async function tagsForItem(type: ItemType, itemId: string): Promise<TagRow[]> {
-  const rows = await (await db()).select<TagRow[]>(
-    `SELECT t.* FROM tags t JOIN item_tags it ON it.tag_id = t.id
-     WHERE it.item_type=? AND it.item_id=?`,
-    [type, itemId],
-  );
-  // ORDER BY t.name is codepoint order; sort locale-aware to match listTags, so
-  // the tags inline on a card aren't ordered differently from the Tags list.
+  const rows = await apiRequest<TagRow[]>(spacePath(`/items/${type}/${itemId}/tags`));
   return byName(rows, (t) => t.name);
 }
 
-// ---------------------------------------------------------------------------
-// Links (generic any-to-any references)
-// ---------------------------------------------------------------------------
+/** Item ids of a type carrying a tag (by name). Powers the assistant's filters. */
+export async function itemIdsForTag(type: ItemType, tagName: string): Promise<string[]> {
+  return apiRequest<string[]>(
+    spacePath(`/tags/${encodeURIComponent(normalizeKey(tagName))}/item-ids?type=${type}`),
+  );
+}
+
 export async function createLink(
   sourceType: ItemType,
   sourceId: string,
   targetType: ItemType,
   targetId: string,
 ): Promise<void> {
-  await (await db()).execute(
-    `INSERT INTO links (id, source_type, source_id, target_type, target_id, created_at)
-     VALUES (?,?,?,?,?,?)`,
-    [newId(), sourceType, sourceId, targetType, targetId, nowIso()],
-  );
+  await apiRequest<LinkRow>(spacePath("/links"), {
+    method: "POST",
+    body: { source_type: sourceType, source_id: sourceId, target_type: targetType, target_id: targetId },
+  });
 }
 
 export async function deleteLink(id: string): Promise<void> {
-  await (await db()).execute("DELETE FROM links WHERE id=?", [id]);
+  await apiRequest<void>(spacePath(`/links/${id}`), { method: "DELETE" });
 }
 
 /** All links touching an item, from either direction. */
 export async function linksForItem(type: ItemType, id: string): Promise<LinkRow[]> {
-  return (await db()).select<LinkRow[]>(
-    `SELECT * FROM links WHERE (source_type=? AND source_id=?) OR (target_type=? AND target_id=?)`,
-    [type, id, type, id],
-  );
+  return apiRequest<LinkRow[]>(spacePath(`/items/${type}/${id}/links`));
 }
 
-/** Flat list of every item as a link target (type, id, label). */
+/**
+ * Flat list of every item as a link target (type, id, label).
+ *
+ * Composed from the already-remote domain lists (each networkFirst-cached) plus
+ * a local notes query — notes are the one domain whose rows are still local
+ * (until M4). When notes move, the local read is swapped for listNotes() and
+ * this becomes a pure composition.
+ */
 export async function allLinkTargets(): Promise<
   { type: ItemType; id: string; label: string }[]
 > {
-  const d = await db();
-  const events = await d.select<{ id: string; summary: string }[]>("SELECT id, summary FROM events");
-  const reminders = await d.select<{ id: string; title: string }[]>("SELECT id, title FROM reminders");
-  const todos = await d.select<{ id: string; title: string }[]>("SELECT id, title FROM todos");
-  const notes = await d.select<{ id: string; title: string | null }[]>("SELECT id, title FROM notes");
-  const people = await d.select<{ id: string; full_name: string }[]>("SELECT id, full_name FROM people");
+  const [events, reminders, todos, people] = await Promise.all([
+    listEvents(), listReminders(), listTodos(), listPeople(),
+  ]);
+  const noteRows = await (await db()).select<{ id: string; title: string | null }[]>(
+    "SELECT id, title FROM notes",
+  );
   return [
     ...events.map((e) => ({ type: "event" as ItemType, id: e.id, label: e.summary })),
     ...reminders.map((r) => ({ type: "reminder" as ItemType, id: r.id, label: r.title })),
     ...todos.map((t) => ({ type: "todo" as ItemType, id: t.id, label: t.title })),
-    ...notes.map((n) => ({ type: "note" as ItemType, id: n.id, label: n.title || "(untitled)" })),
+    ...noteRows.map((n) => ({ type: "note" as ItemType, id: n.id, label: n.title || "(untitled)" })),
     ...people.map((p) => ({ type: "person" as ItemType, id: p.id, label: p.full_name })),
   ];
 }
 
-/** Human-readable label for any item, used when rendering links/search. */
+/**
+ * Human-readable label for any item, used when rendering links/search.
+ *
+ * Reuses the per-type remote getters (one request each) for the migrated
+ * domains and a local lookup for notes. Links are few per item, so the handful
+ * of requests when a detail panel opens is acceptable.
+ */
 export async function getItemLabel(type: ItemType, id: string): Promise<string> {
-  const d = await db();
-  const table = { event: "events", reminder: "reminders", todo: "todos", note: "notes", person: "people" }[type];
-  if (!table) {
-    // The map is keyed by ItemType, so reaching here means a new type was added
-    // to the union without updating this lookup — fail loudly rather than emit
-    // `SELECT title FROM undefined`, which SQLite would reject cryptically.
-    throw new Error(`getItemLabel: unknown item type "${type}"`);
+  switch (type) {
+    case "event": return (await getEvent(id))?.summary || "(untitled)";
+    case "reminder": return (await getReminder(id))?.title || "(untitled)";
+    case "todo": return (await getTodo(id))?.title || "(untitled)";
+    case "person": return (await getPerson(id))?.full_name || "(untitled)";
+    case "note": {
+      const rows = await (await db()).select<{ title: string | null }[]>(
+        "SELECT title FROM notes WHERE id=?", [id],
+      );
+      return rows[0]?.title || "(untitled)";
+    }
   }
-  const col = type === "event" ? "summary" : type === "person" ? "full_name" : "title";
-  const rows = await d.select<{ label: string | null }[]>(
-    `SELECT ${col} AS label FROM ${table} WHERE id=?`,
-    [id],
-  );
-  return rows[0]?.label || "(untitled)";
 }
 
 // ---------------------------------------------------------------------------
@@ -950,12 +949,8 @@ const IDENTITY_KEY_COLS: Partial<Record<DataTable, string>> = {
   person_custom_fields: "label",
 };
 
-/** Remove tags + links referencing an item that is being deleted. */
+/** Remove tags + links referencing an item that is being deleted. Server-side
+ *  now (M3d): tags/links live in D1 for every type, notes included. */
 async function removeItemRelations(type: ItemType, id: string): Promise<void> {
-  const d = await db();
-  await d.execute("DELETE FROM item_tags WHERE item_type=? AND item_id=?", [type, id]);
-  await d.execute(
-    "DELETE FROM links WHERE (source_type=? AND source_id=?) OR (target_type=? AND target_id=?)",
-    [type, id, type, id],
-  );
+  await apiRequest<void>(spacePath(`/items/${type}/${id}/relations`), { method: "DELETE" });
 }

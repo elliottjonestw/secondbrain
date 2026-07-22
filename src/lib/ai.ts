@@ -25,7 +25,7 @@ import { ageFromBirthday, nextBirthday } from "./format";
 import { LANGUAGES, currentLanguage } from "./i18n";
 import type { ItemRef, ItemType, UnifiedEvent } from "../types";
 import {
-  db, listLists, listEvents, listTodos, getTodo, listReminders, getReminder, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
+  db, listLists, listEvents, listTodos, getTodo, listReminders, getReminder, listTags, itemIdsForTag, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
   matchQuery,
   upsertTodo, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
   deleteTodo, deleteReminder, deleteNote, deleteList,
@@ -182,12 +182,8 @@ function categoryLabels(raw: string | null | undefined): string | null {
 
 /** item_ids that carry a given tag name, for a given item type. */
 async function idsForTag(type: string, tagName: string): Promise<Set<string>> {
-  const d = await db();
-  const rows = await d.select<{ item_id: string }[]>(
-    "SELECT it.item_id FROM item_tags it JOIN tags t ON t.id = it.tag_id WHERE it.item_type = ? AND t.name = ?",
-    [type, tagName],
-  );
-  return new Set(rows.map((r) => r.item_id));
+  // Tags are remote now (M3d). The server resolves item ids for a tag+type.
+  return new Set(await itemIdsForTag(type as ItemType, tagName));
 }
 
 // ---------------------------------------------------------------------------

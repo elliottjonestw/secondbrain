@@ -2,7 +2,10 @@
 // Booleans are stored as 0/1 integers in SQLite; we expose them as numbers
 // at the DB boundary and convert where convenient.
 
-export type ItemType = "event" | "reminder" | "todo" | "note" | "person";
+// ItemType lives in @secondbrain/shared (the Worker validates path segments
+// against it). Re-exported here since the whole app imports it from "./types".
+export type { ItemType } from "@secondbrain/shared";
+import type { ItemType } from "@secondbrain/shared";
 
 /**
  * A pointer to one item, used to render it as a card in the assistant chat.
@@ -98,19 +101,9 @@ export interface PersonCustomField { label: string; value: string }
 // how the client parses the JSON columns, which the server treats as opaque text.
 export type { PersonRow, CustomFieldDef } from "@secondbrain/shared";
 
-export interface TagRow {
-  id: string;
-  name: string;
-}
-
-export interface LinkRow {
-  id: string;
-  source_type: ItemType;
-  source_id: string;
-  target_type: ItemType;
-  target_id: string;
-  created_at: string | null;
-}
+// TagRow and LinkRow are defined in @secondbrain/shared (the Worker returns
+// them). Re-exported here like the other row types.
+export type { TagRow, LinkRow } from "@secondbrain/shared";
 
 // Priority levels shared by reminders & todos (iCal-ish: 0 none, 1 low..9 high;
 // we keep it simple with 0/1/2/3).

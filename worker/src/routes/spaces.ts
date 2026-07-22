@@ -5,6 +5,8 @@ import {
   eventCreateSchema,
   eventQuerySchema,
   eventUpdateSchema,
+  itemTypeSchema,
+  linkCreateSchema,
   listCreateSchema,
   listUpdateSchema,
   personCreateSchema,
@@ -13,6 +15,7 @@ import {
   reminderCreateSchema,
   reminderQuerySchema,
   reminderUpdateSchema,
+  tagAttachSchema,
   todoCreateSchema,
   todoQuerySchema,
   todoReorderSchema,
@@ -56,6 +59,17 @@ import {
   listEvents,
   updateEvent,
 } from "../db/events";
+import {
+  createLink,
+  deleteLink,
+  itemIdsForTag,
+  linksForItem,
+  listTags,
+  removeItemRelations,
+  tagItem,
+  tagsForItem,
+  untagItem,
+} from "../db/relations";
 
 /**
  * Space-scoped domain routes: `/v1/spaces/:spaceId/(lists|todos)`.
@@ -295,5 +309,67 @@ spaces.patch("/spaces/:spaceId/events/:id", async (c) => {
 spaces.delete("/spaces/:spaceId/events/:id", async (c) => {
   await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
   await deleteEvent(c.env.DB, spaceId(c), c.req.param("id"));
+  return c.body(null, 204);
+});
+
+// ---------------------------------------------------------------------------
+// Tags + links (cross-cutting). `:type` is validated against the ItemType enum
+// so a bad path segment is a 400, not an SQL surprise.
+// ---------------------------------------------------------------------------
+
+const itemType = (c: { req: { param: (k: string) => string } }) =>
+  itemTypeSchema.parse(c.req.param("type"));
+
+spaces.get("/spaces/:spaceId/tags", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "read");
+  return c.json(await listTags(c.env.DB, spaceId(c)));
+});
+
+spaces.get("/spaces/:spaceId/tags/:name/item-ids", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "read");
+  const type = itemTypeSchema.parse(new URL(c.req.url).searchParams.get("type"));
+  const ids = await itemIdsForTag(c.env.DB, spaceId(c), type, c.req.param("name"));
+  return c.json(ids);
+});
+
+spaces.get("/spaces/:spaceId/items/:type/:id/tags", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "read");
+  return c.json(await tagsForItem(c.env.DB, spaceId(c), itemType(c), c.req.param("id")));
+});
+
+spaces.post("/spaces/:spaceId/items/:type/:id/tags", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  const { name } = tagAttachSchema.parse(await c.req.json());
+  return c.json(await tagItem(c.env.DB, spaceId(c), itemType(c), c.req.param("id"), name), 201);
+});
+
+spaces.delete("/spaces/:spaceId/items/:type/:id/tags/:tagId", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  await untagItem(c.env.DB, spaceId(c), itemType(c), c.req.param("id"), c.req.param("tagId"));
+  return c.body(null, 204);
+});
+
+spaces.get("/spaces/:spaceId/items/:type/:id/links", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "read");
+  return c.json(await linksForItem(c.env.DB, spaceId(c), itemType(c), c.req.param("id")));
+});
+
+// Deletes every tag and link touching an item — called when the item itself is
+// deleted (the item's own row is removed by its domain endpoint).
+spaces.delete("/spaces/:spaceId/items/:type/:id/relations", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  await removeItemRelations(c.env.DB, spaceId(c), itemType(c), c.req.param("id"));
+  return c.body(null, 204);
+});
+
+spaces.post("/spaces/:spaceId/links", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  const input = linkCreateSchema.parse(await c.req.json());
+  return c.json(await createLink(c.env.DB, spaceId(c), input), 201);
+});
+
+spaces.delete("/spaces/:spaceId/links/:id", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  await deleteLink(c.env.DB, spaceId(c), c.req.param("id"));
   return c.body(null, 204);
 });
