@@ -61,6 +61,10 @@ interface RequestOptions {
   body?: unknown;
   /** Auth endpoints that must not trigger the refresh-and-retry loop. */
   anonymous?: boolean;
+  /** Cancels the request. Search boxes debounce and then abort the previous
+   *  in-flight call; without this an older, slower response can land last and
+   *  overwrite the newer one. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -113,7 +117,7 @@ async function refreshAccessToken(): Promise<void> {
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = "GET", body, anonymous = false } = options;
+  const { method = "GET", body, anonymous = false, signal } = options;
 
   if (!anonymous && !getAccessToken()) await refreshAccessToken();
 
@@ -127,8 +131,13 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
+        ...(signal ? { signal } : {}),
       });
-    } catch {
+    } catch (e) {
+      // An abort is the caller's own doing, not a network failure — reporting
+      // it as OfflineError would put a spurious "you're offline" banner on
+      // screen every time a search box moved on.
+      if (e instanceof DOMException && e.name === "AbortError") throw e;
       // fetch only rejects on a transport failure — DNS, refused connection,
       // no network. An HTTP error status resolves normally.
       throw new OfflineError();

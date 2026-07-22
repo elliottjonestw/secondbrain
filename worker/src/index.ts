@@ -6,6 +6,7 @@ import { corsMiddleware } from "./middleware/cors";
 import { health } from "./routes/health";
 import { auth } from "./routes/auth";
 import { spaces } from "./routes/spaces";
+import { quotes } from "./routes/quotes";
 
 /**
  * Second Brain API.
@@ -30,6 +31,7 @@ app.use("*", corsMiddleware());
 app.route("/v1", health);
 app.route("/v1", auth);
 app.route("/v1", spaces);
+app.route("/v1", quotes);
 
 app.notFound((c) =>
   c.json({ error: { code: "not_found", message: "No such endpoint." } }, 404),

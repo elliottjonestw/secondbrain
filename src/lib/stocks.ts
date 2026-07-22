@@ -16,17 +16,54 @@
 // written to SQLite. They're live data cached in localStorage for minutes, and
 // a persisted price is just yesterday's number shown confidently.
 //
-// Requests go through tauri-plugin-http's fetch (runs in Rust) — the webview's
-// own fetch is blocked by CORS from tauri://, and the host is scoped in
-// capabilities/default.json.
+// TWO transports, picked at runtime, because Yahoo sends no CORS headers:
+//
+//   * In the app, tauri-plugin-http's fetch runs in Rust, outside the browser's
+//     origin rules, and calls Yahoo directly. The host is scoped in
+//     capabilities/default.json.
+//   * On the web that's impossible — the browser refuses before the request
+//     leaves — so the call goes through the Worker's narrow /v1/quotes proxy
+//     instead. See worker/src/routes/quotes.ts for why that proxy takes a
+//     symbol and never a URL.
+//
+// Desktop deliberately does NOT use the proxy: it doesn't need it, and routing
+// it through the Worker would spend request quota to solve a problem that only
+// browsers have.
 
 import { httpFetch as fetch } from "./httpFetch";
+import { apiRequest } from "./api";
+import { isTauri } from "./platform";
 import type { StockSymbol } from "./settings";
 
 export type { StockSymbol };
 
 const CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart";
 const SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search";
+
+/** Yahoo's chart JSON for one symbol, however it has to be reached. */
+async function fetchChart(ticker: string, params: URLSearchParams, signal?: AbortSignal): Promise<any> {
+  if (!isTauri()) {
+    return apiRequest<any>(`/v1/quotes/chart/${encodeURIComponent(ticker)}?${params}`, { signal });
+  }
+  const res = await fetch(`${CHART_URL}/${encodeURIComponent(ticker)}?${params}`, {
+    method: "GET",
+    signal,
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+/** Yahoo's symbol search, however it has to be reached. Throws on failure —
+ *  unlike quotes, a silent empty result is indistinguishable from "no match". */
+async function fetchSearch(q: string, signal?: AbortSignal): Promise<any> {
+  if (!isTauri()) {
+    return apiRequest<any>(`/v1/quotes/search?q=${encodeURIComponent(q)}`, { signal });
+  }
+  const params = new URLSearchParams({ q, quotesCount: "8", newsCount: "0" });
+  const res = await fetch(`${SEARCH_URL}?${params}`, { method: "GET", signal });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
 
 /**
  * How many symbols a watchlist may hold.
@@ -169,12 +206,8 @@ export async function getQuote(symbol: string, signal?: AbortSignal): Promise<Qu
   const params = new URLSearchParams({ range: "1d", interval: "5m" });
 
   try {
-    const res = await fetch(`${CHART_URL}/${encodeURIComponent(ticker)}?${params}`, {
-      method: "GET",
-      signal,
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
+    const data = await fetchChart(ticker, params, signal);
+    if (!data) return null;
     // Refusals come back as `{ chart: { result: null, error: {...} } }`.
     const result = data?.chart?.result?.[0];
     if (!result || data?.chart?.error) return null;
@@ -264,11 +297,7 @@ function isMarketOpen(regular: unknown): boolean {
 export async function searchSymbols(query: string, signal?: AbortSignal): Promise<SymbolResult[]> {
   const q = query.trim();
   if (!q) return [];
-  const params = new URLSearchParams({ q, quotesCount: "8", newsCount: "0" });
-
-  const res = await fetch(`${SEARCH_URL}?${params}`, { method: "GET", signal });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
+  const data = await fetchSearch(q, signal);
   const quotes = Array.isArray(data?.quotes) ? data.quotes : [];
 
   return quotes
