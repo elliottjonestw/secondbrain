@@ -1,23 +1,15 @@
-// Demo data seeding, triggered by a secret keystroke (see App.tsx).
-// resetAndSeedDemo() wipes local data and re-seeds the still-local domains.
+// Local-data helpers. Historically this also seeded a demo dataset, but every
+// domain is remote now (M2–M4), so there is nothing local left to seed.
 
 import {
   db,
   DATA_TABLES,
-  upsertNote,
 } from "../db";
 
-// Migration note: as each domain moves to the Worker it leaves this seeder,
-// which auto-runs on every browser dev load (browserDb reseeds each time) —
-// seeding a remote domain here would hammer the Worker and pile up duplicates.
-// Remote already: todos, lists, reminders, people, events (M2/M3). Notes are
-// the only domain still seeded here; once notes move (M4) this seeder — and the
-// whole browserDb demo path — retires. A freshly registered account gets its
-// Personal/Work lists from the server.
-
-/** Remove every row from every LOCAL user table. Most of DATA_TABLES now names
- *  empty, unused local tables (their data lives on the server), so the DELETE
- *  is a harmless no-op there and the remote copies are untouched. */
+/** Remove every row from every LOCAL user table. Post-migration this only
+ *  reaches note-image bytes (still local until M4b) and otherwise-empty tables;
+ *  it does NOT clear the account's remote data. Settings' "clear all data" uses
+ *  it, and it will be reworked into a server-side wipe alongside backup. */
 export async function clearAllData(): Promise<void> {
   const d = await db();
   for (const table of DATA_TABLES) {
@@ -25,35 +17,13 @@ export async function clearAllData(): Promise<void> {
   }
 }
 
+/**
+ * Retired. It used to wipe and re-seed a demo dataset, and it still runs on
+ * every browser dev load — but with all domains remote, seeding here would
+ * write to the signed-in account (or throw before sign-in). It now does
+ * nothing; the demo easter egg and the whole browserDb demo path go away in the
+ * migration's finale. Kept as a no-op so its callers still compile.
+ */
 export async function resetAndSeedDemo(): Promise<void> {
-  await clearAllData();
-
-  // Notes are the ONLY domain still seeded here — everything else (events,
-  // reminders, todos, lists, people) plus all tags and links are remote now
-  // (M2/M3), and this seeder auto-runs on every browser dev load, so seeding a
-  // remote domain would pollute the real space. Even the note's demo tag is
-  // gone: item_tags is remote, and each dev load mints a new note id, so
-  // tagging would pile up orphaned item_tags rows.
-
-  // ---- Notes (markdown) ----
-  await upsertNote({
-    title: "Standup notes",
-    body: "## This week\n\n- Shipped the new onboarding flow\n- **Blocked** on API keys for the payments integration\n- Next: start the Q3 report\n\n> Follow up with Alex about the design review.",
-    pinned: 0,
-  });
-  await upsertNote({
-    title: "Project ideas",
-    body: "# Ideas\n\n1. A CLI for managing dotfiles\n2. Habit tracker with streaks\n3. This app — a *second brain* 🧠\n\n- [ ] Sketch the data model\n- [x] Pick the stack",
-    pinned: 1,
-  });
-  await upsertNote({
-    title: "Books to read",
-    body: "- *Thinking, Fast and Slow*\n- *The Pragmatic Programmer*\n- *Deep Work*",
-    pinned: 1,
-  });
-  await upsertNote({
-    title: "Grocery meal plan",
-    body: "**Mon** stir fry\n**Tue** tacos\n**Wed** pasta",
-    pinned: 0,
-  });
+  /* no-op — see the doc comment */
 }

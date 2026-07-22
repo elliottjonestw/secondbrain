@@ -56,14 +56,8 @@ export type { ReminderRow } from "@secondbrain/shared";
 // imports its domain types from "./types".
 export type { TodoRow, ListRow } from "@secondbrain/shared";
 
-export interface NoteRow {
-  id: string;
-  title: string | null;
-  body: string | null;
-  pinned: number;
-  created_at: string | null;
-  updated_at: string | null;
-}
+// NoteRow is defined in @secondbrain/shared (the Worker returns it).
+export type { NoteRow } from "@secondbrain/shared";
 
 // An image embedded in a note. The markdown in `NoteRow.body` carries only
 // `![alt](sbimg:<id>)`; the bytes live in their own table so the note list and

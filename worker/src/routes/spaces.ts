@@ -9,6 +9,9 @@ import {
   linkCreateSchema,
   listCreateSchema,
   listUpdateSchema,
+  noteCreateSchema,
+  noteQuerySchema,
+  noteUpdateSchema,
   personCreateSchema,
   personQuerySchema,
   personUpdateSchema,
@@ -59,6 +62,13 @@ import {
   listEvents,
   updateEvent,
 } from "../db/events";
+import {
+  createNote,
+  deleteNote,
+  getNote,
+  listNotes,
+  updateNote,
+} from "../db/notes";
 import {
   createLink,
   deleteLink,
@@ -309,6 +319,45 @@ spaces.patch("/spaces/:spaceId/events/:id", async (c) => {
 spaces.delete("/spaces/:spaceId/events/:id", async (c) => {
   await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
   await deleteEvent(c.env.DB, spaceId(c), c.req.param("id"));
+  return c.body(null, 204);
+});
+
+// ---------------------------------------------------------------------------
+// Notes (markdown + trigram FTS). Images arrive in M4b.
+// ---------------------------------------------------------------------------
+
+spaces.get("/spaces/:spaceId/notes", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "read");
+  const query = noteQuerySchema.parse(Object.fromEntries(new URL(c.req.url).searchParams));
+  return c.json(await listNotes(c.env.DB, spaceId(c), query));
+});
+
+spaces.post("/spaces/:spaceId/notes", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  const input = noteCreateSchema.parse(await c.req.json());
+  return c.json(await createNote(c.env.DB, spaceId(c), input), 201);
+});
+
+spaces.get("/spaces/:spaceId/notes/:id", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "read");
+  const row = await getNote(c.env.DB, spaceId(c), c.req.param("id"));
+  if (!row) throw notFound("No such note.");
+  return c.json(row);
+});
+
+spaces.patch("/spaces/:spaceId/notes/:id", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  const body = await c.req.json().catch(() => null);
+  if (body === null || typeof body !== "object") throw badRequest("Expected a JSON object.");
+  const patch = noteUpdateSchema.parse(body);
+  return c.json(await updateNote(c.env.DB, spaceId(c), c.req.param("id"), patch));
+});
+
+spaces.delete("/spaces/:spaceId/notes/:id", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  // deleteNote returns the R2 keys of this note's images; purging them is wired
+  // in M4b when images move to R2. Until then there are none.
+  await deleteNote(c.env.DB, spaceId(c), c.req.param("id"));
   return c.body(null, 204);
 });
 

@@ -53,6 +53,15 @@ export interface ReminderRow {
   updated_at: string | null;
 }
 
+export interface NoteRow {
+  id: string;
+  title: string | null;
+  body: string | null;
+  pinned: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 export interface EventRow {
   id: string;
   summary: string;
@@ -294,6 +303,60 @@ export const eventQuerySchema = z.object({ q: z.string().max(200).optional() });
 export type EventCreate = z.infer<typeof eventCreateSchema>;
 export type EventUpdate = z.infer<typeof eventUpdateSchema>;
 export type EventQuery = z.infer<typeof eventQuerySchema>;
+
+// ---------------------------------------------------------------------------
+// Notes (markdown). title/body nullable; images are `sbimg:<id>` refs in the
+// body, stored separately (see the note-image schemas below).
+// ---------------------------------------------------------------------------
+
+const noteFields = {
+  title: z.string().max(2000).nullable(),
+  body: z.string().max(1_000_000).nullable(),
+  pinned: boolInt,
+};
+
+export const noteCreateSchema = z.object({ id: idSchema, ...noteFields });
+
+export const noteUpdateSchema = z.object({
+  title: noteFields.title.optional(),
+  body: noteFields.body.optional(),
+  pinned: noteFields.pinned.optional(),
+});
+
+export const noteQuerySchema = z.object({ q: z.string().max(200).optional() });
+
+export type NoteCreate = z.infer<typeof noteCreateSchema>;
+export type NoteUpdate = z.infer<typeof noteUpdateSchema>;
+export type NoteQuery = z.infer<typeof noteQuerySchema>;
+
+// ---------------------------------------------------------------------------
+// Note images. Bytes live in R2 (D1 caps a row at 2 MB); D1 holds only
+// metadata. Uploaded as base64 in JSON — images are downscaled small first, and
+// base64 round-trips fine through the bridge.
+// ---------------------------------------------------------------------------
+
+export interface NoteImageMeta {
+  id: string;
+  note_id: string;
+  mime: string;
+  width: number;
+  height: number;
+  byte_size: number;
+  created_at: string;
+}
+
+export const noteImageCreateSchema = z.object({
+  id: idSchema,
+  mime: z.enum(["image/png", "image/jpeg", "image/webp", "image/gif"]),
+  /** base64, no data: prefix. ~2.7 MB base64 ≈ 2 MB bytes — bounded under R2's
+   *  practical single-PUT comfort and well under what a downscaled note image
+   *  produces. */
+  data: z.string().min(1).max(4_000_000),
+  width: z.number().int().min(1).max(20000),
+  height: z.number().int().min(1).max(20000),
+});
+
+export type NoteImageCreate = z.infer<typeof noteImageCreateSchema>;
 
 // ---------------------------------------------------------------------------
 // People (vCard-shaped). Multi-value fields are JSON strings, validated only as

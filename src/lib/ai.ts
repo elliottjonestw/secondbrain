@@ -25,7 +25,7 @@ import { ageFromBirthday, nextBirthday } from "./format";
 import { LANGUAGES, currentLanguage } from "./i18n";
 import type { ItemRef, ItemType, UnifiedEvent } from "../types";
 import {
-  db, listLists, listEvents, listTodos, getTodo, listReminders, getReminder, listTags, itemIdsForTag, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
+  db, listLists, listEvents, listNotes, getNote, listTodos, getTodo, listReminders, getReminder, listTags, itemIdsForTag, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
   matchQuery,
   upsertTodo, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
   deleteTodo, deleteReminder, deleteNote, deleteList,
@@ -135,14 +135,18 @@ const WRITE_TABLES = { event: "events", reminder: "reminders", todo: "todos", no
 
 async function getRowById(table: string, id: unknown): Promise<any | null> {
   if (typeof id !== "string" || !id) return null;
-  // Todos are remote (M2): a local SELECT would hit an empty table and make
-  // update_todo / delete_todo report "no such todo" for todos that exist.
-  if (table === "todos") return (await getTodo(id)) ?? null;
-  if (table === "reminders") return (await getReminder(id)) ?? null;
-  if (table === "people") return (await getPerson(id)) ?? null;
-  const d = await db();
-  const rows = await d.select<any[]>(`SELECT * FROM ${table} WHERE id = ?`, [id]);
-  return rows[0] ?? null;
+  // Every domain is remote now (M2–M4): a local SELECT would hit an empty table
+  // and make existence checks (tag/link/update/delete) report "not found" for
+  // items that exist. Events go through calendars.ts, which also covers the
+  // connected CalDAV calendars, not just the built-in one.
+  switch (table) {
+    case "todos": return (await getTodo(id)) ?? null;
+    case "reminders": return (await getReminder(id)) ?? null;
+    case "people": return (await getPerson(id)) ?? null;
+    case "notes": return (await getNote(id)) ?? null;
+    case "events": return (await findEventById(id)) ?? null;
+    default: return null;
+  }
 }
 
 /** Resolve a list name to its id (case-insensitive); null if not found. */
@@ -745,15 +749,11 @@ const TOOLS = [
 // Tool executors (read-only)
 // ---------------------------------------------------------------------------
 async function toolGetOverview() {
-  const d = await db();
-  const one = async (sql: string) => (await d.select<{ n: number }[]>(sql))[0]?.n ?? 0;
-  // Todos are remote (M2); count them from the fetched list rather than a local
-  // SELECT, which would now count an empty table and make the assistant report
-  // zero todos. Other domains are still local.
-  // Todos and reminders are remote (M2/M3); count from the fetched lists rather
-  // than a local SELECT on an empty table. Other domains are still local.
-  const [lists, tags, todos, reminders, people, events] = await Promise.all([
-    listLists(), listTags(), listTodos(), listReminders(), listPeople(), listEvents(),
+  // Every domain is remote now (M2–M4); count from the fetched lists. The
+  // built-in calendar's event count only — connected CalDAV events are a live
+  // windowed fetch, not a stored total.
+  const [lists, tags, todos, reminders, people, events, notes] = await Promise.all([
+    listLists(), listTags(), listTodos(), listReminders(), listPeople(), listEvents(), listNotes(),
   ]);
   return {
     now: toLocalIso(new Date().toISOString()),
@@ -766,7 +766,7 @@ async function toolGetOverview() {
       todos_active: todos.filter((t) => t.completed === 0).length,
       reminders: reminders.length,
       reminders_active: reminders.filter((r) => r.completed === 0).length,
-      notes: await one("SELECT COUNT(*) n FROM notes"),
+      notes: notes.length,
       people: people.length,
     },
     lists: lists.map((l) => l.name),
@@ -979,17 +979,13 @@ async function toolSearchReminders(args: Record<string, unknown>) {
 }
 
 async function toolSearchNotes(args: Record<string, unknown>) {
-  const d = await db();
   const limit = clampLimit(args.limit);
   const q = typeof args.query === "string" ? args.query.trim() : "";
 
-  // Reuse db.ts's searchNotes rather than reimplementing the query. This used
-  // to be an inline copy, which meant the CJK/short-query handling had to be
-  // fixed in two places — and wasn't, so the assistant reported "no notes" for
-  // Chinese notes that existed. The pinned filter is applied afterwards.
-  const found: any[] = q
-    ? await searchNotes(q)
-    : await d.select<any[]>("SELECT * FROM notes ORDER BY pinned DESC, updated_at DESC");
+  // Reuse db.ts's searchNotes (remote FTS) rather than reimplementing the query,
+  // so the CJK/short-query handling lives in one place. No query lists all notes
+  // via listNotes(). The pinned filter is applied afterwards.
+  const found: any[] = q ? await searchNotes(q) : await listNotes();
   const rows = args.pinned === true ? found.filter((n) => n.pinned === 1) : found;
 
   return {

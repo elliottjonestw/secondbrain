@@ -28,9 +28,9 @@ import { networkFirst } from "./lib/cache";
 
 // Ranking helpers now live in @secondbrain/shared so the Worker runs the same
 // code (one copy of the phrasing-bug fix CLAUDE.md documents). Re-exported here
-// because ai.ts and SearchView import them from db.
+// because ai.ts and SearchView import them from db. db.ts itself no longer
+// searches locally, so it doesn't use them directly.
 export { queryTerms, escapeLike, anyTermClause, matchQuery } from "@secondbrain/shared";
-import { queryTerms, escapeLike } from "@secondbrain/shared";
 
 /** Build a space-scoped API path, or throw if no session is active. The throw
  *  is a programmer-error guard: the AuthGate guarantees a session before any
@@ -394,47 +394,42 @@ export async function deleteTodo(id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Notes (+ FTS search)
+// Notes — served by the Worker (M4), including the trigram FTS search. Note
+// IMAGES are still local SQLite until M4b (bytes move to R2 then).
 // ---------------------------------------------------------------------------
 export async function listNotes(): Promise<NoteRow[]> {
-  return (await db()).select<NoteRow[]>(
-    "SELECT * FROM notes ORDER BY pinned DESC, updated_at DESC",
+  return networkFirst(`notes:${getCurrentSpaceId()}`, () =>
+    apiRequest<NoteRow[]>(spacePath("/notes")),
   );
 }
 
 export async function getNote(id: string): Promise<NoteRow | undefined> {
-  const rows = await (await db()).select<NoteRow[]>("SELECT * FROM notes WHERE id = ?", [id]);
-  return rows[0];
+  try {
+    return await apiRequest<NoteRow>(spacePath(`/notes/${id}`));
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return undefined;
+    throw e;
+  }
 }
 
 export type NoteInput = Omit<NoteRow, "id" | "created_at" | "updated_at"> & { id?: string };
 
 export async function upsertNote(input: NoteInput): Promise<string> {
-  const d = await db();
-  const now = nowIso();
+  const fields = { title: input.title, body: input.body, pinned: input.pinned as 0 | 1 };
   if (input.id) {
-    await d.execute(
-      "UPDATE notes SET title=?, body=?, pinned=?, updated_at=? WHERE id=?",
-      [input.title, input.body, input.pinned, now, input.id],
-    );
+    await apiRequest<NoteRow>(spacePath(`/notes/${input.id}`), { method: "PATCH", body: fields });
     return input.id;
   }
   const id = newId();
-  await d.execute(
-    "INSERT INTO notes (id, title, body, pinned, created_at, updated_at) VALUES (?,?,?,?,?,?)",
-    [id, input.title, input.body, input.pinned, now, now],
-  );
+  await apiRequest<NoteRow>(spacePath("/notes"), { method: "POST", body: { id, ...fields } });
   return id;
 }
 
 export async function deleteNote(id: string): Promise<void> {
-  const d = await db();
-  // Images first, then the note: there's no FK cascade and no cross-call
-  // transaction (see importTables' atomicity note), so if the second execute
-  // fails we want the note to still exist so a future delete can retry — not
-  // orphaned image rows pointing at a note that's already gone.
-  await d.execute("DELETE FROM note_images WHERE note_id=?", [id]); // no FK cascade — see 006
-  await d.execute("DELETE FROM notes WHERE id=?", [id]);
+  await apiRequest<void>(spacePath(`/notes/${id}`), { method: "DELETE" });
+  // The server removed the note's image ROWS; the local image BYTES (still in
+  // SQLite until M4b) are cleaned up here so they don't linger.
+  await (await db()).execute("DELETE FROM note_images WHERE note_id=?", [id]);
   await removeItemRelations("note", id);
 }
 
@@ -462,27 +457,6 @@ export async function getNoteImage(id: string): Promise<NoteImageRow | undefined
     [id],
   );
   return rows[0];
-}
-
-/** Shortest query the trigram tokenizer can answer (see 005_fts_trigram.sql). */
-const TRIGRAM_MIN = 3;
-
-/**
- * Build an FTS5 MATCH expression, or null when the index can't answer it.
- *
- * Each whitespace-separated term becomes a quoted phrase, AND-ed together, so
- * multi-word Latin queries still work while a CJK query — which has no spaces
- * and so arrives as a single term — is substring-matched as a whole.
- *
- * Returns null if any term is shorter than three characters: the trigram
- * tokenizer silently matches nothing there, and Chinese words are very often
- * exactly two characters (北京, 會議). Callers must fall back to LIKE.
- */
-function ftsMatchExpr(query: string): string | null {
-  const terms = queryTerms(query);
-  if (terms.length === 0) return null;
-  if (terms.some((t) => [...t].length < TRIGRAM_MIN)) return null;
-  return terms.map((t) => `"${t}"`).join(" AND ");
 }
 
 // searchRows (the local term-search-over-a-table helper) is gone: todos,
@@ -530,46 +504,19 @@ export async function searchEventRows(query: string): Promise<EventRow[]> {
 }
 
 /**
- * Full-text search over notes.
- *
- * Two paths on purpose: FTS5 (ranked) when the trigram index can answer the
- * query, plain LIKE otherwise. The LIKE path is not just an error fallback —
- * it is the *only* thing that can match short queries, which for Chinese means
- * most of them.
+ * Full-text search over notes (M4). The trigram-FTS-or-LIKE decision now lives
+ * server-side (worker/src/db/notes.ts); both paths AND the terms and agree, and
+ * the LIKE path still carries sub-3-character queries (most Chinese words).
+ * Offline degrades to empty, like the other searches.
  */
 export async function searchNotes(query: string): Promise<NoteRow[]> {
   const q = query.trim();
   if (!q) return [];
-  const d = await db();
-
-  // AND the terms, matching what the FTS path does. Matching the raw query as
-  // one literal substring would make "北京 預算" fail on a note containing both
-  // words apart — and for Chinese this is the path most queries take, so the
-  // two paths have to agree.
-  const likeSearch = () => {
-    const terms = queryTerms(q);
-    if (terms.length === 0) return Promise.resolve([] as NoteRow[]);
-    const clause = terms.map(() => "(title LIKE ? ESCAPE '\\' OR body LIKE ? ESCAPE '\\')").join(" AND ");
-    const params = terms.flatMap((t) => [`%${escapeLike(t)}%`, `%${escapeLike(t)}%`]);
-    return d.select<NoteRow[]>(
-      `SELECT * FROM notes WHERE ${clause} ORDER BY updated_at DESC`,
-      params,
-    );
-  };
-
-  const match = ftsMatchExpr(q);
-  if (!match) return likeSearch();
-
   try {
-    return await d.select<NoteRow[]>(
-      `SELECT n.* FROM notes n
-       JOIN notes_fts f ON f.rowid = n.rowid
-       WHERE notes_fts MATCH ?
-       ORDER BY rank`,
-      [match],
-    );
-  } catch {
-    return likeSearch();
+    return await apiRequest<NoteRow[]>(spacePath(`/notes?q=${encodeURIComponent(q)}`));
+  } catch (e) {
+    if (e instanceof OfflineError) return [];
+    throw e;
   }
 }
 
@@ -765,17 +712,14 @@ export async function linksForItem(type: ItemType, id: string): Promise<LinkRow[
 export async function allLinkTargets(): Promise<
   { type: ItemType; id: string; label: string }[]
 > {
-  const [events, reminders, todos, people] = await Promise.all([
-    listEvents(), listReminders(), listTodos(), listPeople(),
+  const [events, reminders, todos, notes, people] = await Promise.all([
+    listEvents(), listReminders(), listTodos(), listNotes(), listPeople(),
   ]);
-  const noteRows = await (await db()).select<{ id: string; title: string | null }[]>(
-    "SELECT id, title FROM notes",
-  );
   return [
     ...events.map((e) => ({ type: "event" as ItemType, id: e.id, label: e.summary })),
     ...reminders.map((r) => ({ type: "reminder" as ItemType, id: r.id, label: r.title })),
     ...todos.map((t) => ({ type: "todo" as ItemType, id: t.id, label: t.title })),
-    ...noteRows.map((n) => ({ type: "note" as ItemType, id: n.id, label: n.title || "(untitled)" })),
+    ...notes.map((n) => ({ type: "note" as ItemType, id: n.id, label: n.title || "(untitled)" })),
     ...people.map((p) => ({ type: "person" as ItemType, id: p.id, label: p.full_name })),
   ];
 }
@@ -793,12 +737,7 @@ export async function getItemLabel(type: ItemType, id: string): Promise<string> 
     case "reminder": return (await getReminder(id))?.title || "(untitled)";
     case "todo": return (await getTodo(id))?.title || "(untitled)";
     case "person": return (await getPerson(id))?.full_name || "(untitled)";
-    case "note": {
-      const rows = await (await db()).select<{ title: string | null }[]>(
-        "SELECT title FROM notes WHERE id=?", [id],
-      );
-      return rows[0]?.title || "(untitled)";
-    }
+    case "note": return (await getNote(id))?.title || "(untitled)";
   }
 }
 
