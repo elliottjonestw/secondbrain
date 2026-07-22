@@ -8,12 +8,17 @@
 #
 # The release is created as a DRAFT so you can check the artifacts and write the
 # notes before anyone can download it — publish it from the Releases page.
+#
+# The "Run workflow" button on the Actions page does the same thing without a
+# tag push: it builds both platforms and uploads them to a draft release named
+# after the version in src-tauri/tauri.conf.json.
 name: Release
 
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 # tauri-action creates the release and uploads to it, which needs write access.
 permissions:
@@ -57,14 +62,21 @@ jobs:
 
       - run: npm ci
 
+      # Builds, then creates (or reuses) the draft release and uploads to it.
       # Runs `beforeBuildCommand` (tsc + vite build) itself, so a type error
-      # fails the release rather than shipping a stale dist/.
+      # fails the run rather than shipping a stale dist/.
+      #
+      # A manual run has no tag to name the release after, so it uses the app
+      # version instead — tauri-action expands `__VERSION__` from
+      # src-tauri/tauri.conf.json and tags the commit it built. Re-running
+      # without bumping that version therefore adds to the SAME draft release
+      # rather than making a new one.
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Second Brain ${{ github.ref_name }}
+          tagName: ${{ github.event_name == 'push' && github.ref_name || 'v__VERSION__' }}
+          releaseName: Second Brain ${{ github.event_name == 'push' && github.ref_name || 'v__VERSION__' }}
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
