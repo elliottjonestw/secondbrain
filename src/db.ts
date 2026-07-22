@@ -394,11 +394,35 @@ export async function insertNoteImage(
   img: { mime: string; data: string; width: number; height: number },
 ): Promise<string> {
   const id = newId();
+  await putNoteImage(noteId, id, img);
+  return id;
+}
+
+/** Upload image bytes under a CALLER-CHOSEN id. Restore needs this: the note
+ *  body references `sbimg:<id>`, so an image that comes back with a fresh id is
+ *  an image the note can no longer find. The upload is idempotent on the id, so
+ *  a retried restore overwrites rather than duplicating. */
+export async function putNoteImage(
+  noteId: string,
+  id: string,
+  img: { mime: string; data: string; width: number; height: number },
+): Promise<void> {
   await apiRequest<unknown>(spacePath(`/notes/${noteId}/images`), {
     method: "POST",
     body: { id, mime: img.mime, data: img.data, width: img.width, height: img.height },
   });
-  return id;
+}
+
+/** Blob → base64, chunked. `String.fromCharCode(...bytes)` on a 300 KB image
+ *  spreads 300k arguments and blows the call stack. */
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
 }
 
 /** The bytes + dimensions for a `sbimg:` reference, fetched (authenticated) from
@@ -757,6 +781,22 @@ export async function exportTables(): Promise<Record<DataTable, Row[]>> {
     } while (cursor);
     out[table] = rows;
   }
+
+  // Image BYTES are not in any table — they live in KV, behind the per-image
+  // endpoint. Without this, a backup carries note_images metadata whose
+  // blob_key points at a key that won't exist after a restore, and every image
+  // in every note comes back broken. `blob_key` itself is dropped: it is a
+  // storage detail the server re-derives, and carrying it is what made a
+  // restore fail its NOT NULL constraint.
+  out.note_images = await Promise.all(
+    out.note_images.map(async (row) => {
+      const { blob_key: _blobKey, ...rest } = row;
+      const img = await getNoteImage(String(row.id));
+      // A missing image is not worth failing the whole backup over — the row is
+      // kept so the note still reports what it referenced.
+      return img ? { ...rest, data: await blobToBase64(img.blob) } : rest;
+    }),
+  );
   return out;
 }
 
@@ -806,6 +846,10 @@ async function writeAllTables(tables: Partial<Record<DataTable, Row[]>>): Promis
   await apiRequest<void>(spacePath("/data/clear"), { method: "POST" });
   for (const table of DATA_TABLES) {
     const rows = tables[table] ?? [];
+    if (table === "note_images") {
+      await restoreNoteImages(rows);
+      continue;
+    }
     // The Worker rejects batches over 1000 rows; stay well under so one batch
     // is also comfortably inside the CPU budget.
     for (let i = 0; i < rows.length; i += EXPORT_PAGE) {
@@ -814,6 +858,35 @@ async function writeAllTables(tables: Partial<Record<DataTable, Row[]>>): Promis
         body: { rows: rows.slice(i, i + EXPORT_PAGE) },
       });
     }
+  }
+}
+
+/**
+ * Images go back through the ordinary upload endpoint, not the table importer.
+ *
+ * The bytes have to reach KV, and only the upload path writes them — a raw row
+ * insert would produce metadata pointing at nothing, and `blob_key` is NOT NULL
+ * besides, so a file that doesn't carry one (any backup taken before the KV
+ * migration) fails outright. Going through the upload endpoint means the server
+ * derives the key, exactly as it does for a fresh image.
+ *
+ * This is also what makes a **pre-migration backup restorable**: the old local
+ * app stored base64 in a `data` column, which is precisely the field this path
+ * wants. A row with no `data` (image bytes already lost) is skipped rather than
+ * failing the restore — the note keeps its `sbimg:` reference and renders the
+ * missing-image chip, which is honest about what happened.
+ */
+async function restoreNoteImages(rows: Row[]): Promise<void> {
+  for (const row of rows) {
+    const data = row.data;
+    const noteId = row.note_id;
+    if (typeof data !== "string" || !data || typeof noteId !== "string") continue;
+    await putNoteImage(noteId, String(row.id), {
+      mime: typeof row.mime === "string" ? row.mime : "image/jpeg",
+      data,
+      width: Number(row.width) || 1,
+      height: Number(row.height) || 1,
+    });
   }
 }
 
