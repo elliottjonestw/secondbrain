@@ -1,12 +1,25 @@
 // CalDAV transport: authenticated WebDAV requests + XML helpers.
 //
 // This is a *network* client, not a data-access layer, so it deliberately lives
-// outside db.ts (which owns SQLite and nothing else). Every request goes through
-// tauri-plugin-http's fetch, which runs in Rust and so bypasses the CORS wall
-// that blocks calling other origins from the tauri:// webview. Parsing the XML
-// it returns is plain DOMParser work in JS — only the network hop needs Rust.
+// outside db.ts. Parsing the XML is plain DOMParser work in JS — only the
+// network hop needs help, and it needs a different kind on each platform:
+//
+//   * In the app, tauri-plugin-http's fetch runs in Rust and so bypasses the
+//     CORS wall that blocks calling other origins from the tauri:// webview.
+//     iCloud is reached DIRECTLY; nothing touches our server.
+//   * On the web that's impossible — iCloud sends no CORS headers and
+//     PROPFIND/REPORT always preflight — so requests are relayed through the
+//     Worker's /v1/dav route.
+//
+// The relay means the user's app-specific password and calendar contents pass
+// through our Worker in plaintext. That is a real privacy cost, accepted
+// deliberately so connected calendars work on the web; worker/src/routes/dav.ts
+// documents what keeps it tolerable and what hardening is still owed. The
+// desktop path is unaffected and still talks to Apple directly.
 
-import { httpFetch as fetch } from "../httpFetch";
+import { httpFetch } from "../httpFetch";
+import { isTauri } from "../platform";
+import { apiRequest } from "../api";
 import type { CalDavAccount } from "../settings";
 
 export const NS = {
@@ -52,6 +65,49 @@ export interface DavResponse {
 const REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
 const MAX_MANUAL_REDIRECTS = 5;
 
+/** Statuses the Response constructor refuses to pair with a body. DELETE
+ *  returns 204, so reconstructing a proxied response without this throws. */
+const NULL_BODY_STATUS = new Set([101, 103, 204, 205, 304]);
+
+/**
+ * One WebDAV hop, by whichever route this platform has.
+ *
+ * The web path rebuilds a real `Response` from the relay's JSON envelope, so
+ * the redirect loop below is identical on both platforms — it reads `.status`,
+ * `.headers.get()` and `.text()` and cannot tell which transport answered.
+ *
+ * A JSON envelope rather than proxying the verb itself: sending PROPFIND to our
+ * own Worker from a browser would need the method in the CORS preflight
+ * allowlist, and the bodies are small XML/iCalendar text either way.
+ */
+async function davFetch(
+  target: string,
+  method: string,
+  headers: Record<string, string>,
+  body?: string,
+): Promise<Response> {
+  if (isTauri()) {
+    return httpFetch(target, {
+      method,
+      headers,
+      body,
+      maxRedirections: 0, // see the note below — we re-attach auth ourselves
+      connectTimeout: 20000,
+    });
+  }
+
+  const relayed = await apiRequest<{
+    status: number;
+    headers: Record<string, string>;
+    body: string;
+  }>("/v1/dav", { method: "POST", body: { url: target, method, headers, body } });
+
+  return new Response(
+    NULL_BODY_STATUS.has(relayed.status) ? null : relayed.body,
+    { status: relayed.status, headers: relayed.headers },
+  );
+}
+
 /**
  * Issue an authenticated WebDAV request.
  *
@@ -79,13 +135,7 @@ export async function davRequest(
 
     let res: Response;
     try {
-      res = await fetch(target, {
-        method,
-        headers,
-        body: opts.body,
-        maxRedirections: 0, // see the note above — we re-attach auth ourselves
-        connectTimeout: 20000,
-      });
+      res = await davFetch(target, method, headers, opts.body);
     } catch (e) {
       throw new CalDavError(
         `Could not reach the calendar server. Check your connection. (${e instanceof Error ? e.message : String(e)})`,
