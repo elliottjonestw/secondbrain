@@ -61,9 +61,24 @@ open "src-tauri/target/release/bundle/macos/Second Brain.app"
 > [`docs/cloud-migration-plan.md`](docs/cloud-migration-plan.md) for the design
 > and [`worker/README.md`](worker/README.md) for the backend.
 >
-> **Milestone 0 of 5 is done** — infrastructure, the multi-tenant schema, and a
-> health endpoint. Nothing in the app has switched over yet: the sections below
-> describe how it works today, and stay accurate until M2.
+> **Milestones 0 and 1 of 5 are done.** M0 built the infrastructure and the
+> multi-tenant schema; M1 added accounts — the app now opens on a sign-in /
+> register screen, and no view mounts without a session.
+>
+> **App data has not moved yet.** Accounts, spaces and sessions live in
+> Cloudflare D1, but your calendar, reminders, to-dos, notes and people are
+> still read from the local SQLite file described below. That switchover is M2
+> and M3, so the sections below stay accurate until then.
+>
+> **Passwords are never sent to the server.** The client derives an argon2id key
+> from your password and sends only that; the server stores a keyed hash of it.
+> This is the same design Bitwarden and 1Password use. It means offline
+> cracking resistance is unchanged while the server never sees a plaintext
+> password — and it fits Cloudflare's free plan, whose 10 ms CPU cap per request
+> cannot accommodate a correctly tuned password hash.
+>
+> **There is no password reset yet** (planned for M5). Until then a forgotten
+> password means an unrecoverable account — the sign-up screen says so.
 
 A single SQLite file, `secondbrain.db`, in Tauri's app-data directory:
 
@@ -263,6 +278,16 @@ packages/shared/        # types + zod schemas + normalization, imported by BOTH
                         #   the two cannot drift
 src/
   db.ts                 # data-access layer (only module that touches SQLite)
+  lib/
+    api.ts              # the only path to the Worker: auth headers, token
+                        #   refresh (deduplicated), offline detection
+    auth.ts             # register / login / logout / restore, in UI terms
+    authStore.ts        # where the session lives on this device (swap this
+                        #   one file for an OS keychain on mobile)
+    kdf.ts              # client-side argon2id — the password never leaves here
+  components/auth/
+    AuthGate.tsx        # decides whether <App> mounts at all
+  views/AuthView.tsx    # sign in / create account
   types.ts              # domain types mirroring the schema
   locales/
     en/app.json         # translation catalogs (English is the source of truth)

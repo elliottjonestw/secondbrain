@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Home, Calendar, Bell, ListChecks, StickyNote, Users, Search, Brain, Sparkles, Settings as SettingsIcon, LucideIcon } from "lucide-react";
+import { Home, Calendar, Bell, ListChecks, StickyNote, Users, Search, Brain, Sparkles, Settings as SettingsIcon, LogOut, LucideIcon } from "lucide-react";
 import { Trans, useTranslation } from "react-i18next";
 import TodayView from "./views/TodayView";
 import CalendarView from "./views/CalendarView";
@@ -18,6 +18,8 @@ import { isAssistantConfigured } from "./lib/settings";
 import { db } from "./db";
 import { resetAndSeedDemo } from "./lib/demo";
 import { Modal, Button } from "./components/ui";
+import { logout } from "./lib/auth";
+import { getCachedSession } from "./lib/authStore";
 
 type View = "today" | "calendar" | "reminders" | "todos" | "notes" | "people" | "assistant" | "search" | "settings";
 
@@ -77,6 +79,19 @@ export default function App() {
     setMessages: setChatMessages,
     spaceEnabled: isAssistantConfigured() && (view === "assistant" || popupOpen),
   });
+
+  // Read once per render rather than held in state: AuthGate remounts this
+  // whole tree on a different user, so it cannot go stale underneath us.
+  const account = getCachedSession();
+
+  async function signOut() {
+    await logout();
+    // A full reload is the simplest correct reset. Every module-scoped cache in
+    // the app — dayData's revision counter, the notification poller's fired
+    // set, the assistant transcript — would otherwise survive into the next
+    // session, and enumerating them is a list that silently grows.
+    window.location.reload();
+  }
 
   // Each view reloads its own data after mutations and on mount; switching
   // views remounts the next one, so no global refresh signal is needed.
@@ -207,7 +222,23 @@ export default function App() {
             );
           })}
         </div>
-        <div className="px-2 pb-1">
+        {/* Account row. Signing out unmounts the whole tree via AuthGate,
+            which is what clears the assistant transcript and aborts any turn
+            in flight — both correct when someone else may be about to sign in. */}
+        <div className="border-t border-neutral-200 px-4 py-2 dark:border-neutral-700">
+          <p className="truncate text-xs text-neutral-500" title={account?.user.email}>
+            {account?.user.email}
+          </p>
+          <button
+            onClick={signOut}
+            className="mt-1 flex items-center gap-1.5 text-xs font-medium text-neutral-500 hover:text-red-600"
+          >
+            <LogOut size={13} className="shrink-0" />
+            {t("auth.signOut")}
+          </button>
+        </div>
+
+        <div className="px-2 pb-1 pt-1">
           <button
             onClick={() => navigate("settings")}
             className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium ${

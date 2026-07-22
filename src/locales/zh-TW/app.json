@@ -568,5 +568,23 @@
     "working": "處理中…",
     "thinking": "思考中…",
     "speaking": "朗讀中…"
+  },
+  "auth": {
+    "signIn": "登入",
+    "signOut": "登出",
+    "createAccount": "建立帳號",
+    "loginSubtitle": "登入即可在任何裝置上存取你的資料。",
+    "registerSubtitle": "建立帳號以在各裝置間同步。",
+    "email": "電子郵件",
+    "password": "密碼",
+    "confirmPassword": "確認密碼",
+    "passwordTooShort": "密碼至少需要 {{min}} 個字元。",
+    "passwordMismatch": "兩次輸入的密碼不一致。",
+    "noRecoveryWarning": "目前尚未提供密碼重設功能 — 若忘記此密碼，帳號將無法復原。",
+    "haveAccount": "已經有帳號了嗎？",
+    "noAccount": "還沒有帳號嗎？",
+    "working": "處理中…",
+    "offline": "目前離線。請連上網路後再登入。",
+    "genericError": "發生錯誤，請再試一次。"
   }
 }
