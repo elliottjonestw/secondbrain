@@ -61,20 +61,26 @@ open "src-tauri/target/release/bundle/macos/Second Brain.app"
 > [`docs/cloud-migration-plan.md`](docs/cloud-migration-plan.md) for the design
 > and [`worker/README.md`](worker/README.md) for the backend.
 >
-> **Milestones 0–2 of 5 are done.** M0 built the infrastructure and the
-> multi-tenant schema; M1 added accounts; **M2 moved the first domain —
-> to-dos and lists — to the cloud** as the vertical slice that sets the pattern
-> for the rest.
+> **Every domain now lives in the cloud.** M0 built the infrastructure and the
+> multi-tenant schema; M1 added accounts; M2–M4 moved all the data —
+> to-dos, lists, reminders, people, events, tags, links, and notes — to
+> **Cloudflare D1**, reached through a typed Worker API, with **note-image
+> bytes in R2** (D1 caps a row at 2 MB). Everything syncs across devices; reads
+> fall back to a local IndexedDB cache when offline, and writes are disabled
+> offline and say so.
 >
-> **To-dos and lists now live in Cloudflare D1**, reached through a typed
-> Worker API. They sync across devices, and reads fall back to a local
-> IndexedDB cache when you're offline (writes are disabled offline and say so).
-> **Calendar, reminders, notes and people are still local SQLite** until M3, so
-> those sections below stay accurate. This hybrid is deliberate and temporary.
+> **Still to do (the finale):** delete the now-unused local SQLite stack
+> (`tauri-plugin-sql`, `browserDb`, the local migrations) and rework
+> backup/restore + Settings' "clear all data" as server-side operations — those
+> still target the old local database and so currently only see notes/images.
+> Also outstanding: baking the deployed Worker URL into production builds
+> (`VITE_API_URL`) so a shipped DMG/EXE reaches Cloudflare instead of
+> `localhost`. The dev app already runs both together (`npm run tauri dev`
+> starts the Worker via `dev:app`).
 >
-> One interim consequence: the demo-data easter egg no longer seeds to-dos or
-> lists (they're remote now), only the still-local domains. A fresh account
-> starts with the server-created Personal and Work lists.
+> **The app is no longer standalone.** It now depends on the deployed Worker
+> being reachable — no Worker, no login. That is the trade the cloud migration
+> makes for cross-device sync.
 >
 > **Passwords are never sent to the server.** The client derives an argon2id key
 > from your password and sends only that; the server stores a keyed hash of it.

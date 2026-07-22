@@ -22,6 +22,13 @@ database_name = "secondbrain-dev"
 database_id = "REPLACE_ME_AFTER_wrangler_d1_create"
 migrations_dir = "migrations"
 
+# Note-image bytes (D1 caps a row at 2 MB). Locally, `wrangler dev` simulates R2
+# in .wrangler/state, so no real bucket is needed for development. Create the
+# bucket before the first remote deploy: `wrangler r2 bucket create <name>`.
+[[r2_buckets]]
+binding = "IMAGES"
+bucket_name = "secondbrain-images-dev"
+
 [vars]
 ENVIRONMENT = "development"
 # Comma-separated. Tauri's webview origin differs by OS — `tauri://localhost`
@@ -41,6 +48,10 @@ database_name = "secondbrain-staging"
 database_id = "93de0ce1-c6a7-45a0-bbbb-60ca2cccb6b8"
 migrations_dir = "migrations"
 
+[[env.staging.r2_buckets]]
+binding = "IMAGES"
+bucket_name = "secondbrain-images-staging"
+
 [env.staging.vars]
 ENVIRONMENT = "staging"
 ALLOWED_ORIGINS = "tauri://localhost,http://tauri.localhost"
@@ -59,6 +70,10 @@ binding = "DB"
 database_name = "secondbrain-prod"
 database_id = "REPLACE_ME_AFTER_wrangler_d1_create"
 migrations_dir = "migrations"
+
+[[env.production.r2_buckets]]
+binding = "IMAGES"
+bucket_name = "secondbrain-images-prod"
 
 [env.production.vars]
 ENVIRONMENT = "production"

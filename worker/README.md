@@ -45,6 +45,13 @@ npx wrangler login
 # one nearest you: weur, eeur, apac, wnam, enam, oc.
 npx wrangler d1 create secondbrain-staging --location apac
 npx wrangler d1 create secondbrain-prod    --location apac
+
+# R2 buckets for note-image bytes (names must match wrangler.toml). Locally
+# these aren't needed — `wrangler dev` simulates R2 — but a remote deploy is.
+# NOTE: activating R2 may require adding a payment method to the account, even
+# though the free tier (10 GB, generous ops) does not charge.
+npx wrangler r2 bucket create secondbrain-images-staging
+npx wrangler r2 bucket create secondbrain-images-prod
 ```
 
 Paste each returned `database_id` into the matching block in `wrangler.toml`,

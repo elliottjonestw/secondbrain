@@ -10,6 +10,7 @@ import {
   listCreateSchema,
   listUpdateSchema,
   noteCreateSchema,
+  noteImageCreateSchema,
   noteQuerySchema,
   noteUpdateSchema,
   personCreateSchema,
@@ -69,6 +70,12 @@ import {
   listNotes,
   updateNote,
 } from "../db/notes";
+import {
+  createNoteImage,
+  deleteR2Objects,
+  getNoteImageObject,
+  getNoteImageRow,
+} from "../db/images";
 import {
   createLink,
   deleteLink,
@@ -355,10 +362,41 @@ spaces.patch("/spaces/:spaceId/notes/:id", async (c) => {
 
 spaces.delete("/spaces/:spaceId/notes/:id", async (c) => {
   await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
-  // deleteNote returns the R2 keys of this note's images; purging them is wired
-  // in M4b when images move to R2. Until then there are none.
-  await deleteNote(c.env.DB, spaceId(c), c.req.param("id"));
+  // deleteNote removes the note + its image ROWS and returns the R2 keys; purge
+  // the objects too, so a deleted note leaves nothing in the bucket.
+  const keys = await deleteNote(c.env.DB, spaceId(c), c.req.param("id"));
+  await deleteR2Objects(c.env.IMAGES, keys);
   return c.body(null, 204);
+});
+
+// ---------------------------------------------------------------------------
+// Note images (bytes in R2, metadata in D1)
+// ---------------------------------------------------------------------------
+
+spaces.post("/spaces/:spaceId/notes/:noteId/images", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  const input = noteImageCreateSchema.parse(await c.req.json());
+  const meta = await createNoteImage(
+    c.env.DB, c.env.IMAGES, spaceId(c), c.req.param("noteId"), input,
+  );
+  return c.json(meta, 201);
+});
+
+spaces.get("/spaces/:spaceId/images/:id", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "read");
+  const row = await getNoteImageRow(c.env.DB, spaceId(c), c.req.param("id"));
+  if (!row) throw notFound("No such image.");
+  const obj = await getNoteImageObject(c.env.IMAGES, row);
+  if (!obj) throw notFound("Image bytes are missing.");
+
+  // Dimensions ride in headers so the client can size the <img> before decode
+  // without a second round-trip; they're in exposeHeaders so a browser build
+  // can read them. An image is immutable for its id, so it caches hard.
+  c.header("Content-Type", row.mime);
+  c.header("X-Image-Width", String(row.width));
+  c.header("X-Image-Height", String(row.height));
+  c.header("Cache-Control", "private, max-age=31536000, immutable");
+  return c.body(obj.body);
 });
 
 // ---------------------------------------------------------------------------

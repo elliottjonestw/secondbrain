@@ -166,3 +166,48 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
 
   return (await res.json()) as T;
 }
+
+/**
+ * A GET whose body is binary (a note image), returning the bytes plus response
+ * headers. Same auth + one-retry flow as apiRequest, but it reads a Blob rather
+ * than JSON. Errors still arrive as JSON, so a non-2xx is parsed like anywhere
+ * else. Always authenticated — images are never anonymous.
+ */
+export async function apiGetBinary(path: string): Promise<{ blob: Blob; headers: Headers }> {
+  if (!getAccessToken()) await refreshAccessToken();
+
+  const send = async (): Promise<Response> => {
+    const token = getAccessToken();
+    try {
+      return await platformFetch(`${BASE_URL}${path}`, {
+        method: "GET",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+    } catch {
+      throw new OfflineError();
+    }
+  };
+
+  let res = await send();
+  if (res.status === 401) {
+    await refreshAccessToken();
+    res = await send();
+  }
+
+  if (!res.ok) {
+    let code: ErrorCode = "internal";
+    let message = "Something went wrong.";
+    try {
+      const parsed = (await res.json()) as ApiErrorBody;
+      if (parsed?.error) {
+        code = parsed.error.code;
+        message = parsed.error.message;
+      }
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new ApiError(code, message, res.status);
+  }
+
+  return { blob: await res.blob(), headers: res.headers };
+}

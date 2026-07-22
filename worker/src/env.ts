@@ -9,6 +9,8 @@
 
 export interface Bindings {
   DB: D1Database;
+  /** Note-image bytes. D1 caps a row at 2 MB, so images can't live in a column. */
+  IMAGES: R2Bucket;
 
   ENVIRONMENT: "development" | "staging" | "production";
   /** Comma-separated allowlist; see corsMiddleware. */

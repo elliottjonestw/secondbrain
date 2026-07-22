@@ -30,11 +30,11 @@ export function corsMiddleware(): MiddlewareHandler<AppEnv> {
       origin: (origin) => (origin && allowed.includes(origin) ? origin : null),
       allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
       allowHeaders: ["Content-Type", "Authorization", "If-None-Match", "If-Match"],
-      // The client needs to read ETags to do conditional revalidation; without
-      // exposing them, `response.headers.get("ETag")` is null in a browser and
-      // the whole stale-while-revalidate cache silently degrades to always
-      // refetching.
-      exposeHeaders: ["ETag"],
+      // Headers a browser build must be able to read off a response. ETag for
+      // future conditional revalidation; the image dimensions so NoteImage can
+      // size the <img> before decode. (In Tauri, plugin-http isn't subject to
+      // CORS, so this only matters for the web build.)
+      exposeHeaders: ["ETag", "X-Image-Width", "X-Image-Height"],
       maxAge: 86400,
     });
     return handler(c, next);

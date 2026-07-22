@@ -14,7 +14,6 @@ import type {
   ReminderRow,
   TodoRow,
   NoteRow,
-  NoteImageRow,
   ListRow,
   TagRow,
   LinkRow,
@@ -22,7 +21,7 @@ import type {
   ItemType,
 } from "./types";
 import type { TodoCreate, TodoUpdate, ReminderCreate, CustomFieldDef } from "@secondbrain/shared";
-import { apiRequest, ApiError, OfflineError } from "./lib/api";
+import { apiRequest, apiGetBinary, ApiError, OfflineError } from "./lib/api";
 import { getCurrentSpaceId } from "./lib/authStore";
 import { networkFirst } from "./lib/cache";
 
@@ -426,10 +425,8 @@ export async function upsertNote(input: NoteInput): Promise<string> {
 }
 
 export async function deleteNote(id: string): Promise<void> {
+  // The server deletes the note, its image rows, and the R2 objects in one go.
   await apiRequest<void>(spacePath(`/notes/${id}`), { method: "DELETE" });
-  // The server removed the note's image ROWS; the local image BYTES (still in
-  // SQLite until M4b) are cleaned up here so they don't linger.
-  await (await db()).execute("DELETE FROM note_images WHERE note_id=?", [id]);
   await removeItemRelations("note", id);
 }
 
@@ -444,19 +441,32 @@ export async function insertNoteImage(
   img: { mime: string; data: string; width: number; height: number },
 ): Promise<string> {
   const id = newId();
-  await (await db()).execute(
-    "INSERT INTO note_images (id, note_id, mime, data, width, height, created_at) VALUES (?,?,?,?,?,?,?)",
-    [id, noteId, img.mime, img.data, img.width, img.height, nowIso()],
-  );
+  await apiRequest<unknown>(spacePath(`/notes/${noteId}/images`), {
+    method: "POST",
+    body: { id, mime: img.mime, data: img.data, width: img.width, height: img.height },
+  });
   return id;
 }
 
-export async function getNoteImage(id: string): Promise<NoteImageRow | undefined> {
-  const rows = await (await db()).select<NoteImageRow[]>(
-    "SELECT * FROM note_images WHERE id = ?",
-    [id],
-  );
-  return rows[0];
+/** The bytes + dimensions for a `sbimg:` reference, fetched (authenticated) from
+ *  the Worker, which streams them from R2. Undefined when the image is gone or
+ *  the device is offline — NoteImage shows its missing/placeholder chip. */
+export async function getNoteImage(
+  id: string,
+): Promise<{ mime: string; blob: Blob; width: number; height: number } | undefined> {
+  try {
+    const { blob, headers } = await apiGetBinary(spacePath(`/images/${id}`));
+    return {
+      mime: blob.type,
+      blob,
+      width: Number(headers.get("X-Image-Width")) || 0,
+      height: Number(headers.get("X-Image-Height")) || 0,
+    };
+  } catch (e) {
+    if (e instanceof OfflineError) return undefined;
+    if (e instanceof ApiError && e.status === 404) return undefined;
+    throw e;
+  }
 }
 
 // searchRows (the local term-search-over-a-table helper) is gone: todos,
