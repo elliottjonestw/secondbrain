@@ -330,7 +330,7 @@ export type NoteUpdate = z.infer<typeof noteUpdateSchema>;
 export type NoteQuery = z.infer<typeof noteQuerySchema>;
 
 // ---------------------------------------------------------------------------
-// Note images. Bytes live in R2 (D1 caps a row at 2 MB); D1 holds only
+// Note images. Bytes live in Workers KV (D1 caps a row at 2 MB); D1 holds only
 // metadata. Uploaded as base64 in JSON — images are downscaled small first, and
 // base64 round-trips fine through the bridge.
 // ---------------------------------------------------------------------------
@@ -348,9 +348,9 @@ export interface NoteImageMeta {
 export const noteImageCreateSchema = z.object({
   id: idSchema,
   mime: z.enum(["image/png", "image/jpeg", "image/webp", "image/gif"]),
-  /** base64, no data: prefix. ~2.7 MB base64 ≈ 2 MB bytes — bounded under R2's
-   *  practical single-PUT comfort and well under what a downscaled note image
-   *  produces. */
+  /** base64, no data: prefix. ~2.7 MB base64 ≈ 2 MB bytes — an order of
+   *  magnitude under KV's 25 MB value cap, and well above what a downscaled
+   *  note image produces. */
   data: z.string().min(1).max(4_000_000),
   width: z.number().int().min(1).max(20000),
   height: z.number().int().min(1).max(20000),
@@ -366,7 +366,8 @@ export type NoteImageCreate = z.infer<typeof noteImageCreateSchema>;
 /**
  * A person's photo is a data URI. Bounded well under D1's 2 MB row cap so a
  * whole person row can't blow the limit — PhotoPicker downscales before this,
- * and full-size images belong in R2 (a later concern), not a row column.
+ * and full-size images belong in blob storage (a later concern), not a row
+ * column.
  */
 const photoText = z.string().max(1_400_000).nullable();
 

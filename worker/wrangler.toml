@@ -22,12 +22,17 @@ database_name = "secondbrain-dev"
 database_id = "REPLACE_ME_AFTER_wrangler_d1_create"
 migrations_dir = "migrations"
 
-# Note-image bytes (D1 caps a row at 2 MB). Locally, `wrangler dev` simulates R2
-# in .wrangler/state, so no real bucket is needed for development. Create the
-# bucket before the first remote deploy: `wrangler r2 bucket create <name>`.
-[[r2_buckets]]
+# Note-image bytes (D1 caps a row at 2 MB). KV rather than R2: enabling R2
+# requires a payment method on the Cloudflare account even for its free tier,
+# and keeping no card on file is what guarantees a traffic spike can never
+# become a bill. See worker/src/db/images.ts for the full trade-off.
+#
+# Locally, `wrangler dev` simulates KV in .wrangler/state, so `id` is ignored
+# and only has to be present. Create the real namespace before the first remote
+# deploy: `wrangler kv namespace create IMAGES`.
+[[kv_namespaces]]
 binding = "IMAGES"
-bucket_name = "secondbrain-images-dev"
+id = "REPLACE_ME_AFTER_wrangler_kv_namespace_create"
 
 [vars]
 ENVIRONMENT = "development"
@@ -48,9 +53,9 @@ database_name = "secondbrain-staging"
 database_id = "93de0ce1-c6a7-45a0-bbbb-60ca2cccb6b8"
 migrations_dir = "migrations"
 
-[[env.staging.r2_buckets]]
+[[env.staging.kv_namespaces]]
 binding = "IMAGES"
-bucket_name = "secondbrain-images-staging"
+id = "REPLACE_ME_AFTER_wrangler_kv_namespace_create"
 
 [env.staging.vars]
 ENVIRONMENT = "staging"
@@ -71,9 +76,9 @@ database_name = "secondbrain-prod"
 database_id = "REPLACE_ME_AFTER_wrangler_d1_create"
 migrations_dir = "migrations"
 
-[[env.production.r2_buckets]]
+[[env.production.kv_namespaces]]
 binding = "IMAGES"
-bucket_name = "secondbrain-images-prod"
+id = "REPLACE_ME_AFTER_wrangler_kv_namespace_create"
 
 [env.production.vars]
 ENVIRONMENT = "production"

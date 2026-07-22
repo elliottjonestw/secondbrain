@@ -65,9 +65,18 @@ open "src-tauri/target/release/bundle/macos/Second Brain.app"
 > multi-tenant schema; M1 added accounts; M2–M4 moved all the data —
 > to-dos, lists, reminders, people, events, tags, links, and notes — to
 > **Cloudflare D1**, reached through a typed Worker API, with **note-image
-> bytes in R2** (D1 caps a row at 2 MB). Everything syncs across devices; reads
-> fall back to a local IndexedDB cache when offline, and writes are disabled
-> offline and say so.
+> bytes in Workers KV** (D1 caps a row at 2 MB). Everything syncs across
+> devices; reads fall back to a local IndexedDB cache when offline, and writes
+> are disabled offline and say so.
+>
+> The whole backend runs on **free-plan products with no payment method on the
+> account**, which is a deliberate safety property rather than a cost-saving
+> one: free plans return quota errors instead of billing overages, so a traffic
+> spike — including a malicious one — can take the app offline until the daily
+> counter resets, but can never produce a bill. That is why note images use KV
+> (included free, no card) rather than R2, which requires a card on file even to
+> use its own free tier. The cost of that choice is a 1 GB image budget and
+> 1,000 uploads/day.
 >
 > **Still to do (the finale):** delete the now-unused local SQLite stack
 > (`tauri-plugin-sql`, `browserDb`, the local migrations) and rework

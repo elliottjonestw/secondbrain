@@ -1,0 +1,22 @@
+-- Note-image bytes move from R2 to Workers KV, so `note_images.r2_key` becomes
+-- the storage-neutral `blob_key`.
+--
+-- Why the storage changed: Cloudflare requires a payment method on the account
+-- to enable R2 at all, including its free tier. No card on the account is the
+-- only hard guarantee that a traffic spike — abusive or accidental — can never
+-- produce a bill, because free-plan products fail closed with quota errors
+-- instead of billing an overage. KV is included in the Workers free plan and
+-- needs no card. The trade is 1 GB of storage instead of 10 GB, and 1,000
+-- writes/day; see worker/src/db/images.ts for why each is survivable here.
+--
+-- 0001 is already applied, so this is a new migration rather than an edit to
+-- it. The column is renamed rather than re-created: SQLite's RENAME COLUMN
+-- keeps the index on (space_id, note_id) intact, and no key VALUE changes —
+-- the same `spaces/<space>/notes/<note>/<image>` string addresses a KV key as
+-- happily as it addressed an R2 object.
+--
+-- Any bytes already written to R2 are NOT migrated. Existing data is disposable
+-- (a locked decision in docs/cloud-migration-plan.md §1), and at this point the
+-- only rows are staging test fixtures.
+
+ALTER TABLE note_images RENAME COLUMN r2_key TO blob_key;

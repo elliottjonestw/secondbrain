@@ -72,8 +72,8 @@ import {
 } from "../db/notes";
 import {
   createNoteImage,
-  deleteR2Objects,
-  getNoteImageObject,
+  deleteNoteImageBlobs,
+  getNoteImageBytes,
   getNoteImageRow,
 } from "../db/images";
 import {
@@ -362,15 +362,15 @@ spaces.patch("/spaces/:spaceId/notes/:id", async (c) => {
 
 spaces.delete("/spaces/:spaceId/notes/:id", async (c) => {
   await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
-  // deleteNote removes the note + its image ROWS and returns the R2 keys; purge
-  // the objects too, so a deleted note leaves nothing in the bucket.
+  // deleteNote removes the note + its image ROWS and returns the blob keys;
+  // purge the values too, so a deleted note leaves nothing behind in KV.
   const keys = await deleteNote(c.env.DB, spaceId(c), c.req.param("id"));
-  await deleteR2Objects(c.env.IMAGES, keys);
+  await deleteNoteImageBlobs(c.env.IMAGES, keys);
   return c.body(null, 204);
 });
 
 // ---------------------------------------------------------------------------
-// Note images (bytes in R2, metadata in D1)
+// Note images (bytes in KV, metadata in D1)
 // ---------------------------------------------------------------------------
 
 spaces.post("/spaces/:spaceId/notes/:noteId/images", async (c) => {
@@ -386,8 +386,8 @@ spaces.get("/spaces/:spaceId/images/:id", async (c) => {
   await authorize(c.env.DB, c.get("userId"), spaceId(c), "read");
   const row = await getNoteImageRow(c.env.DB, spaceId(c), c.req.param("id"));
   if (!row) throw notFound("No such image.");
-  const obj = await getNoteImageObject(c.env.IMAGES, row);
-  if (!obj) throw notFound("Image bytes are missing.");
+  const bytes = await getNoteImageBytes(c.env.IMAGES, row);
+  if (!bytes) throw notFound("Image bytes are missing.");
 
   // Dimensions ride in headers so the client can size the <img> before decode
   // without a second round-trip; they're in exposeHeaders so a browser build
@@ -396,7 +396,7 @@ spaces.get("/spaces/:spaceId/images/:id", async (c) => {
   c.header("X-Image-Width", String(row.width));
   c.header("X-Image-Height", String(row.height));
   c.header("Cache-Control", "private, max-age=31536000, immutable");
-  return c.body(obj.body);
+  return c.body(bytes);
 });
 
 // ---------------------------------------------------------------------------

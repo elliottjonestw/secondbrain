@@ -9,8 +9,16 @@
 
 export interface Bindings {
   DB: D1Database;
-  /** Note-image bytes. D1 caps a row at 2 MB, so images can't live in a column. */
-  IMAGES: R2Bucket;
+  /**
+   * Note-image bytes. D1 caps a row at 2 MB, so images can't live in a column.
+   *
+   * KV rather than R2: enabling R2 requires a payment method on the Cloudflare
+   * account even to use its free tier, and a card on file is precisely the risk
+   * we're avoiding — free-plan products fail closed with errors instead of
+   * billing an overage, so an abusive spike costs availability, never money.
+   * KV is included in the Workers free plan with no card. See docs/cloud-migration-plan.md §4.6.
+   */
+  IMAGES: KVNamespace;
 
   ENVIRONMENT: "development" | "staging" | "production";
   /** Comma-separated allowlist; see corsMiddleware. */

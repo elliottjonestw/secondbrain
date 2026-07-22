@@ -134,20 +134,20 @@ export async function updateNote(
 }
 
 /**
- * Delete a note. Its image rows are removed in the same batch; the R2 objects
- * they point at are deleted by the route (R2 isn't part of a D1 batch). Returns
- * the R2 keys the caller must purge.
+ * Delete a note. Its image rows are removed in the same batch; the KV values
+ * they point at are deleted by the route (KV isn't part of a D1 batch). Returns
+ * the blob keys the caller must purge.
  */
 export async function deleteNote(db: D1Database, spaceId: string, id: string): Promise<string[]> {
   const { results } = await db
-    .prepare("SELECT r2_key FROM note_images WHERE note_id = ? AND space_id = ?")
+    .prepare("SELECT blob_key FROM note_images WHERE note_id = ? AND space_id = ?")
     .bind(id, spaceId)
-    .all<{ r2_key: string }>();
+    .all<{ blob_key: string }>();
 
   await db.batch([
     db.prepare("DELETE FROM note_images WHERE note_id = ? AND space_id = ?").bind(id, spaceId),
     db.prepare("DELETE FROM notes WHERE id = ? AND space_id = ?").bind(id, spaceId),
   ]);
 
-  return results.map((r) => r.r2_key);
+  return results.map((r) => r.blob_key);
 }

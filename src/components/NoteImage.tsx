@@ -48,7 +48,7 @@ async function load(id: string): Promise<Cached | null> {
     try {
       const img = await getNoteImage(id);
       if (!img) return null;
-      // The bytes arrive as a Blob from R2 (via the Worker), so an object URL is
+      // The bytes arrive as a Blob from the Worker, so an object URL is
       // made directly — no base64 round-trip through the DOM.
       const entry = { url: URL.createObjectURL(img.blob), width: img.width, height: img.height };
       cache.set(id, entry);

@@ -46,16 +46,20 @@ npx wrangler login
 npx wrangler d1 create secondbrain-staging --location apac
 npx wrangler d1 create secondbrain-prod    --location apac
 
-# R2 buckets for note-image bytes (names must match wrangler.toml). Locally
-# these aren't needed — `wrangler dev` simulates R2 — but a remote deploy is.
-# NOTE: activating R2 may require adding a payment method to the account, even
-# though the free tier (10 GB, generous ops) does not charge.
-npx wrangler r2 bucket create secondbrain-images-staging
-npx wrangler r2 bucket create secondbrain-images-prod
+# KV namespaces for note-image bytes. Locally these aren't needed —
+# `wrangler dev` simulates KV — but a remote deploy is.
+#
+# KV rather than R2 specifically because enabling R2 requires a payment method
+# on the account even for its free tier. Keep this account CARD-FREE: every
+# product here (Workers, D1, KV) then fails closed with a quota error instead of
+# billing an overage, so an abusive spike can cost availability but never money.
+# Adding a card to enable a paid product gives that up account-wide.
+npx wrangler kv namespace create IMAGES --env staging
+npx wrangler kv namespace create IMAGES --env production
 ```
 
-Paste each returned `database_id` into the matching block in `wrangler.toml`,
-then:
+Paste each returned `database_id` and KV namespace `id` into the matching block
+in `wrangler.toml`, then:
 
 Then, **in this order** — `wrangler secret put` fails with "Worker not found"
 until the Worker exists, so the first deploy has to come before the secrets:

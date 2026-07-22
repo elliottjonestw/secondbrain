@@ -61,7 +61,7 @@ both consumers are served by one locked-down path.
 └───────┬───────────────────────────────┬───────────────────────┘
         │                               │
    ┌────▼────┐                     ┌────▼────┐
-   │   D1    │  all domain data    │   R2    │  note images
+   │   D1    │  all domain data    │   KV    │  note images
    │ SQLite  │  + users, sessions  │ blobs   │
    └─────────┘                     └─────────┘
 ```
@@ -221,25 +221,47 @@ Two adjustments:
   export — a Worker endpoint that walks the tables — not a platform-level dump.
   This also replaces `lib/backup.ts`'s `exportTables`/`importTables`.
 
-### 4.6 Note images → R2
+### 4.6 Note images → Workers KV
 
 `note_images` currently stores base64 in a `TEXT` column. D1 caps any row or BLOB
 at **2 MB** and any database at **10 GB**, so this cannot survive as-is.
 
-- Image bytes go to R2 under `spaces/<space_id>/notes/<note_id>/<image_id>`.
-- D1 keeps only metadata: id, note_id, space_id, mime, width, height, size,
-  created_at.
+> **Revised after M4b.** This section originally specified R2, and M4b shipped
+> against it. R2 is the better-shaped product for blobs — but Cloudflare
+> requires a **payment method on the account to enable R2 at all, including its
+> free tier**. Keeping no card on file is the only hard guarantee that a traffic
+> spike, abusive or accidental, can never become a bill: free-plan products
+> return quota errors rather than billing an overage. That guarantee was worth
+> more here than R2's shape, so the bytes moved to **Workers KV**, which ships
+> with the Workers free plan and needs no card. Migration `0003` renames
+> `r2_key` to `blob_key`; everything else below is unchanged, because the split
+> between "pointer in D1" and "bytes elsewhere" was never R2-specific.
+>
+> What the trade costs: **1 GB** of storage instead of 10 GB (a few thousand
+> images at the ~300 KB `encodeNoteImage` produces), **1,000 writes/day** and
+> **1,000 deletes/day** on separate counters, and a **25 MB** value cap that
+> nothing here approaches. Reads are 100,000/day, so viewing is not the
+> constrained direction. KV is also eventually consistent — a just-written key
+> can read as missing for up to 60 s — which costs nothing here only because
+> `primeNoteImage` already puts the uploaded bytes straight into the client
+> cache, so the first render after an upload never reads back. **Do not add a
+> read-back verification step to the upload path.**
+
+- Image bytes go to KV under `spaces/<space_id>/notes/<note_id>/<image_id>`.
+- D1 keeps only metadata: id, note_id, space_id, mime, `blob_key`, width,
+  height, size, created_at.
 - Note bodies keep the `![alt](sbimg:<id>)` token — **unchanged**, which means
   the `ReactMarkdown` `components={{ img: NoteImage }}` +
   `urlTransform={noteUrlTransform}` pairing and the assistant prompt's
   "preserve `sbimg:` refs verbatim" rule both still hold.
 - `NoteImage` resolves the token to an authenticated `GET /v1/images/:id`, which
-  the Worker streams from R2. Fetch as a blob and `URL.createObjectURL`, since
+  the Worker reads from KV. Fetch as a blob and `URL.createObjectURL`, since
   an `<img src>` can't carry a Bearer header.
 - Keep the placeholder-token-then-swap insert flow exactly as it is; the upload
   is now slower, which makes that async-safety measure more necessary, not less.
 
-R2 has no egress fees, which is why it beats putting images anywhere else.
+Neither KV nor R2 charges egress. KV wins here only because it needs no card
+on the account; see the revision note above.
 
 ---
 
@@ -310,7 +332,7 @@ needed `optimizeDeps.exclude` for.
 | Worker requests | 100,000/day | Comfortable for a handful of users, but it makes the response cache load-bearing rather than a nicety. |
 | D1 rows read | 5,000,000/day | **Counts rows _scanned_, not returned.** A query without an index burns quota proportional to table size. |
 | D1 rows written | 100,000/day | Ample. |
-| D1 storage | 5 GB | Ample; images go to R2. |
+| D1 storage | 5 GB | Ample; images go to KV. |
 
 Two consequences worth designing for now rather than discovering later:
 
@@ -437,7 +459,7 @@ they're where a naive port would quietly become slow:
 - `reorderTodos(ids)` and `reorderCustomFields(ids)` send the whole ordered
   array in one request — never one request per item.
 - Cascading deletes stay explicit in the Worker (`deleteTodo` → subtasks,
-  `deleteNote` → images + R2 objects), for the same reason as before: don't rely
+  `deleteNote` → images + KV values), for the same reason as before: don't rely
   on FK cascade.
 
 ### 6.5 Authorization
@@ -535,7 +557,8 @@ against a real (Miniflare) SQLite. The client points at `localhost:8787`.
   along with the `optimizeDeps.exclude` workaround that existed to serve it.
 - E2E: `wdio.conf.ts` still targets the binary inside the bundle. Specs now need
   a test account and a seeded space; add a fixture that registers a throwaway
-  user against a local Worker. `e2e/noteImages.spec.ts` needs rewriting for R2.
+  user against a local Worker. `e2e/noteImages.spec.ts` needs rewriting for the
+  images API.
 
 Verification per change stays `npx tsc --noEmit` + `npx vite build`
 (+ `cd src-tauri && cargo check`), with `tsc` now also run in `worker/` and
@@ -569,8 +592,8 @@ routing for short CJK queries), people + custom fields, tags, links. Then
 Delete `tauri-plugin-sql`, `src-tauri/migrations/`, `browserDb.ts`. Mostly
 mechanical if M2's pattern is right.
 
-**M4 — Images to R2.** R2 bucket, upload/stream endpoints, `NoteImage` blob
-resolution, delete-cascades-to-R2, E2E spec rewrite.
+**M4 — Images out of D1.** KV namespace, upload/read endpoints, `NoteImage`
+blob resolution, delete-cascades-to-KV, E2E spec rewrite.
 
 **M5 — Hardening.** Email verification and password reset, logical
 export/backup endpoint replacing `lib/backup.ts`, account deletion, D1 read
@@ -594,7 +617,7 @@ is every category the golden rule names.
 | **Global `UNIQUE` on `tags.name` / `lists.name`** leaks across tenants and fails obscurely | Audit every `UNIQUE` in `001`–`007`; make them `(space_id, …)`. |
 | **A query written without a `space_id` predicate** silently exposes another user's data | All SQL confined to `worker/src/db/`; all access decisions in `authorize.ts`; review rule enforced. |
 | **Every D1 query costs a full round-trip to the primary.** Measured on staging (APAC primary, same-region caller): **~105 ms for a trivial `COUNT` on an empty table**, warm, consistent across samples. This is a floor, not a load effect. | Treat query *count* as the latency budget, not row count: three sequential queries is ~315 ms. Batch with `D1.batch()`, never N+1, and let the response cache absorb repeat reads. Read replication (currently `disabled`) is a later lever and won't help a caller already beside the primary. |
-| **D1 caps rows at 2 MB, databases at 10 GB** | Images to R2 in M4; nothing else in the schema approaches either limit. |
+| **D1 caps rows at 2 MB, databases at 10 GB** | Images to KV in M4; nothing else in the schema approaches either limit. |
 | **`d1 export` can't dump a database with virtual tables** (FTS5) | Backups are a logical export endpoint, not a platform dump. Verify restore before you rely on it. |
 | **`undefined` doesn't survive JSON**, breaking partial-merge semantics | `PATCH` contract: absent key = leave alone, explicit `null` = clear. Worker inspects key presence. |
 | **Full-table `list*()` calls become full-table transfers** | Mandatory windowing/pagination in the endpoint signatures from day one. |
@@ -602,6 +625,9 @@ is every category the golden rule names.
 | **A failed background save is invisible** in the debounced note editor | Explicit saving/saved/failed indicator. |
 | Retried writes on flaky mobile networks duplicate rows | Client-generated UUIDs + idempotent upserts, preserved from the current design. |
 | Dev seed endpoint reachable in production | Registered conditionally at startup, not guarded at runtime. |
+| **Enabling R2 requires a payment method**, and a card on file means an abusive spike can bill rather than just fail | Note images live in Workers KV, which the Workers free plan includes with no card (§4.6). Keep the account card-free; every quota then fails closed. |
+| **KV is eventually consistent** — a key can read as missing for ~60 s after it is written | Nothing reads back a key it just wrote: `primeNoteImage` caches the uploaded bytes client-side, so the first render never fetches. Never add read-back verification to the upload path. |
+| **KV deletes one key per call**, unlike R2's bulk delete, and deletes have their own 1,000/day counter | `deleteNoteImageBlobs` issues them concurrently; a note with many images costs one call each. |
 
 ## 11. Known gaps this plan accepts
 
@@ -613,3 +639,14 @@ is every category the golden rule names.
 - **No offline writes**, by design.
 - **No password reset until M5.** Don't let anyone else register before then.
 - **No real-time sync.** Poll-on-focus only.
+- **Note images are capped at 1 GB in total, and 1,000 uploads per day**, being
+  the Workers KV free-tier limits (§4.6). At the ~300 KB `encodeNoteImage`
+  produces that's a few thousand images across all users. Outgrowing it means
+  either paying for R2 or sharding across namespaces — a deliberate future
+  decision, not a surprise.
+- **No card on the Cloudflare account, deliberately.** Every product in use
+  (Workers, D1, KV) is on a free plan that fails closed with quota errors rather
+  than billing an overage, so the worst an abusive spike can do is take the app
+  offline until the counter resets at 00:00 UTC. Adding a payment method to
+  enable any paid product forfeits that property account-wide — treat it as a
+  decision, not a config change.

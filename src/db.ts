@@ -393,8 +393,8 @@ export async function deleteTodo(id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Notes — served by the Worker (M4), including the trigram FTS search. Note
-// IMAGES are still local SQLite until M4b (bytes move to R2 then).
+// Notes — served by the Worker (M4), including the trigram FTS search. Image
+// bytes live in Workers KV behind the same API (M4b).
 // ---------------------------------------------------------------------------
 export async function listNotes(): Promise<NoteRow[]> {
   return networkFirst(`notes:${getCurrentSpaceId()}`, () =>
@@ -425,7 +425,7 @@ export async function upsertNote(input: NoteInput): Promise<string> {
 }
 
 export async function deleteNote(id: string): Promise<void> {
-  // The server deletes the note, its image rows, and the R2 objects in one go.
+  // The server deletes the note, its image rows, and the stored bytes in one go.
   await apiRequest<void>(spacePath(`/notes/${id}`), { method: "DELETE" });
   await removeItemRelations("note", id);
 }
@@ -449,7 +449,7 @@ export async function insertNoteImage(
 }
 
 /** The bytes + dimensions for a `sbimg:` reference, fetched (authenticated) from
- *  the Worker, which streams them from R2. Undefined when the image is gone or
+ *  the Worker, which reads them from KV. Undefined when the image is gone or
  *  the device is offline — NoteImage shows its missing/placeholder chip. */
 export async function getNoteImage(
   id: string,
