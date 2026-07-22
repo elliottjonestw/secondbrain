@@ -1,0 +1,70 @@
+# Builds the desktop app on macOS and Windows and attaches the installers to a
+# GitHub release. Push a version tag to run it:
+#
+#     # bump "version" in package.json AND src-tauri/tauri.conf.json first —
+#     # tauri.conf.json is what names the artifacts, and a tag that disagrees
+#     # with it ships "Second Brain_0.1.0.dmg" under a v0.2.0 release.
+#     git tag v0.2.0 && git push --follow-tags
+#
+# The release is created as a DRAFT so you can check the artifacts and write the
+# notes before anyone can download it — publish it from the Releases page.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# tauri-action creates the release and uploads to it, which needs write access.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      # One platform failing shouldn't throw away the other's finished build.
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            # A universal binary, so the .dmg runs on both Apple Silicon and
+            # Intel. Building it needs both targets installed.
+            args: "--target universal-apple-darwin"
+            rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
+          - platform: windows-latest
+            args: ""
+            rust-targets: ""
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      # Rust is far and away the slowest step; without this every run is a cold
+      # ~10 minute build of the whole dependency tree.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - run: npm ci
+
+      # Runs `beforeBuildCommand` (tsc + vite build) itself, so a type error
+      # fails the release rather than shipping a stale dist/.
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Second Brain ${{ github.ref_name }}
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
