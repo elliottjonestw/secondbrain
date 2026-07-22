@@ -6,17 +6,16 @@
 import {
   db,
   DATA_TABLES,
-  upsertEvent, upsertNote, upsertPerson,
-  ensureCustomField, tagItem, createLink,
+  upsertEvent, upsertNote, tagItem, createLink,
 } from "../db";
 
 // Migration note: as each domain moves to the Worker it leaves this seeder,
 // which auto-runs on every browser dev load (browserDb reseeds each time) —
 // seeding a remote domain here would hammer the Worker and pile up duplicates.
-// Remote already: todos, lists, reminders (M2/M3). Still local and seeded here:
-// events, notes, people. A freshly registered account gets its Personal/Work
-// lists from the server. Cross-links that pointed at now-remote items are
-// dropped until the demo is reworked for the cloud model.
+// Remote already: todos, lists, reminders, people (M2/M3). Still local and
+// seeded here: events, notes. A freshly registered account gets its
+// Personal/Work lists from the server. Cross-links that pointed at now-remote
+// items are dropped until the demo is reworked for the cloud model.
 
 /** Remove every row from every LOCAL user table. DATA_TABLES still lists todos
  *  and lists, whose local tables are simply empty and unused now — the DELETE is
@@ -26,13 +25,6 @@ export async function clearAllData(): Promise<void> {
   for (const table of DATA_TABLES) {
     await d.execute(`DELETE FROM ${table}`);
   }
-}
-
-/** Build a vCard-style birthday (yyyy-mm-dd) from a day offset + year. */
-function bday(dayOffset: number, year: number): string {
-  const d = at(dayOffset, 0, 0);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${year}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 // --- date helpers (local time) ---
@@ -56,7 +48,7 @@ export async function resetAndSeedDemo(): Promise<void> {
     rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR", exdates: null,
     status: "CONFIRMED", categories: JSON.stringify(["Work"]), color: "#ef4444",
   });
-  const lunch = await upsertEvent({
+  await upsertEvent({
     summary: "Lunch with Alex", description: null, location: "Cafe Rio",
     dtstart: iso(0, 12, 30), dtend: iso(0, 13, 30), all_day: 0,
     rrule: null, exdates: null, status: "CONFIRMED",
@@ -80,7 +72,7 @@ export async function resetAndSeedDemo(): Promise<void> {
     rrule: "FREQ=WEEKLY;BYDAY=MO,WE,FR", exdates: null, status: "CONFIRMED",
     categories: JSON.stringify(["Health"]), color: "#f59e0b",
   });
-  const sarahBday = await upsertEvent({
+  await upsertEvent({
     summary: "Sarah's birthday", description: null, location: null,
     dtstart: iso(5, 0, 0), dtend: null, all_day: 1,
     rrule: "FREQ=YEARLY", exdates: null, status: "CONFIRMED",
@@ -114,52 +106,16 @@ export async function resetAndSeedDemo(): Promise<void> {
     pinned: 0,
   });
 
-  // ---- People (contacts, vCard-modeled) ----
-  const emptyName = {
-    given_name: null as string | null, family_name: null as string | null,
-    additional_names: null, honorific_prefix: null, honorific_suffix: null,
-    addresses: null as string | null, urls: null as string | null,
-    title: null as string | null, photo: null as string | null,
-  };
-  const alex = await upsertPerson({
-    ...emptyName, full_name: "Alex Rivera", given_name: "Alex", family_name: "Rivera",
-    nickname: "Al", organization: "Acme Corp", title: "Product Designer",
-    birthday: bday(21, 1992),
-    emails: JSON.stringify([{ type: "work", value: "alex@acme.com" }]),
-    phones: JSON.stringify([{ type: "cell", value: "+1 555 010 2020" }]),
-    notes: "Met at the design conference.",
-    custom_fields: JSON.stringify([{ label: "Coffee order", value: "Oat flat white" }]),
-    favorite: 1,
-  });
-  // Custom-field labels are global (shared across all people).
-  await ensureCustomField("Coffee order");
-  const sarah = await upsertPerson({
-    ...emptyName, full_name: "Sarah Chen", given_name: "Sarah", family_name: "Chen",
-    nickname: null, organization: null, title: null,
-    birthday: bday(5, 1990),
-    emails: JSON.stringify([{ type: "home", value: "sarah.chen@example.com" }]),
-    phones: JSON.stringify([{ type: "cell", value: "+1 555 010 3131" }]),
-    notes: null, custom_fields: null, favorite: 0,
-  });
-  await upsertPerson({
-    ...emptyName, full_name: "Linda (Mom)", given_name: "Linda", family_name: null,
-    nickname: "Mom", organization: null, title: null,
-    birthday: bday(40, 1961),
-    emails: null,
-    phones: JSON.stringify([{ type: "home", value: "+1 555 010 4242" }]),
-    notes: null, custom_fields: null, favorite: 1,
-  });
+  // People are remote now (M3b), so the demo no longer seeds contacts or their
+  // custom fields — same reason as todos/lists/reminders.
 
   // ---- Tags (shared across types) ----
-  // Todo tags are omitted in M2 — todos are remote and not seeded here.
+  // Only the still-local domains (events, notes) get demo tags; todo/reminder/
+  // person tags are omitted while those live on the server.
   await tagItem("work", "event", standup);
   await tagItem("work", "event", oneOnOne);
   await tagItem("ideas", "note", ideas);
-  await tagItem("work", "person", alex);
 
-  // ---- Links (any item <-> any item, including people) ----
-  // Links to todos are omitted in M2 for the same reason.
+  // ---- Links (any item <-> any item) ----
   await createLink("note", standupNotes, "event", standup);   // meeting notes on the standup
-  await createLink("person", alex, "event", lunch);           // Alex is at lunch
-  await createLink("person", sarah, "event", sarahBday);      // Sarah's birthday
 }

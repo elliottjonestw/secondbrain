@@ -53,6 +53,37 @@ export interface ReminderRow {
   updated_at: string | null;
 }
 
+export interface PersonRow {
+  id: string;
+  full_name: string;
+  given_name: string | null;
+  family_name: string | null;
+  additional_names: string | null;
+  honorific_prefix: string | null;
+  honorific_suffix: string | null;
+  nickname: string | null;
+  emails: string | null;         // JSON [{type,value,primary?}]
+  phones: string | null;         // JSON [{type,value,primary?}]
+  addresses: string | null;      // JSON [{type,street,...}]
+  organization: string | null;
+  title: string | null;
+  birthday: string | null;       // ISO date
+  urls: string | null;           // JSON [{type,value}]
+  notes: string | null;
+  photo: string | null;          // data URI / URL
+  custom_fields: string | null;  // JSON [{label,value}]
+  favorite: number;
+  sequence: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface CustomFieldDef {
+  id: string;
+  label: string;
+  position: number;
+}
+
 // ---------------------------------------------------------------------------
 // Shared field validators
 // ---------------------------------------------------------------------------
@@ -180,3 +211,70 @@ export const reminderQuerySchema = z.object({
 export type ReminderCreate = z.infer<typeof reminderCreateSchema>;
 export type ReminderUpdate = z.infer<typeof reminderUpdateSchema>;
 export type ReminderQuery = z.infer<typeof reminderQuerySchema>;
+
+// ---------------------------------------------------------------------------
+// People (vCard-shaped). Multi-value fields are JSON strings, validated only as
+// bounded text here — their internal shape is the client's concern.
+// ---------------------------------------------------------------------------
+
+/** Bounded JSON-or-plain text column. */
+const jsonText = z.string().max(100_000).nullable();
+/**
+ * A person's photo is a data URI. Bounded well under D1's 2 MB row cap so a
+ * whole person row can't blow the limit — PhotoPicker downscales before this,
+ * and full-size images belong in R2 (a later concern), not a row column.
+ */
+const photoText = z.string().max(1_400_000).nullable();
+
+const personFields = {
+  // Empty is allowed on purpose: the People UI creates a blank contact and then
+  // lets the user fill it in, so the first write has no name yet. The row is
+  // still NOT NULL — "" satisfies it, as it did locally.
+  full_name: z.string().trim().max(500),
+  given_name: z.string().max(500).nullable(),
+  family_name: z.string().max(500).nullable(),
+  additional_names: z.string().max(500).nullable(),
+  honorific_prefix: z.string().max(100).nullable(),
+  honorific_suffix: z.string().max(100).nullable(),
+  nickname: z.string().max(500).nullable(),
+  emails: jsonText,
+  phones: jsonText,
+  addresses: jsonText,
+  organization: z.string().max(500).nullable(),
+  title: z.string().max(500).nullable(),
+  birthday: z.string().max(40).nullable(),
+  urls: jsonText,
+  notes: z.string().max(100_000).nullable(),
+  photo: photoText,
+  custom_fields: jsonText,
+  favorite: boolInt,
+};
+
+export const personCreateSchema = z.object({ id: idSchema, ...personFields });
+
+export const personUpdateSchema = z.object(
+  Object.fromEntries(
+    Object.entries(personFields).map(([k, v]) => [k, (v as z.ZodTypeAny).optional()]),
+  ),
+) as z.ZodObject<{ [K in keyof typeof personFields]: z.ZodOptional<(typeof personFields)[K]> }>;
+
+export const personQuerySchema = z.object({ q: z.string().max(200).optional() });
+
+export type PersonCreate = z.infer<typeof personCreateSchema>;
+export type PersonUpdate = z.infer<typeof personUpdateSchema>;
+export type PersonQuery = z.infer<typeof personQuerySchema>;
+
+// ---------------------------------------------------------------------------
+// Global custom-field labels (shared across all people in a space)
+// ---------------------------------------------------------------------------
+
+/** Ensure-a-label: idempotent by label (case-insensitive), so no client id. */
+export const customFieldCreateSchema = z.object({
+  label: z.string().trim().min(1).max(200),
+});
+
+export const customFieldReorderSchema = z.object({
+  ids: z.array(idSchema).max(500),
+});
+
+export type CustomFieldCreate = z.infer<typeof customFieldCreateSchema>;

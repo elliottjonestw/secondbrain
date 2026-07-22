@@ -29,7 +29,7 @@ import {
   matchQuery,
   upsertTodo, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
   deleteTodo, deleteReminder, deleteNote, deleteList,
-  listPeople, searchPeople, upsertPerson, deletePerson, createLink, deleteLink,
+  listPeople, getPerson, searchPeople, upsertPerson, deletePerson, createLink, deleteLink,
   ensureCustomField,
 } from "../db";
 import { expandEvents } from "./recurrence";
@@ -139,6 +139,7 @@ async function getRowById(table: string, id: unknown): Promise<any | null> {
   // update_todo / delete_todo report "no such todo" for todos that exist.
   if (table === "todos") return (await getTodo(id)) ?? null;
   if (table === "reminders") return (await getReminder(id)) ?? null;
+  if (table === "people") return (await getPerson(id)) ?? null;
   const d = await db();
   const rows = await d.select<any[]>(`SELECT * FROM ${table} WHERE id = ?`, [id]);
   return rows[0] ?? null;
@@ -755,8 +756,8 @@ async function toolGetOverview() {
   // zero todos. Other domains are still local.
   // Todos and reminders are remote (M2/M3); count from the fetched lists rather
   // than a local SELECT on an empty table. Other domains are still local.
-  const [lists, tags, todos, reminders] = await Promise.all([
-    listLists(), listTags(), listTodos(), listReminders(),
+  const [lists, tags, todos, reminders, people] = await Promise.all([
+    listLists(), listTags(), listTodos(), listReminders(), listPeople(),
   ]);
   return {
     now: toLocalIso(new Date().toISOString()),
@@ -768,7 +769,7 @@ async function toolGetOverview() {
       reminders: reminders.length,
       reminders_active: reminders.filter((r) => r.completed === 0).length,
       notes: await one("SELECT COUNT(*) n FROM notes"),
-      people: await one("SELECT COUNT(*) n FROM people"),
+      people: people.length,
     },
     lists: lists.map((l) => l.name),
     tags: tags.map((t) => t.name),

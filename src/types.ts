@@ -107,30 +107,11 @@ export interface PersonUrl { type: string; value: string }
 /** User-defined data point, e.g. { label: "Eye Color", value: "Blue" }. */
 export interface PersonCustomField { label: string; value: string }
 
-export interface PersonRow {
-  id: string;               // UUID, = vCard UID
-  full_name: string;        // vCard FN
-  given_name: string | null;
-  family_name: string | null;
-  additional_names: string | null;
-  honorific_prefix: string | null;
-  honorific_suffix: string | null;
-  nickname: string | null;
-  emails: string | null;    // JSON PersonEmail[]
-  phones: string | null;    // JSON PersonPhone[]
-  addresses: string | null; // JSON PersonAddress[]
-  organization: string | null;
-  title: string | null;
-  birthday: string | null;  // ISO date (vCard BDAY)
-  urls: string | null;      // JSON PersonUrl[]
-  notes: string | null;
-  photo: string | null;     // data URI / URL
-  custom_fields: string | null; // JSON PersonCustomField[]
-  favorite: number;         // 0 | 1
-  sequence: number;
-  created_at: string | null;
-  updated_at: string | null;
-}
+// PersonRow (and CustomFieldDef) are defined in @secondbrain/shared so the
+// Worker returns exactly the client's shape. The JSON sub-shapes above
+// (PersonEmail/Phone/… and PersonCustomField) stay client-only — they describe
+// how the client parses the JSON columns, which the server treats as opaque text.
+export type { PersonRow, CustomFieldDef } from "@secondbrain/shared";
 
 export interface TagRow {
   id: string;

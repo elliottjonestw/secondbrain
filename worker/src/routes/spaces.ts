@@ -1,7 +1,12 @@
 import { Hono } from "hono";
 import {
+  customFieldCreateSchema,
+  customFieldReorderSchema,
   listCreateSchema,
   listUpdateSchema,
+  personCreateSchema,
+  personQuerySchema,
+  personUpdateSchema,
   reminderCreateSchema,
   reminderQuerySchema,
   reminderUpdateSchema,
@@ -30,6 +35,17 @@ import {
   listReminders,
   updateReminder,
 } from "../db/reminders";
+import {
+  createPerson,
+  deleteCustomFieldDef,
+  deletePerson,
+  ensureCustomField,
+  getPerson,
+  listCustomFields,
+  listPeople,
+  reorderCustomFields,
+  updatePerson,
+} from "../db/people";
 
 /**
  * Space-scoped domain routes: `/v1/spaces/:spaceId/(lists|todos)`.
@@ -166,5 +182,71 @@ spaces.patch("/spaces/:spaceId/reminders/:id", async (c) => {
 spaces.delete("/spaces/:spaceId/reminders/:id", async (c) => {
   await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
   await deleteReminder(c.env.DB, spaceId(c), c.req.param("id"));
+  return c.body(null, 204);
+});
+
+// ---------------------------------------------------------------------------
+// Custom-field labels (declared before /people/:id so "custom-fields" is never
+// read as a person id)
+// ---------------------------------------------------------------------------
+
+spaces.get("/spaces/:spaceId/custom-fields", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "read");
+  return c.json(await listCustomFields(c.env.DB, spaceId(c)));
+});
+
+spaces.post("/spaces/:spaceId/custom-fields", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  const { label } = customFieldCreateSchema.parse(await c.req.json());
+  return c.json(await ensureCustomField(c.env.DB, spaceId(c), label), 201);
+});
+
+spaces.post("/spaces/:spaceId/custom-fields/reorder", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  const { ids } = customFieldReorderSchema.parse(await c.req.json());
+  await reorderCustomFields(c.env.DB, spaceId(c), ids);
+  return c.body(null, 204);
+});
+
+spaces.delete("/spaces/:spaceId/custom-fields/:id", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  await deleteCustomFieldDef(c.env.DB, spaceId(c), c.req.param("id"));
+  return c.body(null, 204);
+});
+
+// ---------------------------------------------------------------------------
+// People
+// ---------------------------------------------------------------------------
+
+spaces.get("/spaces/:spaceId/people", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "read");
+  const query = personQuerySchema.parse(Object.fromEntries(new URL(c.req.url).searchParams));
+  return c.json(await listPeople(c.env.DB, spaceId(c), query));
+});
+
+spaces.post("/spaces/:spaceId/people", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  const input = personCreateSchema.parse(await c.req.json());
+  return c.json(await createPerson(c.env.DB, spaceId(c), input), 201);
+});
+
+spaces.get("/spaces/:spaceId/people/:id", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "read");
+  const row = await getPerson(c.env.DB, spaceId(c), c.req.param("id"));
+  if (!row) throw notFound("No such person.");
+  return c.json(row);
+});
+
+spaces.patch("/spaces/:spaceId/people/:id", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  const body = await c.req.json().catch(() => null);
+  if (body === null || typeof body !== "object") throw badRequest("Expected a JSON object.");
+  const patch = personUpdateSchema.parse(body);
+  return c.json(await updatePerson(c.env.DB, spaceId(c), c.req.param("id"), patch));
+});
+
+spaces.delete("/spaces/:spaceId/people/:id", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  await deletePerson(c.env.DB, spaceId(c), c.req.param("id"));
   return c.body(null, 204);
 });

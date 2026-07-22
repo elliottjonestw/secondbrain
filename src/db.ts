@@ -19,10 +19,9 @@ import type {
   TagRow,
   LinkRow,
   PersonRow,
-  PersonCustomField,
   ItemType,
 } from "./types";
-import type { TodoCreate, TodoUpdate, ReminderCreate } from "@secondbrain/shared";
+import type { TodoCreate, TodoUpdate, ReminderCreate, CustomFieldDef } from "@secondbrain/shared";
 import { apiRequest, ApiError, OfflineError } from "./lib/api";
 import { getCurrentSpaceId } from "./lib/authStore";
 import { networkFirst } from "./lib/cache";
@@ -610,7 +609,9 @@ export async function searchNotes(query: string): Promise<NoteRow[]> {
 // `item_tags` — both already accept item_type 'person', no schema change.
 // ---------------------------------------------------------------------------
 export async function listPeople(): Promise<PersonRow[]> {
-  const rows = await (await db()).select<PersonRow[]>("SELECT * FROM people");
+  const rows = await networkFirst(`people:${getCurrentSpaceId()}`, () =>
+    apiRequest<PersonRow[]>(spacePath("/people")),
+  );
   return sortPeople(rows);
 }
 
@@ -623,31 +624,26 @@ function sortPeople(rows: PersonRow[]): PersonRow[] {
 }
 
 export async function getPerson(id: string): Promise<PersonRow | undefined> {
-  const rows = await (await db()).select<PersonRow[]>("SELECT * FROM people WHERE id = ?", [id]);
-  return rows[0];
+  try {
+    return await apiRequest<PersonRow>(spacePath(`/people/${id}`));
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return undefined;
+    throw e;
+  }
 }
 
-/** LIKE search over name/nickname/org and the raw JSON emails/phones text. */
+/** LIKE search over name/nickname/org and the raw JSON emails/phones text.
+ *  The AND-terms logic now lives server-side (db/people.ts). */
 export async function searchPeople(query: string): Promise<PersonRow[]> {
   const q = query.trim();
   if (!q) return listPeople();
-
-  // AND the terms, like searchNotes. Matching the query as one literal
-  // substring meant "Sam Acme" found nobody whose name is Sam and whose
-  // organization is Acme — the fields are separate columns, so the phrase
-  // can never appear whole in any one of them.
-  const terms = queryTerms(q);
-  if (terms.length === 0) return listPeople();
-  const FIELDS = ["full_name", "nickname", "organization", "emails", "phones"];
-  const clause = terms
-    .map(() => `(${FIELDS.map((f) => `${f} LIKE ? ESCAPE '\\'`).join(" OR ")})`)
-    .join(" AND ");
-  const params = terms.flatMap((t) => FIELDS.map(() => `%${escapeLike(t)}%`));
-  const rows = await (await db()).select<PersonRow[]>(
-    `SELECT * FROM people WHERE ${clause}`,
-    params,
-  );
-  return sortPeople(rows);
+  try {
+    const rows = await apiRequest<PersonRow[]>(spacePath(`/people?q=${encodeURIComponent(q)}`));
+    return sortPeople(rows);
+  } catch (e) {
+    if (e instanceof OfflineError) return [];
+    throw e;
+  }
 }
 
 export type PersonInput = Omit<
@@ -655,150 +651,78 @@ export type PersonInput = Omit<
   "id" | "sequence" | "created_at" | "updated_at"
 > & { id?: string };
 
+/** The writable person fields, in one place so create and update agree. */
+function personBody(input: PersonInput): Omit<PersonInput, "id"> {
+  const { id: _id, ...fields } = input;
+  return fields;
+}
+
 export async function upsertPerson(input: PersonInput): Promise<string> {
-  const d = await db();
-  const now = nowIso();
   if (input.id) {
-    await d.execute(
-      `UPDATE people SET full_name=?, given_name=?, family_name=?, additional_names=?,
-         honorific_prefix=?, honorific_suffix=?, nickname=?, emails=?, phones=?,
-         addresses=?, organization=?, title=?, birthday=?, urls=?, notes=?, photo=?,
-         custom_fields=?, favorite=?, sequence=sequence+1, updated_at=? WHERE id=?`,
-      [
-        input.full_name, input.given_name, input.family_name, input.additional_names,
-        input.honorific_prefix, input.honorific_suffix, input.nickname, input.emails,
-        input.phones, input.addresses, input.organization, input.title, input.birthday,
-        input.urls, input.notes, input.photo, input.custom_fields, input.favorite,
-        now, input.id,
-      ],
-    );
+    await apiRequest<PersonRow>(spacePath(`/people/${input.id}`), {
+      method: "PATCH",
+      body: personBody(input),
+    });
     return input.id;
   }
   const id = newId();
-  await d.execute(
-    `INSERT INTO people (id, full_name, given_name, family_name, additional_names,
-       honorific_prefix, honorific_suffix, nickname, emails, phones, addresses,
-       organization, title, birthday, urls, notes, photo, custom_fields, favorite,
-       sequence, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)`,
-    [
-      id, input.full_name, input.given_name, input.family_name, input.additional_names,
-      input.honorific_prefix, input.honorific_suffix, input.nickname, input.emails,
-      input.phones, input.addresses, input.organization, input.title, input.birthday,
-      input.urls, input.notes, input.photo, input.custom_fields, input.favorite,
-      now, now,
-    ],
-  );
+  await apiRequest<PersonRow>(spacePath("/people"), {
+    method: "POST",
+    body: { id, ...personBody(input) },
+  });
   return id;
 }
 
 /**
- * Insert-or-update a person while preserving a caller-supplied id (= vCard UID).
- * For future .vcf import so imported contacts keep their original stable UID as
- * the primary key, which CardDAV sync depends on. Mirrors upsertEventWithId.
+ * Insert-or-update a person while preserving a caller-supplied id (= vCard UID),
+ * for future .vcf import. Create-with-id when new, PATCH when it exists.
  */
 export async function upsertPersonWithId(id: string, input: PersonInput): Promise<void> {
-  const existing = await getPerson(id);
-  if (existing) {
-    await upsertPerson({ ...input, id });
+  if (await getPerson(id)) {
+    await apiRequest<PersonRow>(spacePath(`/people/${id}`), { method: "PATCH", body: personBody(input) });
     return;
   }
-  const now = nowIso();
-  await (await db()).execute(
-    `INSERT INTO people (id, full_name, given_name, family_name, additional_names,
-       honorific_prefix, honorific_suffix, nickname, emails, phones, addresses,
-       organization, title, birthday, urls, notes, photo, custom_fields, favorite,
-       sequence, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)`,
-    [
-      id, input.full_name, input.given_name, input.family_name, input.additional_names,
-      input.honorific_prefix, input.honorific_suffix, input.nickname, input.emails,
-      input.phones, input.addresses, input.organization, input.title, input.birthday,
-      input.urls, input.notes, input.photo, input.custom_fields, input.favorite,
-      now, now,
-    ],
-  );
+  await apiRequest<PersonRow>(spacePath("/people"), { method: "POST", body: { id, ...personBody(input) } });
 }
 
 export async function deletePerson(id: string): Promise<void> {
-  await (await db()).execute("DELETE FROM people WHERE id=?", [id]);
-  await removeItemRelations("person", id);
+  await apiRequest<void>(spacePath(`/people/${id}`), { method: "DELETE" });
+  await removeItemRelations("person", id); // links/tags still local until M3d
 }
 
 // --- Global custom-field labels (shared across all people) -------------------
 // The label set is global — a field you add shows on every person. Values stay
-// per-person in people.custom_fields, keyed by label.
-export interface CustomFieldDef { id: string; label: string; position: number }
+// per-person in people.custom_fields, keyed by label. CustomFieldDef lives in
+// @secondbrain/shared (the Worker returns it); re-exported for existing callers.
+export type { CustomFieldDef } from "@secondbrain/shared";
 
 export async function listCustomFields(): Promise<CustomFieldDef[]> {
-  const rows = await (await db()).select<CustomFieldDef[]>(
-    "SELECT * FROM person_custom_fields ORDER BY position ASC",
+  const rows = await networkFirst(`custom_fields:${getCurrentSpaceId()}`, () =>
+    apiRequest<CustomFieldDef[]>(spacePath("/custom-fields")),
   );
-  // Secondary sort key is the label. COLLATE NOCASE folds ASCII only, so it
-  // misorders accented and CJK labels — sort the tiebreak locale-aware instead,
-  // matching listTags/listPeople (position still wins as the primary key).
+  // Position wins; the label tiebreak sorts locale-aware (D1 can't). Matches
+  // listTags/listPeople.
   const c = collator();
   return [...rows].sort((a, b) => a.position - b.position || c.compare(a.label, b.label));
 }
 
-/** Add a global custom-field label if it doesn't already exist (case-insensitive). */
+/** Add a global custom-field label if it doesn't already exist. Idempotent by
+ *  label server-side, so a retry returns the same def. */
 export async function ensureCustomField(label: string): Promise<CustomFieldDef> {
-  const d = await db();
-  const trimmed = normalizeKey(label);
-  const existing = await d.select<CustomFieldDef[]>(
-    "SELECT * FROM person_custom_fields WHERE label = ? COLLATE NOCASE", [trimmed],
-  );
-  if (existing[0]) return existing[0];
-  const max = await d.select<{ m: number | null }[]>("SELECT MAX(position) m FROM person_custom_fields");
-  const position = (max[0]?.m ?? -1) + 1;
-  const id = newId();
-  await d.execute("INSERT INTO person_custom_fields (id, label, position) VALUES (?,?,?)", [id, trimmed, position]);
-  return { id, label: trimmed, position };
+  return apiRequest<CustomFieldDef>(spacePath("/custom-fields"), {
+    method: "POST",
+    body: { label: normalizeKey(label) },
+  });
 }
 
-/**
- * Delete a global custom field and strip its values from every person.
- *
- * tauri-plugin-sql exposes no JS-side transaction (its `execute` runs each call
- * on an arbitrary pooled connection), so this can't be made atomic the way a
- * real BEGIN/COMMIT would. To keep a crash in the most recoverable state, the
- * per-person values are stripped FIRST and the def is deleted LAST: an
- * interrupted call then leaves the def present with empty values (the editor
- * still shows the field) rather than a def gone with orphaned values.
- */
+/** Delete a global custom field; the server strips its value from every person
+ *  (values first, def last) in one batch. */
 export async function deleteCustomFieldDef(id: string): Promise<void> {
-  const d = await db();
-  const rows = await d.select<CustomFieldDef[]>("SELECT * FROM person_custom_fields WHERE id = ?", [id]);
-  const def = rows[0];
-  if (!def) return;
-
-  // Strip the value from every person first.
-  const people = await d.select<{ id: string; custom_fields: string | null }[]>(
-    "SELECT id, custom_fields FROM people WHERE custom_fields IS NOT NULL",
-  );
-  const now = nowIso();
-  for (const p of people) {
-    let arr: PersonCustomField[];
-    try { arr = JSON.parse(p.custom_fields!); } catch { continue; }
-    if (!Array.isArray(arr)) continue;
-    const next = arr.filter((c) => c.label !== def.label);
-    if (next.length !== arr.length) {
-      await d.execute(
-        "UPDATE people SET custom_fields = ?, sequence = sequence + 1, updated_at = ? WHERE id = ?",
-        [next.length ? JSON.stringify(next) : null, now, p.id],
-      );
-    }
-  }
-  // Then drop the shared def. Doing this last means an interruption leaves the
-  // def in place (editor shows an empty field) instead of orphaning values.
-  await d.execute("DELETE FROM person_custom_fields WHERE id = ?", [id]);
+  await apiRequest<void>(spacePath(`/custom-fields/${id}`), { method: "DELETE" });
 }
 
 export async function reorderCustomFields(ids: string[]): Promise<void> {
-  const d = await db();
-  for (let i = 0; i < ids.length; i++) {
-    await d.execute("UPDATE person_custom_fields SET position = ? WHERE id = ?", [i, ids[i]]);
-  }
+  await apiRequest<void>(spacePath("/custom-fields/reorder"), { method: "POST", body: { ids } });
 }
 
 // ---------------------------------------------------------------------------
