@@ -25,7 +25,7 @@ import { ageFromBirthday, nextBirthday } from "./format";
 import { LANGUAGES, currentLanguage } from "./i18n";
 import type { ItemRef, ItemType, UnifiedEvent } from "../types";
 import {
-  db, listLists, listEvents, listNotes, getNote, listTodos, getTodo, listReminders, getReminder, listTags, itemIdsForTag, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
+  getEvent, listLists, listEvents, listNotes, getNote, listTodos, getTodo, listReminders, getReminder, listTags, itemIdsForTag, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
   matchQuery,
   upsertTodo, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
   deleteTodo, deleteReminder, deleteNote, deleteList,
@@ -1002,14 +1002,19 @@ async function toolSearchNotes(args: Record<string, unknown>) {
 async function toolGetItem(args: Record<string, unknown>) {
   const type = args.type as string;
   const id = args.id as string;
-  const table = { event: "events", reminder: "reminders", todo: "todos", note: "notes", person: "people" }[type];
-  if (!table || !id) return { error: "Provide a valid type (event|reminder|todo|note|person) and id." };
+  // One getter per type rather than a table name interpolated into SQL: there
+  // is no local database to query any more, and each of these is the same
+  // space-scoped endpoint the UI uses, so the assistant cannot reach a row the
+  // signed-in user couldn't.
+  const getters: Record<string, (id: string) => Promise<Record<string, any> | undefined>> = {
+    event: getEvent, reminder: getReminder, todo: getTodo, note: getNote, person: getPerson,
+  };
+  const getter = getters[type];
+  if (!getter || !id) return { error: "Provide a valid type (event|reminder|todo|note|person) and id." };
 
-  const d = await db();
-  const rows = await d.select<any[]>(`SELECT * FROM ${table} WHERE id = ?`, [id]);
-  const item = rows[0];
+  const item = await getter(id);
 
-  // Events can live in a connected calendar, where there is no SQLite row —
+  // Events can live in a connected calendar, where there is no local row —
   // and no tags/links, which are keyed on local ids.
   if (!item && type === "event") {
     const remote = await resolveEvent(args);

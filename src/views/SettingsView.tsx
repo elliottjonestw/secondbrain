@@ -29,7 +29,7 @@ import { discoverAccount } from "../lib/caldav/discovery";
 import { invalidateCache, listCalendars, setCalendarVisible, LOCAL_CALENDAR_NAME } from "../lib/calendars";
 import { LOCAL_CALENDAR_ID } from "../types";
 import { exportBackup, importBackup } from "../lib/backup";
-import { clearAllData } from "../lib/demo";
+import { clearAllData } from "../db";
 import { Button } from "../components/ui";
 
 const APPLE_PASSWORD_URL = "https://account.apple.com/account/manage";

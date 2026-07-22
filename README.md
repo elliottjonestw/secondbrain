@@ -78,14 +78,21 @@ open "src-tauri/target/release/bundle/macos/Second Brain.app"
 > use its own free tier. The cost of that choice is a 1 GB image budget and
 > 1,000 uploads/day.
 >
-> **Still to do (the finale):** delete the now-unused local SQLite stack
-> (`tauri-plugin-sql`, `browserDb`, the local migrations) and rework
-> backup/restore + Settings' "clear all data" as server-side operations — those
-> still target the old local database and so currently only see notes/images.
-> Also outstanding: baking the deployed Worker URL into production builds
+> **The local SQLite stack is gone.** `tauri-plugin-sql`, `browserDb.ts`,
+> `src-tauri/migrations/`, the demo seeder and the `sql:*` capabilities have all
+> been deleted, and `lib.rs` is plugin wiring only — architecture rule 1 held
+> more completely than before the migration, and the side effect is that iOS is
+> unblocked (`tauri-plugin-sql` never supported it). Backup/restore and
+> Settings' "clear all data" are now server-side: a *logical* export that walks
+> the tables one page at a time, because `wrangler d1 export` refuses a database
+> containing virtual tables and `notes_fts` is one.
+>
+> **Still to do:** baking the deployed Worker URL into production builds
 > (`VITE_API_URL`) so a shipped DMG/EXE reaches Cloudflare instead of
 > `localhost`. The dev app already runs both together (`npm run tauri dev`
-> starts the Worker via `dev:app`).
+> starts the Worker via `dev:app`). Then M5: password reset and email
+> verification — **nobody else should register until those exist**, because a
+> forgotten password currently means a lost account.
 >
 > **The app is no longer standalone.** It now depends on the deployed Worker
 > being reachable — no Worker, no login. That is the trade the cloud migration

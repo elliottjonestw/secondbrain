@@ -76,6 +76,7 @@ import {
   getNoteImageBytes,
   getNoteImageRow,
 } from "../db/images";
+import { clearSpaceData, exportTablePage, importTableRows } from "../db/backup";
 import {
   createLink,
   deleteLink,
@@ -458,5 +459,55 @@ spaces.post("/spaces/:spaceId/links", async (c) => {
 spaces.delete("/spaces/:spaceId/links/:id", async (c) => {
   await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
   await deleteLink(c.env.DB, spaceId(c), c.req.param("id"));
+  return c.body(null, 204);
+});
+
+// ---------------------------------------------------------------------------
+// Backup: logical export/import, and the destructive "clear all data" wipe.
+//
+// Logical rather than a platform dump because `wrangler d1 export` refuses a
+// database containing virtual tables and `notes_fts` is one. Paginated one
+// table at a time because the free plan caps CPU at 10 ms per request, and
+// serializing a whole account in one response is precisely the shape that
+// breaks once a user's data grows. The client walks the tables.
+// ---------------------------------------------------------------------------
+
+spaces.get("/spaces/:spaceId/export/:table", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "read");
+  const url = new URL(c.req.url);
+  const limit = Math.min(Number(url.searchParams.get("limit")) || 500, 1000);
+  try {
+    return c.json(
+      await exportTablePage(
+        c.env.DB, spaceId(c), c.req.param("table"), url.searchParams.get("cursor"), limit,
+      ),
+    );
+  } catch {
+    throw badRequest("Unknown table.");
+  }
+});
+
+// Additive: the client clears first, then posts each table. A restore is
+// therefore several requests, and the client is responsible for ordering them —
+// which is safe because the schema has no foreign keys at all (see CLAUDE.md).
+spaces.post("/spaces/:spaceId/import/:table", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  const body = await c.req.json().catch(() => null);
+  if (!body || !Array.isArray(body.rows)) throw badRequest("Expected { rows: [...] }.");
+  if (body.rows.length > 1000) throw badRequest("Too many rows in one batch (max 1000).");
+  try {
+    const inserted = await importTableRows(c.env.DB, spaceId(c), c.req.param("table"), body.rows);
+    return c.json({ inserted });
+  } catch (err) {
+    throw badRequest(err instanceof Error ? err.message : "Invalid rows.");
+  }
+});
+
+// Wipes the space's content. Membership and the space itself survive — this is
+// "empty my account", not "delete my account".
+spaces.post("/spaces/:spaceId/data/clear", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  const keys = await clearSpaceData(c.env.DB, spaceId(c));
+  await deleteNoteImageBlobs(c.env.IMAGES, keys);
   return c.body(null, 204);
 });

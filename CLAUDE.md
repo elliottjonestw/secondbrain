@@ -1,6 +1,6 @@
 # CLAUDE.md — Second Brain
 
-Local-first life-management desktop app (Calendar, Reminders, To-Do, Notes, People) + optional AI assistant. Single user, offline, no accounts. Tauri v2 + React 19 + TypeScript + Vite + Tailwind + SQLite.
+Life-management desktop app (Calendar, Reminders, To-Do, Notes, People) + optional AI assistant. Multi-user accounts, data in the cloud so it follows you between devices; reads fall back to a local cache offline, writes fail loudly. Tauri v2 + React 19 + TypeScript + Vite + Tailwind, on a Cloudflare Worker + D1 + KV backend.
 
 **Golden rule: update [README.md](README.md) in the same session as any change to features, architecture, data model, permissions, or the AI toolset.**
 
@@ -9,7 +9,9 @@ Local-first life-management desktop app (Calendar, Reminders, To-Do, Notes, Peop
 ```bash
 npm run tauri dev      # native app (compiles Rust; first run slow)
 npm run dev            # whole app in a browser — see Testing
-npx tsc --noEmit       # after every change
+npm run worker:dev     # local Worker + D1 (wrangler dev); tauri dev starts it too
+npm run worker:migrate # apply D1 migrations locally (idempotent)
+npx tsc --noEmit       # after every change — ALSO -p worker and -p packages/shared
 npx vite build         # after every change
 cd src-tauri && cargo check    # after touching Rust
 npm run tauri build && open "src-tauri/target/release/bundle/macos/Second Brain.app"
@@ -17,21 +19,20 @@ npm run tauri build && open "src-tauri/target/release/bundle/macos/Second Brain.
 
 Finish with `tsc` + `vite build` (+ `cargo check`), then the packaged build — some features (microphone) only work bundled. `noUnusedLocals` is on: no dead imports.
 
-Runtime DB: `~/Library/Application Support/com.elliottjones.secondbrain/secondbrain.db`.
+Data lives in **Cloudflare D1** behind the Worker in `worker/`, not on the device. There is no local database file and no SQLite engine in the client — see [`docs/cloud-migration-plan.md`](docs/cloud-migration-plan.md). Settings and secrets are still `localStorage`.
 
 ## Testing
 
 Use the browser for anything the UI can show; E2E only for what needs the real runtime.
 
-**Browser — `npm run dev`.** Outside Tauri there's no sql plugin, so `db()` falls back to `lib/browserDb.ts`: SQLite as wasm, in memory, demo-seeded each load. The full UI works — click, type, paste, screenshot.
-- Runs the real `src-tauri/migrations/*.sql`, so schema can't drift and new migrations need no wiring.
-- `globalThis.__sbdb.select(sql, params)` inspects what a click wrote. Dev/browser only.
-- Nothing persists; a reload reseeds.
-- Keep `@sqlite.org/sqlite-wasm` in `optimizeDeps.exclude` — otherwise Vite breaks the module's path to the `.wasm` and the fetch "succeeds" with `index.html`.
-- Use the official build, not `sql.js`, which has no FTS5 (005 also needs trigram, SQLite ≥ 3.45).
-- **Proves SQL and UI, never runtime behaviour** — different SQLite, different bindings. It cannot catch a plugin-bridge bug.
+**Browser — `npm run dev` + a local Worker (`npm run worker:dev`).** `wrangler dev` runs D1 in Miniflare against `.wrangler/state`, so the client talks real HTTP + JSON to the same Worker code production runs. `npm run tauri dev` starts both.
+- Apply migrations first: `npm run worker:migrate` (idempotent).
+- Schema still can't drift — it's the same `worker/migrations/*.sql` the deployed Worker uses.
+- It now proves **more** than the old sqlite-wasm path: the transport is the real one, so a bridge bug can't hide. What it can't prove is anything packaged-only (microphone).
+- You need an account: register through the UI. Data persists in `.wrangler/state` until you delete it.
+- `npx wrangler d1 execute secondbrain-dev --local --command "…"` inspects what a click wrote.
 
-**E2E — the real app, real `tauri-plugin-sql`, real DB.**
+**E2E — the real app against a real Worker.**
 ```bash
 npm run test:e2e:build   # tauri build --features wdio (slow; required first)
 npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
@@ -44,16 +45,16 @@ npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
 
 ## Architecture (do not violate)
 
-1. **Thin Rust.** `lib.rs` only wires plugins + registers migrations; all logic is TypeScript, so a browser/Windows build stays a packaging change.
-2. **`src/db.ts` is the only module that touches SQLite.** (`ai.ts` runs filtered read SQL by design — keep query logic there or in `db.ts`, never in views.)
-3. **All event access goes through `src/lib/calendars.ts`**, which merges the SQLite calendar with CalDAV ones and routes writes. Views and `ai.ts` must never call `db.ts` event helpers or the CalDAV client directly.
+1. **Thin Rust.** `lib.rs` wires plugins and nothing else — no database, no migrations. All logic is TypeScript, so a browser/mobile build stays a packaging change.
+2. **`src/db.ts` is the only module that talks to the API for domain data**, and `worker/src/db/` is the only place SQL is written. Views never call `lib/api.ts` directly.
+3. **All event access goes through `src/lib/calendars.ts`**, which merges the built-in calendar with CalDAV ones and routes writes. Views and `ai.ts` must never call `db.ts` event helpers or the CalDAV client directly.
 4. **Keep domain tables separate; connect via `links` + `item_tags`.**
 5. **Schema is CalDAV/CardDAV-ready:** UUID PKs double as iCal/vCard UIDs; syncable rows carry `created_at`, `updated_at`, `sequence`. Preserve when adding fields.
 
 ## Traps (each of these has bitten us)
 
 **Data**
-- **Never edit an applied migration** — sqlx checksums them. Add `00N_*.sql`, register in `lib.rs`, test 001→N against a temp DB first.
+- **Never edit an applied migration.** Add `worker/migrations/000N_*.sql` and apply with `npm run worker:migrate` (local) / `migrate:staging` / `migrate:production`. D1 tracks what it has applied; editing a file it already ran leaves environments silently divergent. No registration step — wrangler picks the directory up.
 - **Notes FTS uses `trigram remove_diacritics 1`** (005): `unicode61` indexes a space-free CJK sentence as one token, and FTS5 accepts any codepoint >127 so the query "succeeds" with zero rows. Trigram can't answer queries under 3 chars (most Chinese words are 2), so `searchNotes` routes those to `LIKE`. Keep both paths; both must AND the terms.
 - **Note images live in `note_images`, never inline in `notes.body`** (body holds `![alt](sbimg:<id>)`). A data URI there hits `listNotes` — `SELECT *` on every search keystroke — *and* the trigram index: measured, one 300KB image costs a 638KB index inline vs 331 bytes split out. Base64 `TEXT` through the plugin bridge is not the bottleneck people assume — 400KB round-trips intact in ~3ms write / ~1ms read (`e2e/noteImages.spec.ts`).
 - **No foreign keys anywhere in this schema.** `PRAGMA foreign_keys = ON` in 001 applies to the *migration* connection, so `ON DELETE CASCADE` silently never fires. Delete children explicitly in `db.ts` (`deleteTodo` for subtasks, `deleteNote` for images).
@@ -89,7 +90,7 @@ npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
 
 **UI**
 - **No drag-and-drop. HTML5 drag does not work in this WKWebView** — confirmed broken in all four places it was used; the `dataTransfer.setData` + `-webkit-user-drag` + `user-select: none` fix changed nothing. Reordering is ▲/▼ buttons; rescheduling is edit-the-event. Don't add `draggable` back: it compiles, looks right, does nothing.
-- **Don't add a `key={version}` that bumps on mutations** — it remounts the view and wipes in-progress edits (this broke Notes typing). `resetNonce` is only for demo resets.
+- **Don't add a `key={version}` that bumps on mutations** — it remounts the view and wipes in-progress edits (this broke Notes typing). The old `resetNonce` escape hatch is gone with the demo seeder; don't reintroduce one.
 - **The note editor debounces writes (400ms)**, flushing on unmount. Don't revert to save-per-keystroke.
 - **`ReactMarkdown` needs BOTH `components={{ img: NoteImage }}` and `urlTransform={noteUrlTransform}`** wherever note bodies render — `defaultUrlTransform` blanks any protocol outside http/https/mailto/xmpp/irc, so an `sbimg:` ref arrives as `src=""` and draws a broken-image box that reads as a load failure. Keep the override narrow (img `src` only) so `javascript:` is still killed.
 - **A YouTube video can never be an inline `<iframe>` here.** YouTube's embed needs a valid HTTP `Referer`; a packaged Tauri app serves the UI from `tauri://localhost` and has none, so every embed returns **"Error 153: Video player configuration error"** ([tauri#14422](https://github.com/tauri-apps/tauri/issues/14422) — `referrerpolicy`, `?origin=`, `withGlobalTauri` all tried, none work; the only cure, `tauri-plugin-localhost`, kills IPC). An in-app webview window doesn't rescue it either — measured: `/embed/` as that window's *top-level* document still returned 153, so the referrer check isn't about being framed. `YouTubeEmbed` therefore renders a thumbnail that opens the watch page in the **user's own browser** (`openUrl`, the opener plugin already wired up). It plays inline perfectly in `npm run dev` — that's the trap. Never "simplify" it back to an iframe without testing the packaged build.
@@ -138,7 +139,7 @@ npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
 - **Recurring reminders have the same trap, fixed card-side** — they store the series' base time, so a daily 8am reminder rendered yesterday flagged overdue. `ItemCard` resolves via `nextOccurrenceFrom` and **never** flags a recurring reminder overdue. Elsewhere reminder rrule is display-only.
 - **The prompt tells the model to preserve `sbimg:` refs verbatim** — an `update_note` that "tidies" the markdown orphans the image for good.
 - **Adding a tool:** `TOOLS` entry + `executeTool` case + `statusFor` string.
-- Settings live in `localStorage` (`settings.ts`), not SQLite, so a demo reset doesn't wipe the API key or calendar account.
+- Settings live in `localStorage` (`settings.ts`), not the database, so "clear all data" doesn't wipe the API key or calendar account.
 
 ## Weather (`src/lib/weather.ts`)
 
@@ -164,11 +165,11 @@ npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
 
 ```
 src/
-  db.ts        # ONLY module touching SQLite      types.ts  # + UnifiedEvent
+  db.ts        # ONLY module calling the data API   types.ts  # + UnifiedEvent
   locales/     # en, zh-TW catalogs               @types/   # typed t() keys
   lib/  i18n · format · calendars · recurrence · ics · ai · voice · weather ·
-        images · browserDb · notifications · settings · demo
-        caldav/  client · discovery · events · ical    # network client, not SQLite
+        images · notifications · settings · api · cache · auth · authStore · kdf
+        caldav/  client · discovery · events · ical    # talks to iCloud directly, not the Worker
   components/  ui · Avatar · ItemMeta · ItemCard · EventForm · MarkdownToolbar · NoteImage ·
         YouTubeEmbed
         today/   registry · types · CardShell · CardBoundary · useAsync · dayData ·
@@ -176,11 +177,19 @@ src/
         assistant/  useAssistantChat · MessageList · Composer · AssistantPopup
   views/       Today · Calendar · Reminders · Todos · Notes · People · Assistant · Settings · Search
 e2e/           # WebDriver specs (real app only; not in tsconfig)
+packages/shared/  # zod schemas + inferred types, matchQuery ranking, normalizeKey,
+                  # DATA_TABLES. Imported by BOTH sides; no Cloudflare/Tauri imports.
+worker/
+  src/index.ts               # Hono app          authorize.ts  # the ONE access check
+  src/routes/                # one file per area (auth · spaces · health)
+  src/db/                    # the ONLY place SQL is written; every query takes space_id
+  migrations/000N_*.sql      # 0001 init (squashed + tenancy) · 0002 auth throttle ·
+                             #   0003 image blob_key
+  wrangler.toml              # D1 + KV bindings per environment
 src-tauri/
-  src/lib.rs                 # plugin wiring + migrations (keep thin)
-  migrations/00N_*.sql       # 001 init · 002 lists · 003 people · 004 custom fields ·
-                             #   005 FTS trigram · 006 note images
-  capabilities/default.json  # http scope: api.openai.com + *.icloud.com + *.open-meteo.com + localhost (Ollama)
+  src/lib.rs                 # plugin wiring ONLY — no database, no migrations
+  capabilities/default.json  # http scope: the Worker + api.openai.com + *.icloud.com +
+                             #   *.open-meteo.com + localhost (Ollama, dev Worker)
 ```
 
 ## Conventions & don'ts

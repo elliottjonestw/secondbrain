@@ -1,8 +1,7 @@
 {
   "app": {
     "name": "第二大腦",
-    "searchPlaceholder": "搜尋全部內容…",
-    "dbError": "無法開啟資料庫。"
+    "searchPlaceholder": "搜尋全部內容…"
   },
   "nav": {
     "today": "今天",

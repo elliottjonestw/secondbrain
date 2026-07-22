@@ -1,13 +1,12 @@
 // Data access layer. The public facade the whole UI calls; its function
 // signatures are the app's contract.
 //
-// MID-MIGRATION (M2): todos and lists are served by the Cloudflare Worker (see
-// lib/api.ts); everything else still uses local SQLite through
-// tauri-plugin-sql. The switch is invisible to callers because the exported
-// signatures are unchanged — a view calling listTodos() cannot tell which
-// backend answered. Remaining domains follow in M3.
+// Every domain is served by the Cloudflare Worker (see lib/api.ts). The
+// migration is complete: no SQLite engine, no tauri-plugin-sql, no local
+// schema. The exported signatures are unchanged from when they read a local
+// file, which is what let the views, calendars.ts and ai.ts migrate without
+// being rewritten.
 
-import Database from "@tauri-apps/plugin-sql";
 import { v4 as uuid } from "uuid";
 import type {
   EventRow,
@@ -20,7 +19,8 @@ import type {
   PersonRow,
   ItemType,
 } from "./types";
-import type { TodoCreate, TodoUpdate, ReminderCreate, CustomFieldDef } from "@secondbrain/shared";
+import { DATA_TABLES } from "@secondbrain/shared";
+import type { TodoCreate, TodoUpdate, ReminderCreate, CustomFieldDef, DataTable } from "@secondbrain/shared";
 import { apiRequest, apiGetBinary, ApiError, OfflineError } from "./lib/api";
 import { getCurrentSpaceId } from "./lib/authStore";
 import { networkFirst } from "./lib/cache";
@@ -40,56 +40,9 @@ function spacePath(suffix: string): string {
   return `/v1/spaces/${spaceId}${suffix}`;
 }
 
-/** The slice of `tauri-plugin-sql`'s Database this module actually uses. Both
- *  the native backend and the browser dev backend satisfy it. */
-export interface SqlDb {
-  select<T>(query: string, params?: unknown[]): Promise<T>;
-  execute(query: string, params?: unknown[]): Promise<{ rowsAffected: number; lastInsertId: number }>;
-}
-
-let _db: SqlDb | null = null;
-// The in-flight open promise, so concurrent first-callers of db() share one
-// open instead of racing into the init branch (the browser backend's
-// loadBrowserDb + resetAndSeedDemo would otherwise run twice in parallel, and
-// the seeder's own db() call could re-enter before `_db` is assigned).
-let _dbPromise: Promise<SqlDb> | null = null;
-
 // isTauri lives in lib/platform.ts (so the API client can use it without a
 // cycle) and is re-exported here for the callers that import it from db.
 export { isTauri } from "./lib/platform";
-import { isTauri } from "./lib/platform";
-
-/**
- * Lazily open the DB. Migrations run automatically on first load.
- *
- * Outside Tauri there is no plugin to call, so a wasm SQLite stands in — see
- * `lib/browserDb.ts`. It exists so the UI can be exercised in a browser; it is
- * seeded with demo data and never persists.
- */
-export function db(): Promise<SqlDb> {
-  if (_db) return Promise.resolve(_db);
-  if (!_dbPromise) {
-    _dbPromise = (async () => {
-      let opened: SqlDb;
-      if (isTauri()) {
-        opened = (await Database.load("sqlite:secondbrain.db")) as SqlDb;
-      } else {
-        const { loadBrowserDb } = await import("./lib/browserDb");
-        opened = await loadBrowserDb();
-        // Seed only after the backend is assigned below: the seeder calls db()
-        // itself, and doing this inside loadBrowserDb() would re-enter this
-        // branch forever.
-      }
-      _db = opened;
-      if (!isTauri()) {
-        const { resetAndSeedDemo } = await import("./lib/demo");
-        await resetAndSeedDemo();
-      }
-      return opened;
-    })();
-  }
-  return _dbPromise;
-}
 
 export function newId(): string {
   return uuid();
@@ -755,148 +708,123 @@ export async function getItemLabel(type: ItemType, id: string): Promise<string> 
 // Full data export / import (backup + restore, see lib/backup.ts)
 //
 // A backup is every row of every user table, preserved verbatim (ids,
-// timestamps, sequence) so a restored DB is byte-identical to the original and
+// timestamps, sequence) so a restored account is identical to the original and
 // stays CalDAV/CardDAV-syncable. The two secret-bearing settings (OpenAI key,
 // CalDAV account) live in localStorage, not here, so they never travel in a
 // table dump — backup.ts decides which settings to include.
+//
+// All of this is server-side now. The rows never existed on this device to
+// begin with, and `wrangler d1 export` refuses a database containing virtual
+// tables (`notes_fts` is one), so a *logical* export — walking the tables over
+// the API — is the only backup that can exist. `space_id` is stripped on the
+// way out and re-injected from the caller's own space on the way in, which is
+// what lets a backup be restored into a different account.
 // ---------------------------------------------------------------------------
 
-/** Every user-data table. `notes_fts` is a virtual FTS mirror kept in sync by
- *  triggers, so it is never exported or imported directly. No FK cascades
- *  exist, so insert order doesn't matter. `note_images` is included so a backup
- *  round-trips the bytes a note's `sbimg:` reference points at — without it,
- *  restore would leave every image broken, and clearAllData would orphan rows. */
-export const DATA_TABLES = [
-  "tags", "item_tags", "links", "events", "reminders", "lists", "todos",
-  "notes", "note_images", "people", "person_custom_fields",
-] as const;
-
-export type DataTable = (typeof DATA_TABLES)[number];
+// The table list lives in @secondbrain/shared so the client's file format and
+// the Worker's endpoints can't disagree about what "all my data" covers.
+// Re-exported because backup.ts imports both from here.
+export { DATA_TABLES };
+export type { DataTable };
 
 type Row = Record<string, unknown>;
 
-/** Read every user table verbatim, keyed by table name. */
+/** Pages are bounded by the Worker (max 1000); this is the request size, not a
+ *  cap on the export — `exportTables` follows the cursor to the end. */
+const EXPORT_PAGE = 500;
+
+/**
+ * Read every user table, following each table's cursor to exhaustion.
+ *
+ * One request per page rather than one for the whole account: the Workers free
+ * plan caps CPU at 10 ms per request, and serializing an entire account in one
+ * response is the shape that starts failing exactly when a user has enough data
+ * to care about losing it.
+ */
 export async function exportTables(): Promise<Record<DataTable, Row[]>> {
-  const d = await db();
   const out = {} as Record<DataTable, Row[]>;
-  for (const t of DATA_TABLES) {
-    out[t] = await d.select<Row[]>(`SELECT * FROM ${t}`);
+  for (const table of DATA_TABLES) {
+    const rows: Row[] = [];
+    let cursor: string | null = null;
+    do {
+      const qs = new URLSearchParams({ limit: String(EXPORT_PAGE) });
+      if (cursor) qs.set("cursor", cursor);
+      const page: { rows: Row[]; next_cursor: string | null } = await apiRequest(
+        spacePath(`/export/${table}?${qs}`),
+      );
+      rows.push(...page.rows);
+      cursor = page.next_cursor;
+    } while (cursor);
+    out[table] = rows;
   }
   return out;
 }
 
 /**
- * Replace ALL user data with the supplied rows. Destructive: every existing
- * row of every table is deleted first, then the given rows are inserted with
- * their stored columns, so ids/timestamps/sequence survive a round-trip.
+ * Replace ALL user data with the supplied rows. Destructive: the space is
+ * cleared first, then the given rows are inserted with their stored columns, so
+ * ids/timestamps/sequence survive a round-trip.
  *
- * Only columns that actually exist on each table are inserted — a stray or
- * renamed column in the file is dropped rather than throwing, and the column
- * whitelist also stops arbitrary JSON keys reaching the SQL string.
+ * The Worker drops columns it doesn't recognize and NFC-normalizes identity
+ * keys (tags.name, lists.name, person_custom_fields.label) on insert, so a
+ * backup written on a machine whose IME emits NFD can't reintroduce the
+ * duplicate-key bug `normalizeKey` exists to prevent. Doing that server-side
+ * rather than here is deliberate: there are several clients now, and a
+ * client-side-only normalization is unenforceable.
  *
- * Atomicity: tauri-plugin-sql multiplexes calls across a pool of connections,
- * so a `BEGIN` in one `execute` and a `COMMIT` in another can land on different
- * connections and leak a dangling transaction. We therefore don't rely on a
- * cross-call transaction — instead we snapshot the current data first and, if
- * any table's swap throws, restore the snapshot so the user is never left with
- * a half-empty DB. Every row is validated up front (each must be a plain
- * object) so a malformed file is rejected before anything is deleted.
- *
- * Identity keys (tags.name, lists.name, person_custom_fields.label) are
- * NFC-normalized on insert, so a backup produced elsewhere can't reintroduce
- * the NFD/NFC duplicate bug that normalizeKey exists to prevent.
+ * Atomicity: a restore is many requests and D1 has no cross-request
+ * transaction, so a failure partway through would otherwise leave a half-empty
+ * account. We snapshot the current data first and restore it if any step
+ * throws — the same guarantee the local implementation gave, just paid for over
+ * the network. Rows are validated before anything is cleared.
  */
 export async function importTables(
   tables: Partial<Record<DataTable, Row[]>>,
 ): Promise<void> {
-  const d = await db();
-
-  // Validate + normalize every row BEFORE touching the DB, so a malformed file
-  // is rejected with nothing deleted.
-  const allowedByTable = new Map<DataTable, Set<string>>();
-  for (const t of DATA_TABLES) allowedByTable.set(t, await columnsOf(t));
-  const cleanedByTable = new Map<DataTable, { cols: string[]; params: unknown[] }[]>();
+  // Validate BEFORE touching anything, so a malformed file deletes nothing.
   for (const table of DATA_TABLES) {
-    const rows = tables[table] ?? [];
-    if (!rows.length) continue;
-    const allowed = allowedByTable.get(table)!;
-    const identityCol = IDENTITY_KEY_COLS[table];
-    const cleaned: { cols: string[]; params: unknown[] }[] = [];
-    for (const row of rows) {
+    for (const row of tables[table] ?? []) {
       if (!row || typeof row !== "object" || Array.isArray(row)) {
         throw new Error(`Invalid row in backup table "${table}"`);
       }
-      const cols = Object.keys(row).filter((c) => allowed.has(c));
-      if (!cols.length) continue;
-      cleaned.push({
-        cols,
-        params: cols.map((c) =>
-          c === identityCol ? normalizeKey(String(row[c])) : row[c],
-        ),
-      });
     }
-    if (cleaned.length) cleanedByTable.set(table, cleaned);
   }
 
-  // Snapshot the current data so we can fully roll back if any table swap fails.
   const snapshot = await exportTables();
-
   try {
-    for (const table of DATA_TABLES) {
-      await d.execute(`DELETE FROM ${table}`);
-      const cleaned = cleanedByTable.get(table);
-      if (!cleaned) continue;
-      for (const { cols, params } of cleaned) {
-        const placeholders = cols.map(() => "?").join(",");
-        await d.execute(
-          `INSERT INTO ${table} (${cols.join(",")}) VALUES (${placeholders})`,
-          params,
-        );
-      }
-    }
+    await writeAllTables(tables);
   } catch (err) {
-    // Roll the whole DB back to the pre-import state.
-    await restoreSnapshot(snapshot).catch(() => { /* best-effort; the original error wins */ });
+    // Roll the account back to its pre-import state. Best-effort: the original
+    // error is the one worth reporting.
+    await writeAllTables(snapshot).catch(() => { /* the original error wins */ });
     throw err;
   }
-  // A backup with no lists (or one that omitted the lists table) must not leave
-  // the app unable to hold a todo — re-seed the defaults if the wipe left none.
-  await ensureDefaultLists();
 }
 
-/** Re-apply a snapshot from exportTables. Used to roll back a failed import. */
-async function restoreSnapshot(snapshot: Record<DataTable, Row[]>): Promise<void> {
-  const d = await db();
+/** Clear the space, then upload every table in bounded batches. */
+async function writeAllTables(tables: Partial<Record<DataTable, Row[]>>): Promise<void> {
+  await apiRequest<void>(spacePath("/data/clear"), { method: "POST" });
   for (const table of DATA_TABLES) {
-    await d.execute(`DELETE FROM ${table}`);
-    const allowed = await columnsOf(table);
-    for (const row of snapshot[table] ?? []) {
-      const cols = Object.keys(row).filter((c) => allowed.has(c));
-      if (!cols.length) continue;
-      await d.execute(
-        `INSERT INTO ${table} (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`,
-        cols.map((c) => row[c]),
-      );
+    const rows = tables[table] ?? [];
+    // The Worker rejects batches over 1000 rows; stay well under so one batch
+    // is also comfortably inside the CPU budget.
+    for (let i = 0; i < rows.length; i += EXPORT_PAGE) {
+      await apiRequest<unknown>(spacePath(`/import/${table}`), {
+        method: "POST",
+        body: { rows: rows.slice(i, i + EXPORT_PAGE) },
+      });
     }
   }
 }
 
-/** The set of real column names on a table (via PRAGMA table_info). */
-async function columnsOf(table: DataTable): Promise<Set<string>> {
-  const info = await (await db()).select<{ name: string }[]>(`PRAGMA table_info(${table})`);
-  return new Set(info.map((c) => c.name));
+/** Remove every row of user data in the signed-in account's space, including
+ *  the stored image bytes. Settings' "clear all data" uses this; the account
+ *  itself survives. */
+export async function clearAllData(): Promise<void> {
+  await apiRequest<void>(spacePath("/data/clear"), { method: "POST" });
 }
 
-/**
- * Columns whose value is an identity key compared under binary collation, so
- * they must be NFC-normalized on restore exactly like the TS write paths do.
- * Absent from the map => no normalization.
- */
-const IDENTITY_KEY_COLS: Partial<Record<DataTable, string>> = {
-  tags: "name",
-  lists: "name",
-  person_custom_fields: "label",
-};
+
 
 /** Remove tags + links referencing an item that is being deleted. Server-side
  *  now (M3d): tags/links live in D1 for every type, notes included. */

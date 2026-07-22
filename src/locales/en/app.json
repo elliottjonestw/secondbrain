@@ -1,8 +1,7 @@
 {
   "app": {
     "name": "Second Brain",
-    "searchPlaceholder": "Search everything…",
-    "dbError": "Failed to open the database."
+    "searchPlaceholder": "Search everything…"
   },
   "nav": {
     "today": "Today",
