@@ -73,12 +73,12 @@ name = "secondbrain-api"
 [[env.production.d1_databases]]
 binding = "DB"
 database_name = "secondbrain-prod"
-database_id = "REPLACE_ME_AFTER_wrangler_d1_create"
+database_id = "ceca277b-0fcf-4999-b213-bc1587917d87"
 migrations_dir = "migrations"
 
 [[env.production.kv_namespaces]]
 binding = "IMAGES"
-id = "REPLACE_ME_AFTER_wrangler_kv_namespace_create"
+id = "5f4698a44ab74ee98889b629a1b4f17b"
 
 [env.production.vars]
 ENVIRONMENT = "production"
