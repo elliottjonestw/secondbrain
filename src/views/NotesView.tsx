@@ -13,6 +13,7 @@ import { NoteLink, normalizeEmbeds, youTubeId, youTubeUrl } from "../components/
 import { encodeNoteImage } from "../lib/images";
 import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/ItemMeta";
 import { fmtDateTime } from "../lib/format";
+import { useFirstLoad, firstLoadScreen, SlowLoad } from "../components/ViewGate";
 
 export default function NotesView({ onChange, initialId }: { onChange: () => void; initialId?: string }) {
   const { t } = useTranslation();
@@ -26,7 +27,9 @@ export default function NotesView({ onChange, initialId }: { onChange: () => voi
     setNotes(list);
     setTargets(await allLinkTargets());
   };
-  useEffect(() => { void reload(); }, [query]);
+  // Only the first load blocks the page: typing in the search box re-runs this
+  // and must keep the current list visible rather than flashing a spinner.
+  const gate = useFirstLoad(reload, [query]);
 
   // Cached image object URLs are shared across notes, so they're only revoked
   // when the whole view goes away — not on every note switch.
@@ -42,8 +45,12 @@ export default function NotesView({ onChange, initialId }: { onChange: () => voi
     onChange();
   }
 
+  const blocked = firstLoadScreen(gate);
+  if (blocked) return blocked;
+
   return (
     <div className="flex h-full">
+      <SlowLoad state={gate} />
       {/* Notes list */}
       <aside className="flex w-72 shrink-0 flex-col border-r border-neutral-200 dark:border-neutral-700">
         <div className="space-y-2 border-b border-neutral-200 p-3 dark:border-neutral-700">

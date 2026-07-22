@@ -147,6 +147,8 @@ device either; you re-enter them once per machine.
 - **Languages** — the whole UI is available in **English** and **Traditional Chinese (繁體中文)**. Dates, times, the first day of the week, and relative labels ("tomorrow") follow the selected language via `Intl`; switching applies instantly with no restart. Set it in **Settings → General** (defaults to following your OS).
 - **Integration** — shared tagging and generic `links` (any item ↔ any item) across all five types; a person can be attached to any event, to-do, reminder, or note (and shown/edited from either side). **Global search** covers everything — events (built-in *and* connected calendars), reminders, to-dos, notes and people — matching each word of the query separately rather than the whole phrase as one string, so "lunch with Alex meeting" still finds "Lunch with Alex". A recurring event appears once, dated to its next occurrence rather than to whenever the series began, and clicking any result opens it on the right day even if that's months away.
 
+- **Page loading** — Calendar, Reminders, To-Do, Notes and People wait for their first read before drawing, instead of appearing empty and filling in a moment later (an empty list and "you have nothing here" look identical, which is the worse of the two). Only that first read blocks: reloading after an edit, or typing in a page's search box, leaves what's on screen alone. Two rules keep the wait from becoming a trap — a read that **fails** ends on a short "couldn't load this page" panel with a **Try again** button, and a read that simply never comes back stops blocking after eight seconds, showing the page with a small "still loading" marker until it does. The worst case is the old behaviour, never a spinner that never stops. Today is the exception by design: its cards each load on their own, so one slow tile doesn't hold up the rest of the dashboard.
+
 The UI uses a consistent modern icon set (`lucide-react`) throughout — no emoji.
 
 ## Languages (i18n)
@@ -369,6 +371,8 @@ worker/src/
                         #   pieces both surfaces render: MessageList, Composer,
                         #   AssistantPopup (the floating chat window)
     ui.tsx              # Modal, Button, priority helpers
+    ViewGate.tsx        # a view's first-load state: spinner, retry panel, and
+                        #   the timeout that stops either owning the page
     Avatar.tsx          # contact avatar (photo or initials)
     PhotoPicker.tsx     # avatar + profile-photo upload (crop/downscale)
     MarkdownToolbar.tsx # note formatting bar (selection/line transforms)

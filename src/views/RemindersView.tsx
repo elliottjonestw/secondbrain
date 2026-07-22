@@ -10,6 +10,7 @@ import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/It
 import { fmtDateTime, isOverdue, toLocalInput, fromLocalInput } from "../lib/format";
 import { describeRrule, RRULE_PRESETS } from "../lib/recurrence";
 import { ensureNotificationPermission } from "../lib/notifications";
+import { useFirstLoad, firstLoadScreen, SlowLoad } from "../components/ViewGate";
 
 type Filter = "all" | "scheduled" | "flagged" | "completed";
 
@@ -38,7 +39,10 @@ export default function RemindersView({ onChange, initialId }: { onChange: () =>
   const [notifOk, setNotifOk] = useState(true);
 
   const reload = async () => setReminders(await listReminders());
-  useEffect(() => { void reload(); void ensureNotificationPermission().then(setNotifOk); }, []);
+  // Blocks the page until the first list arrives — an empty list and "you have
+  // no reminders" look identical. Later reloads leave what's on screen alone.
+  const gate = useFirstLoad(reload, []);
+  useEffect(() => { void ensureNotificationPermission().then(setNotifOk); }, []);
   const bump = () => { void reload(); onChange(); };
 
   // Open a specific reminder when navigated here with a target (e.g. from an
@@ -73,8 +77,12 @@ export default function RemindersView({ onChange, initialId }: { onChange: () =>
 
   const visible = reminders.filter((r) => matchesFilter(r, filter));
 
+  const blocked = firstLoadScreen(gate);
+  if (blocked) return blocked;
+
   return (
     <div className="flex h-full">
+      <SlowLoad state={gate} />
       {/* Filter sidebar (Apple Reminders-style smart lists) */}
       <aside className="w-48 shrink-0 border-r border-neutral-200 p-3 dark:border-neutral-700">
         <h3 className="mb-2 text-xs font-semibold uppercase text-neutral-400">{t("nav.reminders")}</h3>

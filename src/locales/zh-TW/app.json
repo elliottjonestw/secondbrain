@@ -23,7 +23,12 @@
     "untitled": "未命名",
     "untitledParen": "（未命名）",
     "moveUp": "上移",
-    "moveDown": "下移"
+    "moveDown": "下移",
+    "stillLoading": "仍在載入…",
+    "loadFailed": "無法載入此頁面",
+    "loadFailedDetail": "取得資料時發生問題。",
+    "loadOffline": "目前離線，且這個頁面尚未儲存供離線使用。",
+    "retry": "重試"
   },
   "priority": {
     "0": "無",

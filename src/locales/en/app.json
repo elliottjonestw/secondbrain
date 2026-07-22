@@ -23,7 +23,12 @@
     "untitled": "Untitled",
     "untitledParen": "(untitled)",
     "moveUp": "Move up",
-    "moveDown": "Move down"
+    "moveDown": "Move down",
+    "stillLoading": "Still loading…",
+    "loadFailed": "Couldn't load this page",
+    "loadFailedDetail": "Something went wrong while fetching your data.",
+    "loadOffline": "You're offline, and this page hasn't been saved for offline use yet.",
+    "retry": "Try again"
   },
   "priority": {
     "0": "None",

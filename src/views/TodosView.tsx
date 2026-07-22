@@ -10,6 +10,7 @@ import { Button, Modal, PriorityFlag, priorityKey, CATEGORY_COLORS } from "../co
 import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/ItemMeta";
 import { fmtDateTime, isOverdue, toLocalInput, fromLocalInput } from "../lib/format";
 import { OfflineError, ApiError } from "../lib/api";
+import { useFirstLoad, firstLoadScreen, SlowLoad } from "../components/ViewGate";
 
 export default function TodosView({ onChange, initialId }: { onChange: () => void; initialId?: string }) {
   const { t: tr } = useTranslation();
@@ -45,19 +46,18 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
   };
 
   const reload = async () => {
-    try {
-      setTodos(await listTodos());
-      const ls = await listLists();
-      setLists(ls);
-      // Keep a valid active list selected (first one by default).
-      setActiveList((cur) => (ls.some((l) => l.id === cur) ? cur : ls[0]?.id ?? ""));
-    } catch (e) {
-      // Offline with no snapshot yet, or the server is down. Surface it rather
-      // than leaving an empty list that looks like "you have no todos".
-      setMutError(explain(e));
-    }
+    setTodos(await listTodos());
+    const ls = await listLists();
+    setLists(ls);
+    // Keep a valid active list selected (first one by default).
+    setActiveList((cur) => (ls.some((l) => l.id === cur) ? cur : ls[0]?.id ?? ""));
   };
-  useEffect(() => { void reload(); }, []);
+  // The first load blocks the page rather than showing an empty list that
+  // reads as "you have no to-dos"; it throws on failure so the gate can offer
+  // a retry. Later reloads keep the current list on screen and report failure
+  // through the banner instead.
+  const gate = useFirstLoad(reload, []);
+  const softReload = () => { void reload().catch((e) => setMutError(explain(e))); };
 
   // Open a specific to-do when navigated here with a target (e.g. from an
   // assistant card), switching to its list so it's also visible behind the
@@ -76,7 +76,7 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
     }
   }, [todos, initialId]);
 
-  const bump = () => { void reload(); onChange(); };
+  const bump = () => { softReload(); onChange(); };
 
   const topLevel = useMemo(
     // Incomplete tasks always sort above completed ones; position order is
@@ -139,7 +139,7 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
     addingListRef.current = false;
     setNewListName("");
     setAddingList(false);
-    await reload();
+    await reload().catch((e) => setMutError(explain(e)));
     setActiveList(id);
     onChange();
   }
@@ -158,8 +158,12 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
     await mutate(() => reorderTodos(ids));
   }
 
+  const blocked = firstLoadScreen(gate);
+  if (blocked) return blocked;
+
   return (
     <div className="flex h-full">
+      <SlowLoad state={gate} />
       {/* Lists sidebar */}
       <aside className="w-48 shrink-0 border-r border-neutral-200 p-3 dark:border-neutral-700">
         <div className="mb-2 flex items-center justify-between">

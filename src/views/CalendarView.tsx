@@ -19,6 +19,7 @@ import {
 import { exportCalendar, importCalendar } from "../lib/ics";
 import { Button } from "../components/ui";
 import EventForm from "../components/EventForm";
+import { useFirstLoad, firstLoadScreen, SlowLoad } from "../components/ViewGate";
 
 type ViewMode = "month" | "week" | "day";
 const HOUR_PX = 48;
@@ -58,21 +59,24 @@ export default function CalendarView(
   // navigation. `seq` discards out-of-order responses when the user pages
   // faster than the network answers.
   const seq = useRef(0);
-  useEffect(() => {
+  const load = async () => {
     const mine = ++seq.current;
     setLoading(true);
-    void (async () => {
-      const [{ occurrences: occs, errors: errs }, allTodos] = await Promise.all([
-        getOccurrences(winStart, winEnd),
-        listTodos(),
-      ]);
-      if (seq.current !== mine) return; // a newer window won
-      setOccurrences(occs);
-      setErrors(errs);
-      setTodos(allTodos.filter((t) => t.due_at && !t.completed));
-      setLoading(false);
-    })();
-  }, [winStart, winEnd, nonce]);
+    const [{ occurrences: occs, errors: errs }, allTodos] = await Promise.all([
+      getOccurrences(winStart, winEnd),
+      listTodos(),
+    ]);
+    if (seq.current !== mine) return; // a newer window won
+    setOccurrences(occs);
+    setErrors(errs);
+    setTodos(allTodos.filter((t) => t.due_at && !t.completed));
+    setLoading(false);
+  };
+  // The first fetch blocks the grid — a month drawn empty and then filled in is
+  // the flicker this removes. Paging to another month keeps the old one on
+  // screen behind the toolbar spinner instead. `getOccurrences` fails soft, so
+  // reaching the retry panel means the local read itself failed.
+  const gate = useFirstLoad(load, [winStart, winEnd, nonce]);
 
   const reload = () => { invalidateCache(); setCalendars(listCalendars()); setNonce((n) => n + 1); };
   const bump = () => { reload(); onChange(); };
@@ -123,8 +127,12 @@ export default function CalendarView(
     : mode === "week" ? t("calendar.weekOf", { date: fmtDate(startOfWeek(cursor)) })
     : fmtFullDate(cursor);
 
+  const blocked = firstLoadScreen(gate);
+  if (blocked) return blocked;
+
   return (
     <div className="flex h-full flex-col">
+      <SlowLoad state={gate} />
       {/* Toolbar */}
       <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3 dark:border-neutral-700">
         <div className="flex items-center gap-2">

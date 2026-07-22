@@ -17,6 +17,7 @@ import { Avatar } from "../components/Avatar";
 import { PhotoPicker } from "../components/PhotoPicker";
 import { TagEditor, LinksPanel, LinkTarget } from "../components/ItemMeta";
 import { fmtFullDate, fmtMonthDay, ageFromBirthday, parseBirthday } from "../lib/format";
+import { useFirstLoad, firstLoadScreen, SlowLoad } from "../components/ViewGate";
 
 // Type presets for the multi-value editors (matches vCard TYPE params).
 const EMAIL_TYPES = ["home", "work", "other"];
@@ -55,7 +56,9 @@ export default function PeopleView({ onChange, initialId }: { onChange: () => vo
     setPeople(list);
     setTargets(await allLinkTargets());
   };
-  useEffect(() => { void reload(); }, [query]);
+  // Only the first load blocks the page: typing in the search box re-runs this
+  // and must keep the current list visible rather than flashing a spinner.
+  const gate = useFirstLoad(reload, [query]);
 
   const selected = people.find((p) => p.id === selectedId) ?? null;
   const bump = () => { void reload(); onChange(); };
@@ -69,8 +72,12 @@ export default function PeopleView({ onChange, initialId }: { onChange: () => vo
     onChange();
   }
 
+  const blocked = firstLoadScreen(gate);
+  if (blocked) return blocked;
+
   return (
     <div className="flex h-full">
+      <SlowLoad state={gate} />
       {/* People list */}
       <aside className="flex w-72 shrink-0 flex-col border-r border-neutral-200 dark:border-neutral-700">
         <div className="space-y-2 border-b border-neutral-200 p-3 dark:border-neutral-700">
