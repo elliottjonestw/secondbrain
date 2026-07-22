@@ -1,0 +1,68 @@
+name = "secondbrain-api"
+main = "src/index.ts"
+compatibility_date = "2026-07-01"
+# Needed by the argon2id (hash-wasm) password hashing landing in M1, and by
+# anything reaching for node: builtins later.
+compatibility_flags = ["nodejs_compat"]
+
+# Workers logs, so a 500 in production is diagnosable without adding a logging
+# service. Off by default; there is no reason to run without it.
+[observability]
+enabled = true
+
+# ---------------------------------------------------------------------------
+# Top level = local development (`npm run dev -w worker`). `wrangler dev` runs
+# D1 in Miniflare against .wrangler/state, so nothing here touches the
+# Cloudflare account and `database_id` is ignored locally — it only has to be
+# present. Replace it before the first remote deploy (see worker/README.md).
+# ---------------------------------------------------------------------------
+[[d1_databases]]
+binding = "DB"
+database_name = "secondbrain-dev"
+database_id = "REPLACE_ME_AFTER_wrangler_d1_create"
+migrations_dir = "migrations"
+
+[vars]
+ENVIRONMENT = "development"
+# Comma-separated. Tauri's webview origin differs by OS — `tauri://localhost`
+# on macOS/iOS, `http://tauri.localhost` on Windows/Android — so both are
+# always allowed or the app breaks on half its target platforms.
+ALLOWED_ORIGINS = "http://localhost:1420,http://localhost:1421,tauri://localhost,http://tauri.localhost"
+
+# ---------------------------------------------------------------------------
+# Staging
+# ---------------------------------------------------------------------------
+[env.staging]
+name = "secondbrain-api-staging"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "secondbrain-staging"
+database_id = "93de0ce1-c6a7-45a0-bbbb-60ca2cccb6b8"
+migrations_dir = "migrations"
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+ALLOWED_ORIGINS = "tauri://localhost,http://tauri.localhost"
+
+[env.staging.observability]
+enabled = true
+
+# ---------------------------------------------------------------------------
+# Production
+# ---------------------------------------------------------------------------
+[env.production]
+name = "secondbrain-api"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "secondbrain-prod"
+database_id = "REPLACE_ME_AFTER_wrangler_d1_create"
+migrations_dir = "migrations"
+
+[env.production.vars]
+ENVIRONMENT = "production"
+ALLOWED_ORIGINS = "tauri://localhost,http://tauri.localhost"
+
+[env.production.observability]
+enabled = true

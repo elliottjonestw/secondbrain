@@ -53,6 +53,18 @@ open "src-tauri/target/release/bundle/macos/Second Brain.app"
 
 ## Where your data lives
 
+> **In progress: moving to a Cloudflare backend.** Data currently lives only on
+> the device that created it, which means it can't follow you between devices.
+> The `cloud-migration` branch is replacing the local SQLite file with a
+> Cloudflare D1 database behind a Workers API, with user accounts (register /
+> sign in) and a local read cache. See
+> [`docs/cloud-migration-plan.md`](docs/cloud-migration-plan.md) for the design
+> and [`worker/README.md`](worker/README.md) for the backend.
+>
+> **Milestone 0 of 5 is done** — infrastructure, the multi-tenant schema, and a
+> health endpoint. Nothing in the app has switched over yet: the sections below
+> describe how it works today, and stay accurate until M2.
+
 A single SQLite file, `secondbrain.db`, in Tauri's app-data directory:
 
 - macOS: `~/Library/Application Support/com.elliottjones.secondbrain/`
@@ -239,7 +251,16 @@ Calendar sync is built (**CalDAV, iCloud** — see above). The schema was design
 
 ## Project layout
 
+The repo is npm workspaces: the root package is the app, plus two workspaces
+added by the cloud migration.
+
 ```
+worker/                 # Cloudflare Worker — the API (see worker/README.md)
+  migrations/           #   D1 schema; 0001 squashes local 001–007 + tenancy
+  src/                  #   Hono app, error boundary, CORS, routes
+packages/shared/        # types + zod schemas + normalization, imported by BOTH
+                        #   the client and the Worker, as TypeScript source, so
+                        #   the two cannot drift
 src/
   db.ts                 # data-access layer (only module that touches SQLite)
   types.ts              # domain types mirroring the schema
