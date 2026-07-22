@@ -87,10 +87,12 @@ open "src-tauri/target/release/bundle/macos/Second Brain.app"
 > the tables one page at a time, because `wrangler d1 export` refuses a database
 > containing virtual tables and `notes_fts` is one.
 >
-> **Still to do:** baking the deployed Worker URL into production builds
-> (`VITE_API_URL`) so a shipped DMG/EXE reaches Cloudflare instead of
-> `localhost`. The dev app already runs both together (`npm run tauri dev`
-> starts the Worker via `dev:app`). Then M5: password reset and email
+> **Staging is deployed and verified end to end** at
+> `secondbrain-api-staging.elliottj.workers.dev` — accounts, every domain,
+> images in KV, and backup/restore all exercised against real Cloudflare, plus
+> CORS for both Tauri origins. Packaged builds read `VITE_API_URL` from
+> `.env.production`; the dev app runs client and Worker together
+> (`npm run tauri dev`). Then M5: password reset and email
 > verification — **nobody else should register until those exist**, because a
 > forgotten password currently means a lost account.
 >

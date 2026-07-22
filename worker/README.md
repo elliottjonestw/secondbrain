@@ -31,11 +31,31 @@ A `503` with `"reachable": false` almost always means the migration step was
 skipped. That's why the check queries a real table instead of `SELECT 1`, which
 would report an unmigrated database as healthy.
 
+## Deployed environments
+
+**Staging is live:** `https://secondbrain-api-staging.elliottj.workers.dev`
+(D1 `secondbrain-staging`, KV namespace `239ecd43…`, region APAC). Migrations
+through `0003` are applied, `JWT_SECRET` and `AUTH_PEPPER` are set.
+
+**Never re-run `wrangler secret put AUTH_PEPPER`** on an environment that has
+users. It is mixed into every stored password verifier, so changing it doesn't
+sign people out — it locks every account out permanently, with no recovery path
+short of deleting the users. `JWT_SECRET` is safe to rotate (it only signs
+everyone out).
+
+Production is **not** created yet: `env.production`'s `database_id` and KV `id`
+are still placeholders, and `.env.production` therefore points packaged builds
+at staging.
+
+Measured on staging from the same region as the primary: ~92 ms for a health
+query, ~170 ms wall clock per request end to end, ~900 ms for a 500-row import
+batch. Treat query *count* as the latency budget.
+
 ## First-time Cloudflare setup
 
-Not done yet — these commands create billable resources on your account, so
-they're yours to run. `database_id` in `wrangler.toml` is a placeholder until
-you do.
+These commands create resources on your account. Everything here stays on the
+free plan, which fails closed with quota errors rather than billing an
+overage — **keep the account card-free and that property holds**.
 
 ```bash
 npx wrangler login

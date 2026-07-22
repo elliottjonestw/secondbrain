@@ -55,7 +55,7 @@ migrations_dir = "migrations"
 
 [[env.staging.kv_namespaces]]
 binding = "IMAGES"
-id = "REPLACE_ME_AFTER_wrangler_kv_namespace_create"
+id = "239ecd43e0f14fc082db5819701fd892"
 
 [env.staging.vars]
 ENVIRONMENT = "staging"
