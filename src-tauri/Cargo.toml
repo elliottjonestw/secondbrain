@@ -38,3 +38,11 @@ tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 [features]
 wdio = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
 
+[[bin]]
+# `tauri dev` runs `target/debug/<bin>` directly — no `.app`, no Info.plist — so
+# macOS labels the Dock and menu bar with this filename. (The bundled build gets
+# "Second Brain" from `productName` instead.) A space here is not an option:
+# cargo accepts it, then rustc rejects `invalid character ' ' in crate name`.
+name = "second-brain"
+path = "src/main.rs"
+

@@ -22,7 +22,7 @@ export const config: WebdriverIO.Config = {
       "tauri:options": {
         // The executable INSIDE the bundle — spawning the `.app` directory
         // itself fails with EACCES. Note the binary keeps its crate name.
-        application: "./src-tauri/target/release/bundle/macos/Second Brain.app/Contents/MacOS/tauri-app",
+        application: "./src-tauri/target/release/bundle/macos/Second Brain.app/Contents/MacOS/second-brain",
       },
     } as WebdriverIO.Capabilities,
   ],

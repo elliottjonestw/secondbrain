@@ -37,7 +37,7 @@ npm run test:e2e:build   # tauri build --features wdio (slow; required first)
 npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
 ```
 - The embedded WebDriver server is behind an **opt-in `wdio` cargo feature**, not `debug_assertions`, so ordinary `tauri dev` never opens an automation port. It must never ship in a release build.
-- `wdio.conf.ts` targets the executable *inside* the bundle (`…/Contents/MacOS/tauri-app`); spawning the `.app` gives EACCES.
+- `wdio.conf.ts` targets the executable *inside* the bundle (`…/Contents/MacOS/second-brain` — the `[[bin]]` name in `Cargo.toml`, which macOS shows in the Dock for `tauri dev`); spawning the `.app` gives EACCES.
 - Rebuild before running or you silently test a stale binary — the symptom is "WebDriver server did not become ready".
 - Reserve for what only the runtime answers (the plugin's JSON bridge, packaged-only APIs).
 - `tsconfig.json` includes only `src`, so `wdio.conf.ts` and `e2e/**` are **not** typechecked.
