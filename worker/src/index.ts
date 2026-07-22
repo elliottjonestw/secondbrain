@@ -10,7 +10,7 @@ import { quotes } from "./routes/quotes";
 import { dav } from "./routes/dav";
 
 /**
- * Second Brain API.
+ * Sekunda API.
  *
  * Every route lives under /v1. The version prefix exists because published
  * desktop builds are not force-upgradable — an installed copy keeps calling

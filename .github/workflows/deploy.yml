@@ -3,7 +3,7 @@
 #
 #     # bump "version" in package.json AND src-tauri/tauri.conf.json first —
 #     # tauri.conf.json is what names the artifacts, and a tag that disagrees
-#     # with it ships "Second Brain_0.1.0.dmg" under a v0.2.0 release.
+#     # with it ships "Sekunda_0.1.0.dmg" under a v0.2.0 release.
 #     git tag v0.2.0 && git push --follow-tags
 #
 # The release is created as a DRAFT so you can check the artifacts and write the
@@ -76,7 +76,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.event_name == 'push' && github.ref_name || 'v__VERSION__' }}
-          releaseName: Second Brain ${{ github.event_name == 'push' && github.ref_name || 'v__VERSION__' }}
+          releaseName: Sekunda ${{ github.event_name == 'push' && github.ref_name || 'v__VERSION__' }}
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}

@@ -1,6 +1,6 @@
 # Cloud Migration Plan — SQLite → Cloudflare
 
-Moving Second Brain from a single-user local SQLite file to a multi-user Cloudflare
+Moving Sekunda from a single-user local SQLite file to a multi-user Cloudflare
 backend, so data follows the user across devices.
 
 ## 1. Decisions (locked)

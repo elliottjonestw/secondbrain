@@ -1,6 +1,6 @@
 {
   "app": {
-    "name": "第二大腦",
+    "name": "Sekunda",
     "searchPlaceholder": "搜尋全部內容…"
   },
   "nav": {
@@ -265,15 +265,15 @@
       "exportButton": "匯出資料",
       "exporting": "匯出中…",
       "exported": "已匯出。",
-      "exportTitle": "匯出 Second Brain 資料",
+      "exportTitle": "匯出 Sekunda 資料",
       "importHeading": "匯入",
       "importHint": "從備份檔案還原。這會取代應用程式中目前的所有內容——你的 OpenAI 金鑰與 iCloud 連線不受影響。",
       "importButton": "匯入資料",
       "importing": "匯入中…",
-      "importTitle": "匯入 Second Brain 資料",
+      "importTitle": "匯入 Sekunda 資料",
       "confirmImport": "匯入會以備份檔案的內容取代應用程式中的所有現有資料，且無法復原。要繼續嗎？",
-      "errorInvalid": "該檔案不是有效的 Second Brain 備份。",
-      "errorNewer": "此備份是由較新版本的 Second Brain 所建立。請先更新應用程式再匯入。",
+      "errorInvalid": "該檔案不是有效的 Sekunda 備份。",
+      "errorNewer": "此備份是由較新版本的 Sekunda 所建立。請先更新應用程式再匯入。",
       "resetHeading": "重設",
       "resetHint": "永久刪除你所有的活動、提醒、待辦事項、筆記、聯絡人、清單、標籤與連結。你的 OpenAI 金鑰與 iCloud 連線不受影響。若日後可能需要這些資料，請先匯出備份。",
       "resetButton": "重設所有資料",

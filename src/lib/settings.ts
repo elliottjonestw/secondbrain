@@ -256,7 +256,7 @@ export interface CalDavAccount {
 
 export interface CalendarSettings {
   account: CalDavAccount | null;
-  localVisible: boolean; // show the built-in Second Brain calendar
+  localVisible: boolean; // show the built-in Sekunda calendar
   defaultCalendarId: string; // where new events land — "local" or a calendar id
 }
 

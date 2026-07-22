@@ -49,7 +49,7 @@ export interface EventDraft {
   color: string | null;
 }
 
-export const LOCAL_CALENDAR_NAME = "Second Brain";
+export const LOCAL_CALENDAR_NAME = "Sekunda";
 
 // ---------------------------------------------------------------------------
 // Registry

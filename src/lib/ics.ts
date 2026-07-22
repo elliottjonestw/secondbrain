@@ -23,7 +23,7 @@ function mapStatus(status: string): ICalEventStatus | undefined {
 
 /** Build an iCalendar string from all events. */
 export function eventsToIcs(events: EventRow[]): string {
-  const cal = ical({ name: "Second Brain", prodId: { company: "secondbrain", product: "app" } });
+  const cal = ical({ name: "Sekunda", prodId: { company: "secondbrain", product: "app" } });
 
   for (const ev of events) {
     const start = new Date(ev.dtstart);

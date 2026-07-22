@@ -233,7 +233,7 @@ function addTimed(
 export function buildCalendarData(ev: UnifiedEvent): string {
   const vcal = new ICAL.Component("vcalendar");
   vcal.addPropertyWithValue("version", "2.0");
-  vcal.addPropertyWithValue("prodid", "-//Second Brain//CalDAV//EN");
+  vcal.addPropertyWithValue("prodid", "-//Sekunda//CalDAV//EN");
 
   const zone = writableZone(ev);
   // Clone: addSubcomponent reparents, and the registered zone is shared.

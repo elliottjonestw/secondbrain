@@ -1713,7 +1713,7 @@ function statusFor(name: string, args: Record<string, unknown>): string {
 }
 
 const SYSTEM_PROMPT =
-  "You are a helpful personal assistant embedded in a local life-management app called Second Brain. " +
+  "You are a helpful personal assistant embedded in a local life-management app called Sekunda. " +
   "You help the user with THEIR data — calendar events, reminders, to-dos, notes, people (contacts), lists, and tags.\n\n" +
   "You can READ, WRITE, and DELETE data:\n" +
   "- Read/lookup tools: get_overview, search_todos, search_events, list_calendars, search_reminders, search_notes, search_people, get_item, get_weather.\n" +

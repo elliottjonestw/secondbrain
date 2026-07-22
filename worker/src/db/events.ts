@@ -10,7 +10,7 @@ import {
 import { notFound } from "../http";
 
 /**
- * All SQL touching `events` — the built-in "Second Brain" calendar only.
+ * All SQL touching `events` — the built-in "Sekunda" calendar only.
  * CalDAV calendars are never stored (live fetch by design), so nothing here
  * knows about them; that merge stays entirely client-side in calendars.ts.
  *

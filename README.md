@@ -1,4 +1,4 @@
-# 🧠 Second Brain
+# 🧠 Sekunda
 
 A personal life-management desktop app: **Calendar, Reminders, To-Do, Notes, and People** in one integrated tool, with an optional **AI assistant** that can answer questions about your data *and* create, update, or delete items on your behalf. Built with Tauri v2 + React + TypeScript on a Cloudflare Worker + D1 backend, so your data follows you between devices. You sign in with an account; reads fall back to a local cache when you're offline, and writes fail loudly rather than pretending to succeed. The other network calls are the ones you opt into: OpenAI (assistant/voice) and your own **iCloud calendar** if you connect one.
 
@@ -50,7 +50,7 @@ npm run tauri build    # produce a distributable macOS .app / .dmg
 
 ```bash
 npm run tauri build
-open "src-tauri/target/release/bundle/macos/Second Brain.app"
+open "src-tauri/target/release/bundle/macos/Sekunda.app"
 ```
 
 ## Where your data lives
@@ -169,7 +169,7 @@ The UI ships in **English** and **Traditional Chinese (繁體中文)**, built on
 
 ## Apple Calendar (CalDAV)
 
-Connect your iCloud account and your Apple calendars work alongside the built-in **Second Brain** calendar. There is **no server, hosting, or developer configuration** — the app talks to iCloud's CalDAV endpoints directly using your own credentials.
+Connect your iCloud account and your Apple calendars work alongside the built-in **Sekunda** calendar. There is **no server, hosting, or developer configuration** — the app talks to iCloud's CalDAV endpoints directly using your own credentials.
 
 **Setup (Settings → Calendar accounts):**
 

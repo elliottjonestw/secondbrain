@@ -1,4 +1,4 @@
-# Second Brain API (Cloudflare Worker)
+# Sekunda API (Cloudflare Worker)
 
 The backend half of the cloud migration — see [`docs/cloud-migration-plan.md`](../docs/cloud-migration-plan.md)
 for the full plan and the reasoning behind each decision.

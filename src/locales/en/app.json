@@ -1,6 +1,6 @@
 {
   "app": {
-    "name": "Second Brain",
+    "name": "Sekunda",
     "searchPlaceholder": "Search everything…"
   },
   "nav": {
@@ -267,15 +267,15 @@
       "exportButton": "Export data",
       "exporting": "Exporting…",
       "exported": "Exported.",
-      "exportTitle": "Export Second Brain data",
+      "exportTitle": "Export Sekunda data",
       "importHeading": "Import",
       "importHint": "Restore from a backup file. This replaces everything currently in the app — your OpenAI key and iCloud connection are left untouched.",
       "importButton": "Import data",
       "importing": "Importing…",
-      "importTitle": "Import Second Brain data",
+      "importTitle": "Import Sekunda data",
       "confirmImport": "Importing will replace ALL current data in the app with the contents of the backup file. This cannot be undone. Continue?",
-      "errorInvalid": "That file isn't a valid Second Brain backup.",
-      "errorNewer": "This backup was made by a newer version of Second Brain. Update the app before restoring it.",
+      "errorInvalid": "That file isn't a valid Sekunda backup.",
+      "errorNewer": "This backup was made by a newer version of Sekunda. Update the app before restoring it.",
       "resetHeading": "Reset",
       "resetHint": "Permanently delete all your events, reminders, to-dos, notes, people, lists, tags and links. Your OpenAI key and iCloud connection are left untouched. Export a backup first if you might want this data back.",
       "resetButton": "Reset all data",

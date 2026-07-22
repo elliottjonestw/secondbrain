@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Second Brain",
+  "productName": "Sekunda",
   "version": "0.1.0",
   "identifier": "com.elliottjones.secondbrain",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Second Brain",
+        "title": "Sekunda",
         "width": 1200,
         "height": 800,
         "minWidth": 800,

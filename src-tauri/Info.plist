@@ -4,6 +4,6 @@
 <dict>
 	<!-- Required so the WKWebView may request microphone access for voice input. -->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Second Brain uses the microphone so you can talk to the assistant with your voice.</string>
+	<string>Sekunda uses the microphone so you can talk to the assistant with your voice.</string>
 </dict>
 </plist>

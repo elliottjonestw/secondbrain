@@ -1,4 +1,4 @@
-# CLAUDE.md — Second Brain
+# CLAUDE.md — Sekunda
 
 Life-management desktop app (Calendar, Reminders, To-Do, Notes, People) + optional AI assistant. Multi-user accounts, data in the cloud so it follows you between devices; reads fall back to a local cache offline, writes fail loudly. Tauri v2 + React 19 + TypeScript + Vite + Tailwind, on a Cloudflare Worker + D1 + KV backend.
 
@@ -14,7 +14,7 @@ npm run worker:migrate # apply D1 migrations locally (idempotent)
 npx tsc --noEmit       # after every change — ALSO -p worker and -p packages/shared
 npx vite build         # after every change
 cd src-tauri && cargo check    # after touching Rust
-npm run tauri build && open "src-tauri/target/release/bundle/macos/Second Brain.app"
+npm run tauri build && open "src-tauri/target/release/bundle/macos/Sekunda.app"
 ```
 
 Finish with `tsc` + `vite build` (+ `cargo check`), then the packaged build — some features (microphone) only work bundled. `noUnusedLocals` is on: no dead imports.

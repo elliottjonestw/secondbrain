@@ -263,7 +263,7 @@ export type ReminderUpdate = z.infer<typeof reminderUpdateSchema>;
 export type ReminderQuery = z.infer<typeof reminderQuerySchema>;
 
 // ---------------------------------------------------------------------------
-// Events (iCalendar VEVENT shape). This is the LOCAL ("Second Brain") calendar
+// Events (iCalendar VEVENT shape). This is the LOCAL ("Sekunda") calendar
 // only — CalDAV calendars are never stored here, so they need no schema.
 // dtstart is a required ISO instant; all_day/rrule/exdates carry the recurrence.
 // ---------------------------------------------------------------------------
