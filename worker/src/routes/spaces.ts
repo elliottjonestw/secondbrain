@@ -2,6 +2,9 @@ import { Hono } from "hono";
 import {
   listCreateSchema,
   listUpdateSchema,
+  reminderCreateSchema,
+  reminderQuerySchema,
+  reminderUpdateSchema,
   todoCreateSchema,
   todoQuerySchema,
   todoReorderSchema,
@@ -20,6 +23,13 @@ import {
   reorderTodos,
   updateTodo,
 } from "../db/todos";
+import {
+  createReminder,
+  deleteReminder,
+  getReminder,
+  listReminders,
+  updateReminder,
+} from "../db/reminders";
 
 /**
  * Space-scoped domain routes: `/v1/spaces/:spaceId/(lists|todos)`.
@@ -115,5 +125,46 @@ spaces.patch("/spaces/:spaceId/todos/:id", async (c) => {
 spaces.delete("/spaces/:spaceId/todos/:id", async (c) => {
   await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
   await deleteTodo(c.env.DB, spaceId(c), c.req.param("id"));
+  return c.body(null, 204);
+});
+
+// ---------------------------------------------------------------------------
+// Reminders
+// ---------------------------------------------------------------------------
+
+spaces.get("/spaces/:spaceId/reminders", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "read");
+  const query = reminderQuerySchema.parse(
+    Object.fromEntries(new URL(c.req.url).searchParams),
+  );
+  const { rows, partial } = await listReminders(c.env.DB, spaceId(c), query);
+  c.header("X-Partial-Match", partial ? "1" : "0");
+  return c.json(rows);
+});
+
+spaces.post("/spaces/:spaceId/reminders", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  const input = reminderCreateSchema.parse(await c.req.json());
+  return c.json(await createReminder(c.env.DB, spaceId(c), input), 201);
+});
+
+spaces.get("/spaces/:spaceId/reminders/:id", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "read");
+  const row = await getReminder(c.env.DB, spaceId(c), c.req.param("id"));
+  if (!row) throw notFound("No such reminder.");
+  return c.json(row);
+});
+
+spaces.patch("/spaces/:spaceId/reminders/:id", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  const body = await c.req.json().catch(() => null);
+  if (body === null || typeof body !== "object") throw badRequest("Expected a JSON object.");
+  const patch = reminderUpdateSchema.parse(body);
+  return c.json(await updateReminder(c.env.DB, spaceId(c), c.req.param("id"), patch));
+});
+
+spaces.delete("/spaces/:spaceId/reminders/:id", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  await deleteReminder(c.env.DB, spaceId(c), c.req.param("id"));
   return c.body(null, 204);
 });

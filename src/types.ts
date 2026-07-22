@@ -60,21 +60,8 @@ export interface EventRow {
   updated_at: string | null;
 }
 
-export interface ReminderRow {
-  id: string;
-  title: string;
-  notes: string | null;
-  due_at: string | null;
-  remind_at: string | null;
-  rrule: string | null;
-  priority: number;
-  completed: number;
-  completed_at: string | null;
-  linked_todo_id: string | null;
-  sequence: number;
-  created_at: string | null;
-  updated_at: string | null;
-}
+// ReminderRow is defined in @secondbrain/shared (see TodoRow/ListRow above).
+export type { ReminderRow } from "@secondbrain/shared";
 
 // TodoRow and ListRow are defined in @secondbrain/shared so the Worker returns
 // exactly the shape the client consumes. Re-exported here because the whole app

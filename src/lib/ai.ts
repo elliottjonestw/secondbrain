@@ -25,8 +25,8 @@ import { ageFromBirthday, nextBirthday } from "./format";
 import { LANGUAGES, currentLanguage } from "./i18n";
 import type { EventRow, ItemRef, ItemType, UnifiedEvent } from "../types";
 import {
-  db, listLists, listTodos, getTodo, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
-  matchQuery, anyTermClause,
+  db, listLists, listTodos, getTodo, listReminders, getReminder, listTags, linksForItem, tagsForItem, getItemLabel, searchNotes, queryTerms,
+  matchQuery,
   upsertTodo, upsertReminder, upsertNote, upsertList, tagItem, nowIso,
   deleteTodo, deleteReminder, deleteNote, deleteList,
   listPeople, searchPeople, upsertPerson, deletePerson, createLink, deleteLink,
@@ -138,6 +138,7 @@ async function getRowById(table: string, id: unknown): Promise<any | null> {
   // Todos are remote (M2): a local SELECT would hit an empty table and make
   // update_todo / delete_todo report "no such todo" for todos that exist.
   if (table === "todos") return (await getTodo(id)) ?? null;
+  if (table === "reminders") return (await getReminder(id)) ?? null;
   const d = await db();
   const rows = await d.select<any[]>(`SELECT * FROM ${table} WHERE id = ?`, [id]);
   return rows[0] ?? null;
@@ -752,7 +753,11 @@ async function toolGetOverview() {
   // Todos are remote (M2); count them from the fetched list rather than a local
   // SELECT, which would now count an empty table and make the assistant report
   // zero todos. Other domains are still local.
-  const [lists, tags, todos] = await Promise.all([listLists(), listTags(), listTodos()]);
+  // Todos and reminders are remote (M2/M3); count from the fetched lists rather
+  // than a local SELECT on an empty table. Other domains are still local.
+  const [lists, tags, todos, reminders] = await Promise.all([
+    listLists(), listTags(), listTodos(), listReminders(),
+  ]);
   return {
     now: toLocalIso(new Date().toISOString()),
     now_readable: format(new Date(), "EEEE MMMM d, yyyy, h:mm a"),
@@ -760,8 +765,8 @@ async function toolGetOverview() {
       events: await one("SELECT COUNT(*) n FROM events"),
       todos: todos.length,
       todos_active: todos.filter((t) => t.completed === 0).length,
-      reminders: await one("SELECT COUNT(*) n FROM reminders"),
-      reminders_active: await one("SELECT COUNT(*) n FROM reminders WHERE completed = 0"),
+      reminders: reminders.length,
+      reminders_active: reminders.filter((r) => r.completed === 0).length,
       notes: await one("SELECT COUNT(*) n FROM notes"),
       people: await one("SELECT COUNT(*) n FROM people"),
     },
@@ -926,38 +931,44 @@ async function resolveEvent(args: Record<string, unknown>) {
 }
 
 async function toolSearchReminders(args: Record<string, unknown>) {
-  const d = await db();
-  const where: string[] = [];
-  const params: unknown[] = [];
+  // Reminders are remote (M3): fetch the list and filter in JS, mirroring
+  // toolSearchTodos. Tags stay local until M3d.
+  let rows: any[] = await listReminders();
 
   const status = (args.status as string) ?? "active";
-  if (status === "active") where.push("completed = 0");
-  else if (status === "completed") where.push("completed = 1");
+  if (status === "active") rows = rows.filter((r) => r.completed === 0);
+  else if (status === "completed") rows = rows.filter((r) => r.completed === 1);
 
   const queryTermList = typeof args.query === "string" ? queryTerms(args.query.trim()) : [];
   if (queryTermList.length > 0) {
-    const { clause, params: p } = anyTermClause(queryTermList, ["title", "notes"]);
-    where.push(clause);
-    params.push(...p);
+    const lowered = queryTermList.map((t) => t.toLowerCase());
+    rows = rows.filter((r) => {
+      const hay = `${r.title ?? ""} ${r.notes ?? ""}`.toLowerCase();
+      return lowered.some((t) => hay.includes(t));
+    });
   }
-  if (args.flagged === true) where.push("priority > 0");
+  if (args.flagged === true) rows = rows.filter((r) => r.priority > 0);
+  const coalesce = (r: any) => r.remind_at ?? r.due_at ?? null;
   const dueBefore = parseDate(args.due_before, true);
-  if (dueBefore) { where.push("COALESCE(remind_at, due_at) <= ?"); params.push(dueBefore.toISOString()); }
+  if (dueBefore) rows = rows.filter((r) => coalesce(r) && coalesce(r) <= dueBefore.toISOString());
   const dueAfter = parseDate(args.due_after);
-  if (dueAfter) { where.push("COALESCE(remind_at, due_at) >= ?"); params.push(dueAfter.toISOString()); }
+  if (dueAfter) rows = rows.filter((r) => coalesce(r) && coalesce(r) >= dueAfter.toISOString());
 
-  let tagIds: Set<string> | null = null;
-  if (typeof args.tag === "string" && args.tag.trim()) tagIds = await idsForTag("reminder", args.tag.trim());
+  if (typeof args.tag === "string" && args.tag.trim()) {
+    const tagIds = await idsForTag("reminder", args.tag.trim());
+    rows = rows.filter((r) => tagIds.has(r.id));
+  }
 
-  const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  const rows = await d.select<any[]>(
-    `SELECT * FROM reminders ${clause} ORDER BY completed ASC, COALESCE(remind_at, due_at) IS NULL, COALESCE(remind_at, due_at) ASC`,
-    params,
+  // completed last, then earliest remind_at/due_at first — the old ORDER BY.
+  rows.sort((a, b) =>
+    a.completed - b.completed ||
+    (coalesce(a) ? 0 : 1) - (coalesce(b) ? 0 : 1) ||
+    String(coalesce(a)).localeCompare(String(coalesce(b))),
   );
-  const tagged = tagIds ? rows.filter((r) => tagIds!.has(r.id)) : rows;
+
   const m = queryTermList.length > 0
-    ? matchQuery(tagged, args.query as string, (r) => [r.title, r.notes])
-    : { rows: tagged, partial: false };
+    ? matchQuery(rows, args.query as string, (r) => [r.title, r.notes])
+    : { rows, partial: false };
   const filtered = m.rows;
   const limit = clampLimit(args.limit);
   return {

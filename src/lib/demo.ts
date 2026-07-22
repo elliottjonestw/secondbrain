@@ -4,20 +4,19 @@
 // Dates are relative to "now" so the demo always looks current.
 
 import {
-  db, nowIso,
+  db,
   DATA_TABLES,
-  upsertEvent, upsertReminder, upsertNote, upsertPerson,
+  upsertEvent, upsertNote, upsertPerson,
   ensureCustomField, tagItem, createLink,
 } from "../db";
 
-// M2 note: todos and lists are remote now, so the demo seeder no longer creates
-// them. This seeder auto-runs on every browser dev load (browserDb reseeds each
-// time); seeding todos/lists here would hammer the Worker and pile up duplicates
-// on every reload, since each seed mints fresh ids. The demo therefore covers
-// only the still-local domains — events, reminders, notes, people — and a freshly
-// registered account already has its Personal/Work lists from the server. The
-// few demo cross-links that pointed at todos are dropped until the demo is
-// reworked for the cloud model.
+// Migration note: as each domain moves to the Worker it leaves this seeder,
+// which auto-runs on every browser dev load (browserDb reseeds each time) —
+// seeding a remote domain here would hammer the Worker and pile up duplicates.
+// Remote already: todos, lists, reminders (M2/M3). Still local and seeded here:
+// events, notes, people. A freshly registered account gets its Personal/Work
+// lists from the server. Cross-links that pointed at now-remote items are
+// dropped until the demo is reworked for the cloud model.
 
 /** Remove every row from every LOCAL user table. DATA_TABLES still lists todos
  *  and lists, whose local tables are simply empty and unused now — the DELETE is
@@ -89,28 +88,9 @@ export async function resetAndSeedDemo(): Promise<void> {
   });
 
   // ---- Reminders ----
-  const meds = await upsertReminder({
-    title: "Take vitamins", notes: null, due_at: null, remind_at: iso(0, 8, 0),
-    rrule: "FREQ=DAILY", priority: 1, completed: 0, completed_at: null, linked_todo_id: null,
-  });
-  await upsertReminder({
-    title: "Pay rent", notes: "Auto-transfer or manual?", due_at: iso(6, 9, 0),
-    remind_at: iso(6, 9, 0), rrule: "FREQ=MONTHLY", priority: 3, completed: 0,
-    completed_at: null, linked_todo_id: null,
-  });
-  await upsertReminder({
-    title: "Water the plants", notes: null, due_at: null, remind_at: iso(2, 18, 0),
-    rrule: null, priority: 2, completed: 0, completed_at: null, linked_todo_id: null,
-  });
-  await upsertReminder({
-    title: "Submit expense report", notes: null, due_at: iso(-1, 17, 0),
-    remind_at: iso(-1, 17, 0), rrule: null, priority: 2, completed: 0,
-    completed_at: null, linked_todo_id: null,
-  });
-  await upsertReminder({
-    title: "Book flights", notes: "Done!", due_at: iso(-3, 12, 0), remind_at: null,
-    rrule: null, priority: 0, completed: 1, completed_at: nowIso(), linked_todo_id: null,
-  });
+  // Reminders are remote now (M3), so the demo no longer seeds them — same
+  // reasoning as todos/lists in M2. Seeding them here would write to the real
+  // space on every browser dev load and pile up duplicates.
 
   // ---- Notes (markdown) ----
   const standupNotes = await upsertNote({
@@ -174,7 +154,6 @@ export async function resetAndSeedDemo(): Promise<void> {
   // Todo tags are omitted in M2 — todos are remote and not seeded here.
   await tagItem("work", "event", standup);
   await tagItem("work", "event", oneOnOne);
-  await tagItem("health", "reminder", meds);
   await tagItem("ideas", "note", ideas);
   await tagItem("work", "person", alex);
 

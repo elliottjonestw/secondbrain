@@ -22,7 +22,7 @@ import type {
   PersonCustomField,
   ItemType,
 } from "./types";
-import type { TodoCreate, TodoUpdate } from "@secondbrain/shared";
+import type { TodoCreate, TodoUpdate, ReminderCreate } from "@secondbrain/shared";
 import { apiRequest, ApiError, OfflineError } from "./lib/api";
 import { getCurrentSpaceId } from "./lib/authStore";
 import { networkFirst } from "./lib/cache";
@@ -222,17 +222,21 @@ export async function deleteEvent(id: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Reminders
+// Reminders — served by the Worker (M3). Same remote pattern as todos/lists.
 // ---------------------------------------------------------------------------
 export async function listReminders(): Promise<ReminderRow[]> {
-  return (await db()).select<ReminderRow[]>(
-    "SELECT * FROM reminders ORDER BY completed ASC, due_at IS NULL, due_at ASC",
+  return networkFirst(`reminders:${getCurrentSpaceId()}`, () =>
+    apiRequest<ReminderRow[]>(spacePath("/reminders")),
   );
 }
 
 export async function getReminder(id: string): Promise<ReminderRow | undefined> {
-  const rows = await (await db()).select<ReminderRow[]>("SELECT * FROM reminders WHERE id = ?", [id]);
-  return rows[0];
+  try {
+    return await apiRequest<ReminderRow>(spacePath(`/reminders/${id}`));
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return undefined;
+    throw e;
+  }
 }
 
 export type ReminderInput = Omit<
@@ -241,45 +245,41 @@ export type ReminderInput = Omit<
 > & { id?: string };
 
 export async function upsertReminder(input: ReminderInput): Promise<string> {
-  const d = await db();
-  const now = nowIso();
+  // Not annotated ReminderUpdate: that would widen every field to optional and
+  // break the create body's required shape. The values are all concrete.
+  const fields = {
+    title: input.title,
+    notes: input.notes,
+    due_at: input.due_at,
+    remind_at: input.remind_at,
+    rrule: input.rrule,
+    priority: input.priority,
+    completed: input.completed as 0 | 1,
+    completed_at: input.completed_at,
+    linked_todo_id: input.linked_todo_id,
+  };
   if (input.id) {
-    await d.execute(
-      `UPDATE reminders SET title=?, notes=?, due_at=?, remind_at=?, rrule=?,
-         priority=?, completed=?, completed_at=?, linked_todo_id=?,
-         sequence=sequence+1, updated_at=? WHERE id=?`,
-      [
-        input.title, input.notes, input.due_at, input.remind_at, input.rrule,
-        input.priority, input.completed, input.completed_at, input.linked_todo_id,
-        now, input.id,
-      ],
-    );
+    await apiRequest<ReminderRow>(spacePath(`/reminders/${input.id}`), { method: "PATCH", body: fields });
     return input.id;
   }
   const id = newId();
-  await d.execute(
-    `INSERT INTO reminders (id, title, notes, due_at, remind_at, rrule, priority,
-       completed, completed_at, linked_todo_id, sequence, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?)`,
-    [
-      id, input.title, input.notes, input.due_at, input.remind_at, input.rrule,
-      input.priority, input.completed, input.completed_at, input.linked_todo_id,
-      now, now,
-    ],
-  );
+  await apiRequest<ReminderRow>(spacePath("/reminders"), {
+    method: "POST",
+    body: { id, ...fields } satisfies ReminderCreate,
+  });
   return id;
 }
 
 export async function toggleReminder(id: string, completed: boolean): Promise<void> {
-  await (await db()).execute(
-    "UPDATE reminders SET completed=?, completed_at=?, sequence=sequence+1, updated_at=? WHERE id=?",
-    [completed ? 1 : 0, completed ? nowIso() : null, nowIso(), id],
-  );
+  await apiRequest<ReminderRow>(spacePath(`/reminders/${id}`), {
+    method: "PATCH",
+    body: { completed: completed ? 1 : 0, completed_at: completed ? nowIso() : null },
+  });
 }
 
 export async function deleteReminder(id: string): Promise<void> {
-  await (await db()).execute("DELETE FROM reminders WHERE id=?", [id]);
-  await removeItemRelations("reminder", id);
+  await apiRequest<void>(spacePath(`/reminders/${id}`), { method: "DELETE" });
+  await removeItemRelations("reminder", id); // links/tags still local until M3d
 }
 
 // ---------------------------------------------------------------------------
@@ -525,8 +525,15 @@ async function searchRows<T>(
 }
 
 /** Global-search helpers: one row per match, ranked, no filters. */
-export function searchReminders(query: string): Promise<ReminderRow[]> {
-  return searchRows<ReminderRow>("reminders", ["title", "notes"], query, (r) => [r.title, r.notes]);
+export async function searchReminders(query: string): Promise<ReminderRow[]> {
+  const q = query.trim();
+  if (!q) return [];
+  try {
+    return await apiRequest<ReminderRow[]>(spacePath(`/reminders?q=${encodeURIComponent(q)}`));
+  } catch (e) {
+    if (e instanceof OfflineError) return [];
+    throw e;
+  }
 }
 
 /** Remote search (M2). The server ranks with the same shared helpers, so the

@@ -37,6 +37,22 @@ export interface TodoRow {
   updated_at: string | null;
 }
 
+export interface ReminderRow {
+  id: string;
+  title: string;
+  notes: string | null;
+  due_at: string | null;
+  remind_at: string | null;
+  rrule: string | null;
+  priority: number;
+  completed: number;
+  completed_at: string | null;
+  linked_todo_id: string | null;
+  sequence: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Shared field validators
 // ---------------------------------------------------------------------------
@@ -124,3 +140,43 @@ export const todoQuerySchema = z.object({
 });
 
 export type TodoQuery = z.infer<typeof todoQuerySchema>;
+
+// ---------------------------------------------------------------------------
+// Reminders — same create/partial-update/query shape as todos, no list or
+// parent, plus remind_at / rrule / linked_todo_id.
+// ---------------------------------------------------------------------------
+
+const reminderFields = {
+  title: z.string().trim().min(1).max(1000),
+  notes: z.string().max(100_000).nullable(),
+  due_at: isoOrNull,
+  remind_at: isoOrNull,
+  rrule: z.string().max(1000).nullable(),
+  priority,
+  completed: boolInt,
+  completed_at: isoOrNull,
+  linked_todo_id: idSchema.nullable(),
+};
+
+export const reminderCreateSchema = z.object({ id: idSchema, ...reminderFields });
+
+export const reminderUpdateSchema = z.object({
+  title: reminderFields.title.optional(),
+  notes: reminderFields.notes.optional(),
+  due_at: reminderFields.due_at.optional(),
+  remind_at: reminderFields.remind_at.optional(),
+  rrule: reminderFields.rrule.optional(),
+  priority: reminderFields.priority.optional(),
+  completed: reminderFields.completed.optional(),
+  completed_at: reminderFields.completed_at.optional(),
+  linked_todo_id: reminderFields.linked_todo_id.optional(),
+});
+
+export const reminderQuerySchema = z.object({
+  q: z.string().max(200).optional(),
+  completed: z.enum(["0", "1"]).optional(),
+});
+
+export type ReminderCreate = z.infer<typeof reminderCreateSchema>;
+export type ReminderUpdate = z.infer<typeof reminderUpdateSchema>;
+export type ReminderQuery = z.infer<typeof reminderQuerySchema>;
