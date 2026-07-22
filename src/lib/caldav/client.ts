@@ -6,7 +6,7 @@
 // that blocks calling other origins from the tauri:// webview. Parsing the XML
 // it returns is plain DOMParser work in JS — only the network hop needs Rust.
 
-import { fetch } from "@tauri-apps/plugin-http";
+import { httpFetch as fetch } from "../httpFetch";
 import type { CalDavAccount } from "../settings";
 
 export const NS = {

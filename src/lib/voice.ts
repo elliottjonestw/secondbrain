@@ -7,7 +7,7 @@
 // This is purely an I/O layer around the existing askAssistant() flow — the
 // transcript is fed in as a normal user turn, and the text reply is read out.
 
-import { fetch } from "@tauri-apps/plugin-http";
+import { httpFetch as fetch } from "./httpFetch";
 import { getSettings, clampSpeechRate } from "./settings";
 import { synthesize, DEFAULT_OPENAI_VOICE } from "./openaiTts";
 import i18next from "i18next";

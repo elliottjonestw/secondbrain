@@ -15,7 +15,7 @@
 // own fetch is blocked by CORS from tauri://, and both hosts are scoped in
 // capabilities/default.json.
 
-import { fetch } from "@tauri-apps/plugin-http";
+import { httpFetch as fetch } from "./httpFetch";
 import type { TemperatureUnit, WeatherLocation } from "./settings";
 
 const FORECAST_URL = "https://api.open-meteo.com/v1/forecast";

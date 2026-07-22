@@ -11,7 +11,7 @@
 // the browser CORS restriction that blocks calling api.openai.com from the
 // webview.
 
-import { fetch } from "@tauri-apps/plugin-http";
+import { httpFetch as fetch } from "./httpFetch";
 import i18next from "i18next";
 // Deliberately date-fns' unlocalized `format`, not lib/format's locale-aware
 // wrapper: these strings go into the model's prompt, which stays English

@@ -18,7 +18,7 @@ A personal life-management desktop app: **Calendar, Reminders, To-Do, Notes, and
 | ICS import/export | `ical-generator` (export) + `ical.js` (import) |
 | Calendar sync | CalDAV (RFC 4791) over `tauri-plugin-http`; `ical.js` for VEVENT parse/serialize |
 | File I/O | `tauri-plugin-dialog` + `tauri-plugin-fs` |
-| Networking | `tauri-plugin-http` (bypasses webview CORS to reach OpenAI, iCloud, and a local Ollama server) |
+| Networking | `lib/httpFetch.ts` — `tauri-plugin-http` in the app (bypasses webview CORS), native `fetch` on the web |
 | Voice | `getUserMedia`/`MediaRecorder` + OpenAI Whisper (STT); OpenAI `audio/speech` or Web `speechSynthesis` (TTS) |
 
 The Rust side is intentionally thin — plugin registration only (`src-tauri/src/lib.rs`), with no database and no migrations. **All business logic lives in TypeScript** (`src/db.ts` is the only module that calls the data API; `worker/src/db/` is the only place SQL is written), so a plain-browser, Windows or iOS build is a packaging change, not a rewrite.

@@ -1,0 +1,120 @@
+# Publishes the web build to the `sekunda-web` repository on every push to main.
+#
+# Separate from worker.yml and deploy.yml for the same reason those are separate
+# from each other: different trigger, different target, and a failure here must
+# not block shipping a desktop installer or a Worker fix.
+#
+# Note this deploys on push while the WORKER deliberately does not. That
+# asymmetry is intentional — publishing static files is trivially revertible by
+# pushing again, whereas a Worker deploy can carry a D1 migration that re-running
+# an older commit will not undo.
+#
+# ---------------------------------------------------------------------------
+# Required repository secret
+# ---------------------------------------------------------------------------
+#   SEKUNDA_WEB_TOKEN — a GitHub personal access token that can push to
+#                       elliottjonestw/sekunda-web.
+#
+# The built-in GITHUB_TOKEN cannot be used: it is scoped to THIS repository
+# only, so a cross-repository push fails with a 403 that reads like a branch
+# protection error. Create a fine-grained PAT limited to the sekunda-web
+# repository with "Contents: Read and write", and nothing else.
+#
+# ---------------------------------------------------------------------------
+# Two settings that break the site quietly if they disagree with reality
+# ---------------------------------------------------------------------------
+#   PAGES_BASE      must match the PATH the site is served from. A GitHub
+#                   project site lives at <user>.github.io/<repo>/, so assets
+#                   resolve against /sekunda-web/. Set this to "/" if you move
+#                   to a custom domain at the root, or every asset 404s.
+#
+#   ALLOWED_ORIGINS the Worker only answers browsers whose ORIGIN it lists (see
+#                   worker/wrangler.toml). The published origin must be in it,
+#                   or the site loads and then fails every request. A path is
+#                   not part of an origin — /sekunda-web/ needs no separate
+#                   entry, a custom domain does.
+name: Web
+
+on:
+  push:
+    branches: [main]
+    # Anything that changes the bundle. The Worker's own sources are excluded:
+    # they don't ship in the web build, and worker.yml already covers them.
+    paths:
+      - "src/**"
+      - "packages/shared/**"
+      - "index.html"
+      - "vite.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".env.production"
+      - ".github/workflows/web.yml"
+  workflow_dispatch:
+
+env:
+  PAGES_BASE: /sekunda-web/
+  TARGET_REPO: elliottjonestw/sekunda-web
+  TARGET_BRANCH: main
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The build gate. `npm run build` is `tsc && vite build`, so a type error
+      # fails here rather than publishing a broken bundle — the same
+      # check-before-deploy shape worker.yml uses.
+      #
+      # --base is passed on the command line rather than set in vite.config.ts
+      # because it is a property of WHERE THIS WORKFLOW PUBLISHES, not of the
+      # app: the desktop build must keep the default "/" or Tauri can't load
+      # its own assets from tauri://localhost.
+      - name: Build
+        run: npm run build -- --base="${{ env.PAGES_BASE }}"
+
+      # index.html copied to 404.html is the standard GitHub Pages SPA fallback:
+      # Pages has no rewrite rules, so any path other than the root would
+      # otherwise hard-404 instead of reaching the app.
+      #
+      # .nojekyll stops Pages running the output through Jekyll, which silently
+      # drops files and directories whose names begin with an underscore.
+      - name: Add Pages fallbacks
+        run: |
+          cp dist/index.html dist/404.html
+          touch dist/.nojekyll
+
+      - name: Publish to ${{ env.TARGET_REPO }}
+        env:
+          TOKEN: ${{ secrets.SEKUNDA_WEB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::error::SEKUNDA_WEB_TOKEN is not set. See the header of this file."
+            exit 1
+          fi
+
+          # A fresh history each time, force-pushed. The target repo is a build
+          # artifact, not a source of truth: keeping every past bundle would
+          # grow it without bound and nobody reads its history. This is why the
+          # workflow must never point at a repo holding hand-written files.
+          cd dist
+          git init -q
+          git checkout -qb "${TARGET_BRANCH}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Build from ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
+
+          # The token goes in the remote URL, so it never reaches a log: `set -x`
+          # is off, and Actions masks the secret in output anyway.
+          git remote add origin "https://x-access-token:${TOKEN}@github.com/${TARGET_REPO}.git"
+          git push -q --force origin "${TARGET_BRANCH}"
+          echo "Published ${GITHUB_SHA} to ${TARGET_REPO}@${TARGET_BRANCH}"

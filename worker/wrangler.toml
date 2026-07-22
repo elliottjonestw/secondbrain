@@ -59,7 +59,12 @@ id = "239ecd43e0f14fc082db5819701fd892"
 
 [env.staging.vars]
 ENVIRONMENT = "staging"
-ALLOWED_ORIGINS = "tauri://localhost,http://tauri.localhost"
+# The web build is served from GitHub Pages by .github/workflows/web.yml.
+# Its ORIGIN is the pages host only — no path, no trailing slash — so a
+# project site at .../sekunda-web/ is still just the github.io origin.
+# Using a custom domain later means adding it here and redeploying;
+# a missing origin looks like every request failing for no reason.
+ALLOWED_ORIGINS = "tauri://localhost,http://tauri.localhost,https://elliottjonestw.github.io"
 
 [env.staging.observability]
 enabled = true
@@ -82,7 +87,12 @@ id = "5f4698a44ab74ee98889b629a1b4f17b"
 
 [env.production.vars]
 ENVIRONMENT = "production"
-ALLOWED_ORIGINS = "tauri://localhost,http://tauri.localhost"
+# The web build is served from GitHub Pages by .github/workflows/web.yml.
+# Its ORIGIN is the pages host only — no path, no trailing slash — so a
+# project site at .../sekunda-web/ is still just the github.io origin.
+# Using a custom domain later means adding it here and redeploying;
+# a missing origin looks like every request failing for no reason.
+ALLOWED_ORIGINS = "tauri://localhost,http://tauri.localhost,https://elliottjonestw.github.io"
 
 [env.production.observability]
 enabled = true
