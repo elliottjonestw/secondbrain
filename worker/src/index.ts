@@ -5,6 +5,7 @@ import { ApiError } from "./http";
 import { corsMiddleware } from "./middleware/cors";
 import { health } from "./routes/health";
 import { auth } from "./routes/auth";
+import { spaces } from "./routes/spaces";
 
 /**
  * Second Brain API.
@@ -28,6 +29,7 @@ app.use("*", corsMiddleware());
 
 app.route("/v1", health);
 app.route("/v1", auth);
+app.route("/v1", spaces);
 
 app.notFound((c) =>
   c.json({ error: { code: "not_found", message: "No such endpoint." } }, 404),
