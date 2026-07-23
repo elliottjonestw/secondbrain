@@ -524,6 +524,7 @@
     "listeningHint": "聆聽中… 點麥克風即可停止",
     "listeningHintSpace": "聆聽中…放開空白鍵即可停止",
     "tagline": "查詢與修改 · 使用你的資料",
+    "tokens": "{{n}} 個 token",
     "openChat": "詢問助理",
     "closeChat": "關閉對話",
     "openInAssistant": "在助理頁面開啟",

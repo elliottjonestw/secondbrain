@@ -62,6 +62,11 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
   const [recording, setRecording] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Running OpenAI token total for the current conversation, across both typed
+  // and spoken turns (the chat rounds always count; transcription only when the
+  // STT model reports usage). Reset by clear(), so it tracks the visible chat.
+  const [tokenCount, setTokenCount] = useState(0);
+  const addUsage = (total: number) => setTokenCount((c) => c + total);
   const recRef = useRef<Recording | null>(null);
   const startingRef = useRef(false);     // startRecording() is in flight
   const stopPendingRef = useRef(false);  // released before recording began
@@ -172,6 +177,7 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
       const reply = await askAssistant(next, {
         onStatus: setStatus,
         signal: controller.signal,
+        onUsage: addUsage,
         onItems: (items) => {
           for (const it of items) {
             const key = `${it.type}:${it.id}:${it.occurrenceStart ?? ""}`;
@@ -290,7 +296,7 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
     abortRef.current = controller;
     try {
       const blob = await rec.stop();
-      const text = await transcribe(blob, controller.signal);
+      const text = await transcribe(blob, controller.signal, addUsage);
       abortRef.current = null;
       setLoading(false);
       if (!text) { setError(t("assistant.notHeard")); return; }
@@ -343,6 +349,7 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
   function clear() {
     setMessages([]);
     setError(null);
+    setTokenCount(0);
     stopSpeaking();
     // If a reply is being held for speech-to-start, throw it away rather than
     // letting the pending reveal/timer re-append it into the emptied transcript.
@@ -356,7 +363,7 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
     messages,
     input, setInput,
     loading, status, recording, speaking, heldBySpace, error, setError, busy,
-    voiceOutput,
+    voiceOutput, tokenCount,
     deliver, submitTyped, stopAssistant, toggleMic, stopVoice, cancelInput, clear,
   };
 }

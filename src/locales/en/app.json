@@ -526,6 +526,7 @@
     "listeningHint": "Listening… tap the mic to stop",
     "listeningHintSpace": "Listening… release the SPACE bar to stop",
     "tagline": "Asks and edits · works on your data",
+    "tokens": "{{n}} tokens",
     "openChat": "Ask the assistant",
     "closeChat": "Close chat",
     "openInAssistant": "Open in Assistant",

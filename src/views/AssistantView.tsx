@@ -61,7 +61,11 @@ export default function AssistantView({
               <span className="flex items-center gap-1.5"><VolumeX size={14} /> {t("assistant.stopSpeaking")}</span>
             </Button>
           )}
-          <span className="text-xs text-neutral-400">{t("assistant.tagline")}</span>
+          {chat.tokenCount > 0 ? (
+            <span className="text-xs text-neutral-400">{t("assistant.tokens", { n: chat.tokenCount.toLocaleString() })}</span>
+          ) : (
+            <span className="text-xs text-neutral-400">{t("assistant.tagline")}</span>
+          )}
           {messages.length > 0 && (
             <Button variant="ghost" onClick={chat.clear}>
               <span className="flex items-center gap-1.5"><Trash2 size={14} /> {t("assistant.clear")}</span>

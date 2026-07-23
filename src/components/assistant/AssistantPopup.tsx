@@ -92,6 +92,11 @@ export default function AssistantPopup({
       <div className="flex items-center gap-1 border-b border-neutral-200 bg-white px-3 py-2 dark:border-neutral-700 dark:bg-neutral-800">
         <Sparkles size={16} className="shrink-0 text-blue-500" />
         <span className="min-w-0 flex-1 truncate text-sm font-semibold">{t("assistant.title")}</span>
+        {chat.tokenCount > 0 && (
+          <span className="shrink-0 text-[11px] tabular-nums text-neutral-400">
+            {t("assistant.tokens", { n: chat.tokenCount.toLocaleString() })}
+          </span>
+        )}
         {chat.speaking && (
           <button
             onClick={chat.stopVoice}

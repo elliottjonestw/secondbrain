@@ -79,7 +79,15 @@ function extFor(mime: string): string {
 }
 
 /** Transcribe recorded audio to text. Returns "" if nothing was heard. */
-export async function transcribe(blob: Blob, signal?: AbortSignal): Promise<string> {
+// onUsage reports the transcription's token total when the model returns one, so
+// a voice turn counts toward the same tally as its typed cousins. whisper-1 (the
+// default) reports nothing, so this stays silent there; the gpt-4o-transcribe
+// models do include a `usage` block, and this forwards it when present.
+export async function transcribe(
+  blob: Blob,
+  signal?: AbortSignal,
+  onUsage?: (totalTokens: number) => void,
+): Promise<string> {
   const { openaiApiKey, sttModel } = getSettings();
   const key = openaiApiKey.trim();
   if (!key) throw new Error(i18next.t("errors.noApiKey"));
@@ -113,6 +121,7 @@ export async function transcribe(blob: Blob, signal?: AbortSignal): Promise<stri
     throw new Error(i18next.t("errors.transcription", { status: res.status, detail }));
   }
   const data = await res.json();
+  if (typeof data?.usage?.total_tokens === "number") onUsage?.(data.usage.total_tokens);
   return (data?.text ?? "").trim();
 }
 

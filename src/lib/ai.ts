@@ -1822,7 +1822,10 @@ async function callChat(
   messages: OAIMessage[],
   // The card-recovery round narrows the toolset and cools the temperature; it's
   // a pure tool call, where sampling variety is the problem rather than the point.
-  opts: { tools?: unknown; temperature?: number; signal?: AbortSignal } = {},
+  // onUsage reports this call's OpenAI token total so a conversation can tally
+  // what it has spent. Every round of a turn (plus the card-recovery round) runs
+  // through here, so a single hook makes the whole turn count itself.
+  opts: { tools?: unknown; temperature?: number; signal?: AbortSignal; onUsage?: (totalTokens: number) => void } = {},
 ) {
   const tools = toolsFor(opts.tools);
   const res = await fetch(ep.url, {
@@ -1844,7 +1847,9 @@ async function callChat(
     catch { detail = await res.text(); }
     throw new Error(i18next.t("errors.assistant", { status: res.status, detail }));
   }
-  return res.json();
+  const data = await res.json();
+  if (typeof data?.usage?.total_tokens === "number") opts.onUsage?.(data.usage.total_tokens);
+  return data;
 }
 
 /** Just the show_items schema, for the recovery round below. */
@@ -1878,6 +1883,7 @@ async function recoverItemCards(
   messages: OAIMessage[],
   emit: (items: ItemRef[]) => void,
   signal?: AbortSignal,
+  onUsage?: (totalTokens: number) => void,
 ): Promise<void> {
   const ask: OAIMessage[] = [
     ...messages,
@@ -1890,7 +1896,7 @@ async function recoverItemCards(
     },
   ];
   try {
-    const data = await callChat(ep, ask, { tools: SHOW_ITEMS_TOOL, temperature: 0, signal });
+    const data = await callChat(ep, ask, { tools: SHOW_ITEMS_TOOL, temperature: 0, signal, onUsage });
     const msg = data?.choices?.[0]?.message as OAIMessage | undefined;
     // The prompt asks the model to reply "NONE" when the answer referred to no
     // specific item — which arrives as plain content with no tool_calls, so the
@@ -1917,6 +1923,12 @@ export interface AskOptions {
   onItems?: (items: ItemRef[]) => void;
   /** Abort the in-flight turn. Checked between rounds and passed to fetch. */
   signal?: AbortSignal;
+  /**
+   * OpenAI's `total_tokens` for each chat call this turn makes, as it makes them
+   * — a turn can be several tool rounds plus a card-recovery round, so this fires
+   * once per round. Treat each value as an addition to the running total.
+   */
+  onUsage?: (totalTokens: number) => void;
 }
 
 /**
@@ -2003,7 +2015,7 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
     // A user cancel between rounds aborts cleanly rather than starting another
     // network call that will be thrown away.
     if (opts.signal?.aborted) throw new DOMException("Aborted", "AbortError");
-    const data = await callChat(ep, messages, { signal: opts.signal });
+    const data = await callChat(ep, messages, { signal: opts.signal, onUsage: opts.onUsage });
     const msg = data?.choices?.[0]?.message as OAIMessage | undefined;
     if (!msg) throw new Error(i18next.t("errors.emptyResponse"));
 
@@ -2016,7 +2028,7 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
       // them. Ask once for just the refs, leaving the reply text alone.
       if (!showedItems && sawItems && opts.onItems) {
         opts.onStatus?.(statusFor("show_items", {}));
-        await recoverItemCards(ep, messages, opts.onItems, opts.signal);
+        await recoverItemCards(ep, messages, opts.onItems, opts.signal, opts.onUsage);
       }
       return msg.content;
     }
