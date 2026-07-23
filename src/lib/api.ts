@@ -19,18 +19,55 @@ import {
 const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8787";
 
 /**
+ * A request that outruns this is treated as a network failure, not left
+ * hanging. Neither the web `fetch` nor the HTTP plugin imposes any deadline of
+ * its own, so a connection that goes stale while the page sits idle — a laptop
+ * that slept, a network that changed — leaves a request pending for the
+ * browser's own multi-minute default. That is exactly what surfaced as a
+ * "still loading…" banner that never cleared: the first-load gate gives up
+ * blocking after 8s and shows the banner, but the request behind it never
+ * settles to take the banner back down. A bounded timeout turns that into an
+ * OfflineError, which resolves to a retry page instead. Longer than the gate's
+ * 8s so a genuinely slow-but-alive connection still completes.
+ */
+const REQUEST_TIMEOUT_MS = 15_000;
+
+/**
  * Inside Tauri the webview's own `fetch` is subject to CORS from
  * `tauri://localhost`, so requests must go through the HTTP plugin — and the
  * Worker's origin has to be in `capabilities/default.json`. On web and mobile
  * builds the native `fetch` is correct and the plugin isn't available, which is
  * why this is resolved at runtime rather than imported at the top.
+ *
+ * Every request is bounded by REQUEST_TIMEOUT_MS. A caller-supplied signal (a
+ * search box aborting a superseded request) is chained into the same controller
+ * so either cause aborts the fetch; the timeout aborts with a TimeoutError,
+ * which callers map to OfflineError, while a caller abort keeps its AbortError
+ * so it stays distinguishable.
  */
 async function platformFetch(input: string, init: RequestInit): Promise<Response> {
-  if (isTauri()) {
-    const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
-    return tauriFetch(input, init);
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new DOMException("Request timed out", "TimeoutError")),
+    REQUEST_TIMEOUT_MS,
+  );
+
+  const caller = init.signal;
+  if (caller) {
+    if (caller.aborted) controller.abort(caller.reason);
+    else caller.addEventListener("abort", () => controller.abort(caller.reason), { once: true });
   }
-  return fetch(input, init);
+
+  const merged: RequestInit = { ...init, signal: controller.signal };
+  try {
+    if (isTauri()) {
+      const { fetch: tauriFetch } = await import("@tauri-apps/plugin-http");
+      return await tauriFetch(input, merged);
+    }
+    return await fetch(input, merged);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** A request that failed before reaching the server. Distinct from an HTTP
@@ -134,12 +171,15 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
         ...(signal ? { signal } : {}),
       });
     } catch (e) {
-      // An abort is the caller's own doing, not a network failure — reporting
-      // it as OfflineError would put a spurious "you're offline" banner on
-      // screen every time a search box moved on.
-      if (e instanceof DOMException && e.name === "AbortError") throw e;
-      // fetch only rejects on a transport failure — DNS, refused connection,
-      // no network. An HTTP error status resolves normally.
+      // A caller abort (a search box moving on) is the caller's own doing, not
+      // a network failure — reporting it as OfflineError would put a spurious
+      // "you're offline" banner on screen. Key off the caller's own signal
+      // rather than the error's name, so the timeout abort — which the plugin
+      // may surface as a plain AbortError — isn't mistaken for one.
+      if (signal?.aborted) throw e;
+      // Everything else is a transport failure — DNS, refused connection, no
+      // network, or our own timeout firing on a stalled connection. An HTTP
+      // error status resolves normally and never lands here.
       throw new OfflineError();
     }
   };
