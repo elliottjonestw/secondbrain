@@ -241,8 +241,26 @@ function Summary({ day, viewingToday, revision }: TodayWidgetProps) {
     && !people.loading && !weather.loading;
   const summary = useDaySummary(input, ready);
 
-  // Nothing to say (no assistant configured, or an empty day) means no card at
-  // all rather than an empty one.
+  // With no assistant key, the card can't write anything — but rather than
+  // vanish (a new account would never learn the feature exists), it shows what
+  // it's for and how to switch it on, plus the reminder that Edit hides it.
+  if (!isAssistantConfigured()) {
+    return (
+      <CardShell
+        title={tr("today.summary")}
+        icon={<Sparkles size={14} className="text-blue-500" />}
+      >
+        <div className="space-y-2 text-sm text-neutral-500 dark:text-neutral-400">
+          <p>{tr("today.summaryIntro")}</p>
+          <p>{tr("today.summarySetup")}</p>
+          <p className="text-xs text-neutral-400">{tr("today.summaryHideHint")}</p>
+        </div>
+      </CardShell>
+    );
+  }
+
+  // Configured but nothing to say (an empty day) means no card at all rather
+  // than an empty one.
   if (!summary.show) return null;
 
   return (
