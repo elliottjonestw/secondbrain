@@ -614,6 +614,7 @@
     "verifyPendingTitle": "Confirm your email",
     "verifyPendingBody": "We've sent a confirmation link to {{email}}. Click it, then sign in. You can't sign in until your address is confirmed.",
     "resendVerification": "Resend confirmation email",
-    "verificationResent": "Sent — check your inbox (and your spam folder)."
+    "verificationResent": "Sent — check your inbox (and your spam folder).",
+    "captchaRequired": "Please complete the captcha to continue."
   }
 }

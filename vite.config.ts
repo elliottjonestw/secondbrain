@@ -58,7 +58,13 @@ function contentSecurityPolicy(apiUrl: string): string {
 
   return [
     "default-src 'self'",
-    "script-src 'self' 'wasm-unsafe-eval'",
+    // `challenges.cloudflare.com` is Cloudflare Turnstile: `api.js` loads from
+    // there (script-src) and it draws the challenge in an iframe from the same
+    // host (frame-src). Web-only — the widget never renders inside Tauri, but
+    // the same dist/index.html is packaged, so these directives just permit an
+    // asset the desktop build never fetches.
+    "script-src 'self' 'wasm-unsafe-eval' https://challenges.cloudflare.com",
+    "frame-src https://challenges.cloudflare.com",
     // Tailwind compiles to a stylesheet, but React writes inline style
     // attributes in several places.
     "style-src 'self' 'unsafe-inline'",

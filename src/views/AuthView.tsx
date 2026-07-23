@@ -1,8 +1,9 @@
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Brain, Loader2, MailCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Session } from "@secondbrain/shared";
 import { Button } from "../components/ui";
+import Turnstile, { TURNSTILE_ENABLED, type TurnstileHandle } from "../components/Turnstile";
 import { login, register, requestPasswordReset, resendVerification } from "../lib/auth";
 import { ApiError, OfflineError } from "../lib/api";
 
@@ -30,9 +31,16 @@ export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => v
   // "check your inbox" panel — a confirmed email is required to sign in, so
   // there is nothing else useful to do until the link is clicked.
   const [pendingVerify, setPendingVerify] = useState<string | null>(null);
+  // The Turnstile token for the current attempt. Single-use, so it's cleared
+  // and the widget re-armed after every submit. Null until the challenge
+  // passes; only consulted when TURNSTILE_ENABLED (web build with a site key).
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const turnstileRef = useRef<TurnstileHandle>(null);
 
   const isRegister = mode === "register";
   const isForgot = mode === "forgot";
+  // The captcha guards account creation and sign-in, not the reset request.
+  const showCaptcha = TURNSTILE_ENABLED && !isForgot;
 
   function switchMode(next: Mode) {
     setMode(next);
@@ -41,6 +49,13 @@ export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => v
     setConfirm("");
     setResetSent(false);
     setPendingVerify(null);
+  }
+
+  /** A failed attempt spends the token, so re-arm the widget before the user
+   *  can try again. */
+  function resetCaptcha() {
+    setCaptchaToken(null);
+    turnstileRef.current?.reset();
   }
 
   async function submit(e: FormEvent) {
@@ -73,6 +88,12 @@ export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => v
       }
     }
 
+    // The captcha (web build only) must be solved before the round-trip.
+    if (showCaptcha && !captchaToken) {
+      setError(t("auth.captchaRequired"));
+      return;
+    }
+
     setBusy(true);
     try {
       // Both paths run argon2id in here, which takes real time on purpose —
@@ -80,13 +101,15 @@ export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => v
       if (isRegister) {
         // Registration no longer signs in: a confirmed email is required, so
         // it lands on the "check your inbox" panel instead.
-        await register(email, password);
+        await register(email, password, undefined, captchaToken ?? undefined);
         setPendingVerify(email);
         setBusy(false);
         return;
       }
-      onSignedIn(await login(email, password, deviceLabel()));
+      onSignedIn(await login(email, password, deviceLabel(), captchaToken ?? undefined));
     } catch (err) {
+      // The token was spent by the attempt above; re-arm before another try.
+      resetCaptcha();
       // A correct password for an unconfirmed address isn't an error to show in
       // red — it's the same "check your inbox" state, reached from sign-in.
       if (err instanceof ApiError && err.code === "email_unverified") {
@@ -196,6 +219,12 @@ export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => v
             <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/30 dark:text-red-300">
               {error}
             </p>
+          )}
+
+          {showCaptcha && (
+            <div className="pt-1">
+              <Turnstile ref={turnstileRef} onVerify={setCaptchaToken} />
+            </div>
           )}
 
           <Button type="submit" variant="primary" disabled={busy} className="w-full !py-2">

@@ -64,6 +64,7 @@ import {
   sendVerificationEmail,
 } from "../auth/email";
 import { enforceRateLimit } from "../rateLimit";
+import { turnstileRequired, verifyTurnstile } from "../auth/turnstile";
 import { requireAuth } from "../middleware/auth";
 
 export const auth = new Hono<AppEnv>();
@@ -145,6 +146,14 @@ auth.post("/auth/register", async (c) => {
   const pepper = requireSecret(c.env, "AUTH_PEPPER");
 
   await assertNotLocked(c.env.DB, [ipBucket(clientIp(c.req.raw))]);
+
+  // Bot check, before the expensive verifier hash. Web-only and per-origin —
+  // the desktop app is exempt (see turnstileRequired). Skipped entirely when
+  // TURNSTILE_SECRET_KEY is unset.
+  if (turnstileRequired(c.env, c.req.raw)) {
+    const ok = await verifyTurnstile(c.env.TURNSTILE_SECRET_KEY!, body.turnstile_token, c.req.raw);
+    if (!ok) throw badRequest("Captcha check failed. Please try again.");
+  }
 
   // Registration DOES reveal whether an address is taken. That is unavoidable
   // — the account cannot be created — and it is the one place where the
@@ -230,6 +239,14 @@ auth.post("/auth/login", async (c) => {
 
   const buckets = [emailBucket(emailNorm), ipBucket(clientIp(c.req.raw))];
   await assertNotLocked(c.env.DB, buckets);
+
+  // Bot check before any account lookup or verifier work. Independent of
+  // whether the address exists, so it is not an enumeration oracle. Web-only
+  // and per-origin; the desktop app and unset-secret environments skip it.
+  if (turnstileRequired(c.env, c.req.raw)) {
+    const ok = await verifyTurnstile(c.env.TURNSTILE_SECRET_KEY!, body.turnstile_token, c.req.raw);
+    if (!ok) throw badRequest("Captcha check failed. Please try again.");
+  }
 
   const user = await findUserByEmail(c.env.DB, emailNorm);
 

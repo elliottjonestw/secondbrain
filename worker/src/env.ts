@@ -78,6 +78,18 @@ export interface Bindings {
    * See `sendEmail`.
    */
   RESEND_API_KEY?: string;
+  /**
+   * Cloudflare Turnstile secret, for the bot check on register and login.
+   *
+   * Optional in the type because an environment can run without it — and when
+   * it is unset the check is skipped entirely, so a dev or staging deploy needs
+   * no captcha to sign in. Its presence is what ARMS server-side enforcement
+   * for browser-origin requests (see `turnstileRequired`). Set it TOGETHER with
+   * the web build's `VITE_TURNSTILE_SITE_KEY`: a secret with no matching site
+   * key locks web users out, because the widget that mints the token never
+   * renders. The desktop app is never affected either way.
+   */
+  TURNSTILE_SECRET_KEY?: string;
 }
 
 /**

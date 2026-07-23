@@ -109,6 +109,17 @@ const saltSchema = z.string().min(24).max(128);
 /** Base64 of the 32-byte derived key. */
 const derivedKeySchema = z.string().min(43).max(64);
 
+/**
+ * Cloudflare Turnstile token from the web widget.
+ *
+ * Optional on the wire because it only exists on the web build: the desktop
+ * app serves from a `tauri://` origin, can't render the widget, and the Worker
+ * skips the check for it (see `turnstileRequired`). For a browser-origin
+ * request it is required and verified server-side. A Turnstile token is a
+ * compact opaque string; the cap is a sanity bound, not a format claim.
+ */
+const turnstileTokenSchema = z.string().max(2048).optional();
+
 export const registerSchema = z.object({
   email: emailSchema,
   kdf_salt: saltSchema,
@@ -116,6 +127,7 @@ export const registerSchema = z.object({
   derived_key: derivedKeySchema,
   /** Optional label for the space created alongside the account. */
   space_name: z.string().trim().min(1).max(100).optional(),
+  turnstile_token: turnstileTokenSchema,
 });
 
 /**
@@ -140,6 +152,7 @@ export const loginSchema = z.object({
   derived_key: derivedKeySchema,
   /** Shown in the session list so a user can tell their devices apart. */
   device_label: z.string().trim().max(100).optional(),
+  turnstile_token: turnstileTokenSchema,
 });
 
 export const refreshSchema = z.object({

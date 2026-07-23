@@ -612,6 +612,7 @@
     "verifyPendingTitle": "確認你的電子郵件",
     "verifyPendingBody": "我們已將確認連結寄到 {{email}}。請點擊連結後再登入。地址確認前將無法登入。",
     "resendVerification": "重新寄送確認信",
-    "verificationResent": "已寄出 — 請查看收件匣（以及垃圾郵件匣）。"
+    "verificationResent": "已寄出 — 請查看收件匣（以及垃圾郵件匣）。",
+    "captchaRequired": "請先完成驗證碼再繼續。"
   }
 }

@@ -43,6 +43,7 @@ export async function register(
   email: string,
   password: string,
   spaceName?: string,
+  turnstileToken?: string,
 ): Promise<RegisterResult> {
   const kdfSalt = newKdfSalt();
   const derivedKey = await deriveKey(password, kdfSalt, DEFAULT_KDF_PARAMS);
@@ -56,6 +57,9 @@ export async function register(
       kdf_params: DEFAULT_KDF_PARAMS,
       derived_key: derivedKey,
       ...(spaceName ? { space_name: spaceName } : {}),
+      // Web only — on desktop the widget never renders, so this is undefined
+      // and the Worker skips the check for the tauri:// origin.
+      ...(turnstileToken ? { turnstile_token: turnstileToken } : {}),
     },
   });
 }
@@ -80,6 +84,7 @@ export async function login(
   email: string,
   password: string,
   deviceLabel?: string,
+  turnstileToken?: string,
 ): Promise<Session> {
   // Step 1: the parameters this account was created with. Always answers, even
   // for an address with no account, so this call reveals nothing.
@@ -99,6 +104,7 @@ export async function login(
       email: email.trim(),
       derived_key: derivedKey,
       ...(deviceLabel ? { device_label: deviceLabel } : {}),
+      ...(turnstileToken ? { turnstile_token: turnstileToken } : {}),
     },
   });
 
