@@ -153,6 +153,28 @@ async function refreshAccessToken(): Promise<void> {
   }
 }
 
+/**
+ * Best-effort proactive refresh, for when the tab regains visibility after
+ * sitting idle. The access token lives only 15 minutes in memory, so the first
+ * request after a long idle has to refresh before it can fetch — and if the
+ * keep-alive socket went stale while the tab was hidden, that refresh eats the
+ * full REQUEST_TIMEOUT_MS. Behind a view's first-load gate that surfaces as the
+ * "Still loading…" banner flashing for several seconds. Paying the cost here,
+ * in the background with no gate in front of it, keeps it off the user's next
+ * navigation. Deduped through refreshInFlight, and errors are swallowed: a dead
+ * refresh token still clears auth inside refreshAccessToken, and a transient
+ * transport failure just leaves the normal refresh-on-request path to retry.
+ */
+export async function warmSession(): Promise<void> {
+  if (!getRefreshToken()) return; // signed out — nothing to warm
+  if (getAccessToken()) return; // still valid — no work to do
+  try {
+    await refreshAccessToken();
+  } catch {
+    /* handled on the next real request */
+  }
+}
+
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = "GET", body, anonymous = false, signal } = options;
 
