@@ -34,7 +34,7 @@ export default function AssistantView({
 
   if (!keyed) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+      <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center md:p-8">
         <Sparkles size={40} className="text-blue-500" />
         <div>
           <h1 className="text-xl font-bold">{t("assistant.title")}</h1>
@@ -51,11 +51,11 @@ export default function AssistantView({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-neutral-200 px-6 py-3 dark:border-neutral-700">
-        <h1 className="flex items-center gap-2 text-lg font-semibold">
-          <Sparkles size={18} className="text-blue-500" /> {t("assistant.title")}
+      <div className="flex items-center justify-between gap-2 border-b border-neutral-200 px-4 py-3 dark:border-neutral-700 md:px-6">
+        <h1 className="flex min-w-0 items-center gap-2 truncate text-lg font-semibold">
+          <Sparkles size={18} className="shrink-0 text-blue-500" /> {t("assistant.title")}
         </h1>
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-3">
           {chat.speaking && (
             <Button variant="ghost" onClick={chat.stopVoice}>
               <span className="flex items-center gap-1.5"><VolumeX size={14} /> {t("assistant.stopSpeaking")}</span>
@@ -64,7 +64,9 @@ export default function AssistantView({
           {chat.tokenCount > 0 ? (
             <span className="text-xs text-neutral-400">{t("assistant.tokens", { n: chat.tokenCount.toLocaleString() })}</span>
           ) : (
-            <span className="text-xs text-neutral-400">{t("assistant.tagline")}</span>
+            // Flavour text, not information: the first thing to go when the
+            // header has no room for it.
+            <span className="hidden text-xs text-neutral-400 sm:inline">{t("assistant.tagline")}</span>
           )}
           {messages.length > 0 && (
             <Button variant="ghost" onClick={chat.clear}>

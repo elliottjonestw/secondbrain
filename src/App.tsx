@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Home, Calendar, Bell, ListChecks, StickyNote, Users, Search, Brain, Sparkles, Settings as SettingsIcon, LogOut, LucideIcon } from "lucide-react";
+import { Home, Calendar, Bell, ListChecks, StickyNote, Users, Search, Brain, Sparkles, Settings as SettingsIcon, LogOut, Menu, LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import TodayView from "./views/TodayView";
 import CalendarView from "./views/CalendarView";
@@ -16,6 +16,7 @@ import type { NavTarget } from "./types";
 import { startReminderPoller } from "./lib/notifications";
 import { isAssistantConfigured } from "./lib/settings";
 import { logout } from "./lib/auth";
+import { applyTheme, watchSystemTheme } from "./lib/theme";
 import { getCachedSession } from "./lib/authStore";
 
 type View = "today" | "calendar" | "reminders" | "todos" | "notes" | "people" | "assistant" | "search" | "settings";
@@ -57,6 +58,11 @@ export default function App() {
   // Whether the floating chat window is expanded. Deliberately not persisted:
   // a chat window that reopens itself on every launch is worse than one click.
   const [popupOpen, setPopupOpen] = useState(false);
+  // Below `md` the sidebar is an off-canvas drawer rather than a column: at
+  // 375px a 208px rail leaves no room for the view beside it. At `md` and up
+  // the drawer classes are overridden back to the static sidebar, so this flag
+  // has no effect on the desktop layout at all.
+  const [navOpen, setNavOpen] = useState(false);
   // The turn/voice lifecycle lives here for the same reason the transcript
   // does, only more so: the popup unmounts when you navigate to the assistant
   // page, and a hook instance owned by the popup took its in-flight turn with
@@ -99,6 +105,7 @@ export default function App() {
     setPersonTarget(target?.personId ?? null);
     setSearch("");
     setView(v);
+    setNavOpen(false);
   }
 
   /** Clear every pending open-target (search box, plain nav). */
@@ -115,29 +122,73 @@ export default function App() {
     setReady(true);
   }, []);
 
+  // Settings are scoped per account, so the theme main.tsx applied at boot was
+  // read from whichever bucket was current then — signing in can change it.
+  // AuthGate remounts this component per user, which makes mount the moment to
+  // re-apply. The subscription keeps "system" live while the app is open.
+  useEffect(() => {
+    applyTheme();
+    return watchSystemTheme();
+  }, []);
+
 
   if (!ready) {
     return <div className="flex h-full items-center justify-center text-neutral-400">{t("common.loading")}</div>;
   }
 
+  // One search box, rendered in the sidebar on desktop and in the mobile top
+  // bar. Only ever one of the two is visible, so they can share the state.
+  const searchBox = (
+    <div className="relative">
+      <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400" />
+      <input
+        value={search}
+        onChange={(e) => { clearTargets(); setSearch(e.target.value); setView(e.target.value ? "search" : "today"); }}
+        placeholder={t("app.searchPlaceholder")}
+        className="w-full rounded-lg border border-neutral-200 py-1.5 pl-8 pr-3 text-sm outline-none focus:border-blue-400 dark:border-neutral-600 dark:bg-neutral-800"
+      />
+    </div>
+  );
+
   return (
-    <div className="flex h-full">
+    // Column on a phone (top bar above the view, sidebar out of flow), row from
+    // `md` — which is the original layout, unchanged.
+    <div className="flex h-full flex-col md:flex-row">
+      {/* Mobile top bar. The drawer holds the navigation, so this only needs
+          the toggle and the search field; `md:hidden` keeps it off desktop. */}
+      <header className="flex shrink-0 items-center gap-2 border-b border-neutral-200 bg-white px-3 py-2 pt-[max(0.5rem,env(safe-area-inset-top))] dark:border-neutral-700 dark:bg-neutral-900 md:hidden">
+        <button
+          onClick={() => setNavOpen(true)}
+          aria-label={t("app.openMenu")}
+          className="rounded-lg p-2 text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800"
+        >
+          <Menu size={20} />
+        </button>
+        <div className="min-w-0 flex-1">{searchBox}</div>
+      </header>
+
+      {/* The drawer's scrim. Rendered only while open, and only below `md`. */}
+      {navOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/40 md:hidden"
+          onClick={() => setNavOpen(false)}
+          aria-hidden
+        />
+      )}
+
       {/* Sidebar */}
-      <nav className="flex w-52 shrink-0 flex-col border-r border-neutral-200 bg-white dark:border-neutral-700 dark:bg-neutral-900">
+      <nav
+        className={`fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 flex-col overflow-y-auto border-r border-neutral-200 bg-white pt-[env(safe-area-inset-top)] transition-transform duration-200 dark:border-neutral-700 dark:bg-neutral-900 md:static md:z-auto md:w-52 md:translate-x-0 md:overflow-visible md:pt-0 md:transition-none ${
+          navOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
         <div className="flex items-center gap-2 px-4 py-4 text-lg font-bold">
           <Brain size={22} className="shrink-0 text-blue-600" />
           <span className="min-w-0 truncate">{t("app.name")}</span>
         </div>
-        <div className="px-2">
-          <div className="relative mb-3">
-            <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-400" />
-            <input
-              value={search}
-              onChange={(e) => { clearTargets(); setSearch(e.target.value); setView(e.target.value ? "search" : "today"); }}
-              placeholder={t("app.searchPlaceholder")}
-              className="w-full rounded-lg border border-neutral-200 py-1.5 pl-8 pr-3 text-sm outline-none focus:border-blue-400 dark:border-neutral-600 dark:bg-neutral-800"
-            />
-          </div>
+        {/* The mobile top bar already carries the search field. */}
+        <div className="hidden px-2 md:block">
+          <div className="mb-3">{searchBox}</div>
         </div>
         <div className="flex-1 space-y-0.5 px-2">
           {NAV.map((n) => {
@@ -172,7 +223,7 @@ export default function App() {
           </button>
         </div>
 
-        <div className="px-2 pb-1 pt-1">
+        <div className="px-2 pb-[max(0.25rem,env(safe-area-inset-bottom))] pt-1 md:pb-1">
           <button
             onClick={() => navigate("settings")}
             className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium ${
@@ -186,7 +237,10 @@ export default function App() {
       </nav>
 
       {/* Main */}
-      <main className="flex-1 overflow-hidden bg-neutral-50 dark:bg-neutral-900">
+      {/* `min-h-0` matters only in the mobile column layout, where the view
+          must scroll inside what's left below the top bar rather than push it
+          off screen. In the `md` row layout it changes nothing. */}
+      <main className="min-h-0 flex-1 overflow-hidden bg-neutral-50 dark:bg-neutral-900">
         {view === "today" && <TodayView onChange={bump} goTo={(v, target) => navigate(v as View, target)} />}
         {view === "calendar" && <CalendarView onChange={bump} openEventId={calTarget ?? undefined} openEventStart={calTargetStart ?? undefined} />}
         {view === "reminders" && <RemindersView onChange={bump} initialId={reminderTarget ?? undefined} />}

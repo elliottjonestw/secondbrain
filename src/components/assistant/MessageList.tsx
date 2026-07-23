@@ -59,7 +59,7 @@ export default function MessageList({
   return (
     // min-h-0 so this actually shrinks and scrolls inside the popup's
     // max-height column instead of pushing the composer off-screen.
-    <div ref={scrollRef} onScroll={onScroll} className={`min-h-0 flex-1 overflow-y-auto ${compact ? "p-3" : "p-6"}`}>
+    <div ref={scrollRef} onScroll={onScroll} className={`min-h-0 flex-1 overflow-y-auto ${compact ? "p-3" : "p-4 md:p-6"}`}>
       <div className={compact ? "space-y-3" : "mx-auto max-w-2xl space-y-4"}>
         {messages.length === 0 && empty}
 

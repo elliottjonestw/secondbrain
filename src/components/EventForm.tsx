@@ -174,7 +174,7 @@ export default function EventForm({
           {t("event.allDay")}
         </label>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="text-sm">
             <span className="mb-1 block text-xs text-neutral-500">{t("event.start")}</span>
             {allDay ? (
@@ -223,10 +223,12 @@ export default function EventForm({
         <input value={location} onChange={(e) => setLocation(e.target.value)} placeholder={t("event.location")} className="w-full rounded-lg border border-neutral-200 px-3 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
         <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t("event.description")} rows={2} className="w-full rounded-lg border border-neutral-200 px-3 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
 
-        <div className="flex items-center gap-3">
-          <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder={t("event.category")} className="flex-1 rounded-lg border border-neutral-200 px-3 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
+        {/* Wraps below `md`: the eight swatches plus the category field don't
+            fit a phone-width dialog on one line. */}
+        <div className="flex flex-wrap items-center gap-3">
+          <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder={t("event.category")} className="min-w-[8rem] flex-1 rounded-lg border border-neutral-200 px-3 py-1.5 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
           {isLocal ? (
-            <div className="flex gap-1">
+            <div className="flex flex-wrap gap-1">
               {CATEGORY_COLORS.map((c) => (
                 <button key={c} onClick={() => setColor(c)} className={`h-6 w-6 rounded-full ${color === c ? "ring-2 ring-offset-1 ring-neutral-500" : ""}`} style={{ background: c }} />
               ))}

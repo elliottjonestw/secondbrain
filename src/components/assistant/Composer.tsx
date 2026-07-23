@@ -1,8 +1,25 @@
 // The input row: mic, textarea, send. Shared so the two surfaces can't drift on
 // the mic's disabled/recording states, which are tied to the hook's lifecycle.
 
+import { useEffect, useState } from "react";
 import { Send, Mic, Square } from "lucide-react";
 import { useTranslation } from "react-i18next";
+
+/**
+ * True below the `md` breakpoint, where the page composer is no wider than the
+ * popup's. Only the placeholder depends on it — CSS can't swap text, so this
+ * has to be measured rather than styled.
+ */
+function useNarrow(): boolean {
+  const [narrow, setNarrow] = useState(() => window.matchMedia("(max-width: 767px)").matches);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    const onChange = () => setNarrow(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return narrow;
+}
 
 export default function Composer({
   input, setInput, onSubmit, onToggleMic, recording, loading, busy, heldBySpace, compact = false,
@@ -18,6 +35,7 @@ export default function Composer({
   compact?: boolean;
 }) {
   const { t } = useTranslation();
+  const narrow = useNarrow();
   const pad = compact ? "p-2.5" : "p-4";
   const size = compact ? 16 : 18;
   // The buttons deliberately mirror the textarea's box: same vertical padding, a
@@ -51,7 +69,8 @@ export default function Composer({
         {/* The popup's input is about half the page's width, where the full
             placeholder wraps to a second line and is clipped by the single-row
             height. Shorter copy rather than a taller box, so the window stays
-            compact. */}
+            compact. A phone-width page composer is just as narrow, so it takes
+            the same copy. */}
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -61,7 +80,7 @@ export default function Composer({
           rows={1}
           disabled={recording}
           placeholder={recording ? t("assistant.listening")
-            : t(compact ? "assistant.inputPlaceholderShort" : "assistant.inputPlaceholder")}
+            : t(compact || narrow ? "assistant.inputPlaceholderShort" : "assistant.inputPlaceholder")}
           className={`flex-1 resize-none rounded-xl border border-neutral-200 outline-none focus:border-blue-400 disabled:opacity-60 dark:border-neutral-600 dark:bg-neutral-800 ${
             compact ? "max-h-24 px-3 py-2 text-sm" : "max-h-40 px-4 py-2.5 text-sm"
           }`}

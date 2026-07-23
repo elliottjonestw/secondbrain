@@ -2,6 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
+/* A starting value only. `lib/theme.ts` overwrites this with the *resolved*
+   theme on <html> at boot — naming both here would let the OS keep deciding
+   how native controls render, which an explicit preference has to override. */
 :root {
   color-scheme: light dark;
 }
@@ -14,13 +17,33 @@ body,
 }
 
 body {
-  @apply bg-neutral-50 text-neutral-900 antialiased;
+  /* The dark half is load-bearing, not a nicety. Without it the inherited text
+     colour stays `neutral-900` under a dark theme while every container
+     switches to a `dark:bg-neutral-800/900`, so any text that doesn't set its
+     own colour — most labels, most headings, `<select>` values — renders
+     black on near-black. The views themselves were already dark-ready: this
+     one rule was the whole bug. */
+  @apply bg-neutral-50 text-neutral-900 antialiased dark:bg-neutral-900 dark:text-neutral-100;
   /* The Latin faces carry no Han glyphs, so CJK text would otherwise fall
      through to an arbitrary OS fallback — often a Japanese face, which renders
      the wrong variants for unified codepoints. Naming the CJK families (and
      setting <html lang> from lib/i18n.ts) pins the correct glyph forms. */
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "PingFang TC", "Microsoft JhengHei", "Noto Sans CJK TC", sans-serif;
+}
+
+/* Mobile Safari zooms the whole page in when a focused form control's text is
+   under 16px, and never zooms back out — the app's `text-sm` inputs would make
+   every tap-to-type a layout lurch. Raising the floor below the `md`
+   breakpoint is the standard cure; the desktop layout starts at `md`, so its
+   sizes are untouched. `select` is included because the same rule applies to
+   its closed state. */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
 }
 
 /* CJK glyphs are full-em squares and read as cramped at Latin-tuned line

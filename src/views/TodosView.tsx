@@ -172,20 +172,24 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
   if (blocked) return blocked;
 
   return (
-    <div className="flex h-full">
+    // Column below `md` (the lists become a strip above the tasks), row from
+    // `md` — the original two-pane layout, unchanged.
+    <div className="flex h-full flex-col md:flex-row">
       <SlowLoad state={gate} />
-      {/* Lists sidebar */}
-      <aside className="w-48 shrink-0 border-r border-neutral-200 p-3 dark:border-neutral-700">
+      {/* Lists sidebar. A 192px rail beside the task list doesn't fit a phone,
+          so below `md` it lies down into a horizontally scrolling chip strip. */}
+      <aside className="shrink-0 border-b border-neutral-200 p-3 dark:border-neutral-700 md:w-48 md:border-b-0 md:border-r">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-xs font-semibold uppercase text-neutral-400">{tr("todos.lists")}</h3>
           <button onClick={() => setAddingList(true)} className="rounded p-1 text-neutral-400 hover:bg-neutral-100 hover:text-blue-500 dark:hover:bg-neutral-700" title={tr("todos.newList")}>
             <Plus size={16} />
           </button>
         </div>
+        <div className="flex gap-2 overflow-x-auto md:block md:gap-0 md:overflow-visible">
         {lists.map((l) => (
           <div
             key={l.id}
-            className={`group flex cursor-pointer items-center justify-between rounded px-2 py-1 text-sm ${
+            className={`group flex shrink-0 cursor-pointer items-center justify-between gap-1 whitespace-nowrap rounded px-2 py-1 text-sm md:whitespace-normal ${
               activeList === l.id ? "bg-blue-100 dark:bg-blue-900/40" : "hover:bg-neutral-100 dark:hover:bg-neutral-700"
             }`}
             onClick={() => setActiveList(l.id)}
@@ -197,12 +201,15 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
             {lists.length > 1 && (
               <button
                 onClick={(e) => { e.stopPropagation(); if (confirm(tr("todos.confirmDeleteList", { name: l.name }))) void mutate(() => deleteList(l.id)); }}
-                className="hidden text-neutral-400 hover:text-red-500 group-hover:block"
+                // No hover on a touch screen, so the control is simply there
+                // below `md`; from `md` up it stays hover-revealed as before.
+                className="text-neutral-400 hover:text-red-500 md:hidden md:group-hover:block"
                 title={tr("todos.deleteList")}
               ><X size={14} /></button>
             )}
           </div>
         ))}
+        </div>
         {addingList && (
           <input
             autoFocus
@@ -217,7 +224,7 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
       </aside>
 
       {/* Tasks */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-6">
         <div className="mx-auto max-w-2xl">
           {mutError && (
             <div role="alert" className="mb-3 flex items-center justify-between gap-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
@@ -312,12 +319,15 @@ function TodoItem({
       </button>
       <PriorityFlag priority={todo.priority} />
       {todo.due_at && (
-        <span className={`text-xs ${isOverdue(todo.due_at) && !todo.completed ? "text-red-500" : "text-neutral-400"}`}>
+        <span className={`shrink-0 text-xs ${isOverdue(todo.due_at) && !todo.completed ? "text-red-500" : "text-neutral-400"}`}>
           {fmtDateTime(todo.due_at)}
         </span>
       )}
       {reorderable && (
-        <span className="hidden items-center group-hover:flex">
+        // Reordering is these arrows (there is no drag-and-drop), so on a touch
+        // screen they cannot stay hover-only or the order is frozen. From `md`
+        // up they are revealed on hover exactly as before.
+        <span className="flex shrink-0 items-center md:hidden md:group-hover:flex">
           <button
             onClick={(e) => { e.stopPropagation(); onMoveUp?.(); }}
             disabled={!onMoveUp}
@@ -334,6 +344,9 @@ function TodoItem({
           ><ChevronDown size={15} /></button>
         </span>
       )}
+      {/* Deliberately hover-only, so it stays off touch screens: a trash icon
+          on every row is a misfire waiting to happen, and tapping the row opens
+          a detail sheet that has its own Delete. */}
       <button
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
         className="hidden text-neutral-400 hover:text-red-500 group-hover:block"
@@ -413,7 +426,7 @@ function TodoDetail({
       <div className="space-y-3">
         <input value={title} onChange={(e) => setTitle(e.target.value)} className="w-full rounded-lg border border-neutral-200 px-3 py-2 dark:border-neutral-600 dark:bg-neutral-700" />
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder={t("todos.notesPlaceholder")} rows={3} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="text-sm">
             <span className="mb-1 block text-xs text-neutral-500">{t("todos.list")}</span>
             <select value={listId} onChange={(e) => setListId(e.target.value)} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700">

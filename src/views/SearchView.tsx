@@ -107,7 +107,7 @@ export default function SearchView({ query, goTo }: { query: string; goTo: GoTo 
   const canWiden = step < WINDOW_STEPS.length - 1;
 
   return (
-    <div className="mx-auto h-full max-w-2xl overflow-y-auto p-6">
+    <div className="mx-auto h-full max-w-2xl overflow-y-auto p-4 md:p-6">
       <h1 className="mb-4 text-xl font-bold">{t("search.resultsFor", { query })}</h1>
       {query.trim() === "" ? (
         <p className="text-neutral-400">{t("search.prompt")}</p>

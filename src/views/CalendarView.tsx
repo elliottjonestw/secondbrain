@@ -133,15 +133,17 @@ export default function CalendarView(
   return (
     <div className="flex h-full flex-col">
       <SlowLoad state={gate} />
-      {/* Toolbar */}
-      <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3 dark:border-neutral-700">
-        <div className="flex items-center gap-2">
+      {/* Toolbar. Below `md` it wraps: the date and its arrows on one line,
+          the mode switch and actions on the next. The right-hand group keeps
+          `md:flex-1 justify-end`, which reproduces the desktop row exactly. */}
+      <div className="flex flex-wrap items-center justify-between gap-y-2 border-b border-neutral-200 px-3 py-2 dark:border-neutral-700 md:flex-nowrap md:px-4 md:py-3">
+        <div className="flex min-w-0 items-center gap-2">
           <Button onClick={() => setCursor(new Date())}>{t("nav.today")}</Button>
           <Button variant="ghost" onClick={() => move(-1)} aria-label={t("calendar.previous")}><ChevronLeft size={18} /></Button>
           <Button variant="ghost" onClick={() => move(1)} aria-label={t("calendar.next")}><ChevronRight size={18} /></Button>
-          <h2 className="ml-2 text-lg font-semibold">{title}</h2>
+          <h2 className="ml-2 min-w-0 truncate text-base font-semibold md:text-lg">{title}</h2>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex w-full items-center justify-end gap-1 md:w-auto md:flex-1">
           {loading && <Loader2 size={15} className="mr-1 animate-spin text-neutral-400" />}
           {(["month", "week", "day"] as ViewMode[]).map((m) => (
             <Button key={m} variant={mode === m ? "primary" : "ghost"} onClick={() => setMode(m)}>
@@ -205,7 +207,7 @@ export default function CalendarView(
           The buttons sit on the LEFT and the status keeps right-hand padding:
           the assistant's floating button owns the bottom-right corner, and it
           would otherwise cover Export outright and clip a long export path. */}
-      <div className="flex items-center justify-between gap-3 border-t border-neutral-200 py-2 pl-4 pr-20 dark:border-neutral-700">
+      <div className="flex items-center justify-between gap-3 border-t border-neutral-200 py-2 pl-3 pr-20 pb-[max(0.5rem,env(safe-area-inset-bottom))] dark:border-neutral-700 md:pb-2 md:pl-4">
         <div className="flex shrink-0 gap-2">
           <Button onClick={doImport}><span className="flex items-center gap-1.5"><Upload size={15} /> {t("calendar.importIcs")}</span></Button>
           <Button onClick={doExport}><span className="flex items-center gap-1.5"><Download size={15} /> {t("calendar.exportIcs")}</span></Button>
@@ -262,7 +264,7 @@ function MonthGrid({
   return (
     <div className="grid grid-cols-7 border-t border-neutral-200 dark:border-neutral-700">
       {weekdayNames().map((d) => (
-        <div key={d} className="border-b border-r border-neutral-200 bg-neutral-50 px-2 py-1 text-center text-xs font-semibold text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800">{d}</div>
+        <div key={d} className="truncate border-b border-r border-neutral-200 bg-neutral-50 px-1 py-1 text-center text-[11px] font-semibold text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800 md:px-2 md:text-xs">{d}</div>
       ))}
       {days.map((day) => {
         const dayOccs = occurrences.filter((o) => isSameDay(o.start, day));
@@ -272,7 +274,7 @@ function MonthGrid({
           <div
             key={day.toISOString()}
             onDoubleClick={() => onNewEvent(new Date(day.getFullYear(), day.getMonth(), day.getDate(), 9))}
-            className={`min-h-[96px] border-b border-r border-neutral-200 p-1 dark:border-neutral-700 ${inMonth ? "" : "bg-neutral-50/60 dark:bg-neutral-900/40"}`}
+            className={`min-h-[64px] min-w-0 border-b border-r border-neutral-200 p-0.5 dark:border-neutral-700 md:min-h-[96px] md:p-1 ${inMonth ? "" : "bg-neutral-50/60 dark:bg-neutral-900/40"}`}
           >
             <div className={`mb-1 text-right text-xs ${isToday(day) ? "font-bold text-blue-600" : "text-neutral-400"}`}>
               {isToday(day) ? <span className="rounded-full bg-blue-600 px-1.5 py-0.5 text-white">{day.getDate()}</span> : day.getDate()}
@@ -282,7 +284,7 @@ function MonthGrid({
                 <button
                   key={o.event.id + i}
                   onClick={() => onOpen(o)}
-                  className="flex w-full items-center gap-0.5 rounded px-1 py-0.5 text-left text-xs text-white"
+                  className="flex w-full items-center gap-0.5 rounded px-1 py-0.5 text-left text-[10px] text-white md:text-xs"
                   style={{ background: o.event.color ?? "#3b82f6" }}
                   title={o.event.summary}
                 >
@@ -293,7 +295,7 @@ function MonthGrid({
               {dayTodos.map((t) => (
                 <div
                   key={t.id}
-                  className="flex items-center gap-1 truncate rounded border border-dashed border-neutral-400 px-1 py-0.5 text-xs text-neutral-500"
+                  className="flex items-center gap-1 truncate rounded border border-dashed border-neutral-400 px-1 py-0.5 text-[10px] text-neutral-500 md:text-xs"
                   title={`${tr("itemType.todo")}: ${t.title}`}
                 >
                   <Square size={10} className="shrink-0" /> <span className="truncate">{t.title}</span>
@@ -320,11 +322,19 @@ function TimeGrid({
   onOpen: (occ: EventOccurrence) => void;
 }) {
   const hours = Array.from({ length: 24 }, (_, i) => i);
+  // Week mode below `md` is wider than the viewport (see the day columns), and
+  // the sticky hour gutter can only stick inside its containing block — so that
+  // block has to span the whole scrollable width, not the visible 375px. Day
+  // mode has a single column that should fill the screen, so it keeps `w-full`.
+  const scrolls = days.length > 1;
 
   return (
-    <div className="flex">
+    <div className={`flex ${scrolls ? "w-max md:w-full" : ""}`}>
       {/* hour labels */}
-      <div className="w-14 shrink-0 pt-6">
+      {/* Pinned while the week scrolls sideways below `md` — the times are the
+          only thing that makes a scrolled-to column readable. `md:static`
+          restores the plain column once every day fits without scrolling. */}
+      <div className="sticky left-0 z-20 w-10 shrink-0 bg-neutral-50 pt-6 dark:bg-neutral-900 md:static md:w-14 md:bg-transparent">
         {hours.map((h) => (
           <div key={h} style={{ height: HOUR_PX }} className="relative -top-2 pr-1 text-right text-xs text-neutral-400">
             {h === 0 ? "" : fmtHour(h)}
@@ -338,7 +348,10 @@ function TimeGrid({
           const allDayOccs = occurrences.filter((o) => isSameDay(o.start, day) && o.event.all_day);
           const dayTodos = todos.filter((t) => t.due_at && isSameDay(new Date(t.due_at), day));
           return (
-            <div key={day.toISOString()} className="flex-1 border-l border-neutral-200 dark:border-neutral-700">
+            // Seven columns in 375px would be 45px each. Below `md` a day
+            // keeps a legible minimum and the grid scrolls sideways instead;
+            // `md:min-w-0` hands the width back to flex-1 on desktop.
+            <div key={day.toISOString()} className={`flex-1 border-l border-neutral-200 dark:border-neutral-700 ${scrolls ? "min-w-[6rem] md:min-w-0" : ""}`}>
               {/* day header */}
               <div className={`sticky top-0 z-10 border-b border-neutral-200 bg-white py-1 text-center text-sm dark:border-neutral-700 dark:bg-neutral-900 ${isToday(day) ? "text-blue-600" : ""}`}>
                 <div className="font-semibold">{fmtWeekdayShort(day)}</div>

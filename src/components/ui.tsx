@@ -27,11 +27,11 @@ export function Modal({
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 md:p-4"
       onClick={onClose}
     >
       <div
-        className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-5 shadow-xl dark:bg-neutral-800"
+        className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-xl bg-white p-4 shadow-xl dark:bg-neutral-800 md:max-h-[90vh] md:p-5"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
@@ -45,7 +45,9 @@ export function Modal({
           </button>
         </div>
         {children}
-        {footer && <div className="mt-5 flex justify-end gap-2">{footer}</div>}
+        {/* Wraps because some footers carry three buttons, which don't fit a
+            phone-width dialog on one line. */}
+        {footer && <div className="mt-5 flex flex-wrap justify-end gap-2">{footer}</div>}
       </div>
     </div>
   );

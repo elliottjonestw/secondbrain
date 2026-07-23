@@ -17,6 +17,9 @@ import {
 import {
   LANGUAGES, SYSTEM_LANGUAGE, changeLanguage, matchSystemLanguage, currentLanguage,
 } from "../lib/i18n";
+import {
+  applyTheme, systemTheme, THEME_PREFERENCES, type ThemePreference,
+} from "../lib/theme";
 import { searchPlaces, type PlaceResult } from "../lib/weather";
 import { searchSymbols, MAX_WATCHLIST, type SymbolResult } from "../lib/stocks";
 import {
@@ -80,16 +83,19 @@ export default function SettingsView() {
   }
 
   return (
-    <div className="flex h-full">
-      <aside className="w-48 shrink-0 border-r border-neutral-200 p-3 dark:border-neutral-700">
+    // Column below `md` (the section nav becomes a strip above the pane), row
+    // from `md` — the original two-pane layout, unchanged.
+    <div className="flex h-full flex-col md:flex-row">
+      <aside className="shrink-0 border-b border-neutral-200 p-3 dark:border-neutral-700 md:w-48 md:border-b-0 md:border-r">
         <h3 className="mb-2 text-xs font-semibold uppercase text-neutral-400">{t("settings.title")}</h3>
+        <div className="flex gap-2 overflow-x-auto md:block">
         {SECTIONS.map((s) => {
           const Icon = s.icon;
           return (
             <button
               key={s.id}
               onClick={() => setSection(s.id)}
-              className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm ${
+              className={`flex w-auto shrink-0 items-center gap-2 whitespace-nowrap rounded px-2 py-1.5 text-sm md:w-full md:whitespace-normal ${
                 section === s.id ? "bg-blue-100 dark:bg-blue-900/40" : "hover:bg-neutral-100 dark:hover:bg-neutral-700"
               }`}
             >
@@ -98,12 +104,15 @@ export default function SettingsView() {
             </button>
           );
         })}
-        <p className="mt-4 px-2 text-xs leading-relaxed text-neutral-400">
+        </div>
+        {/* Advice that belongs beside the panes, not above them: on a phone it
+            would push the first setting off the screen. */}
+        <p className="mt-4 hidden px-2 text-xs leading-relaxed text-neutral-400 md:block">
           {t("settings.storedLocally")}
         </p>
       </aside>
 
-      <div className="flex-1 overflow-y-auto p-8">
+      <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-8">
         <div className="mx-auto max-w-2xl">
           {section === "general" && <GeneralSettings />}
           {section === "account" && <AccountSettings />}
@@ -115,6 +124,11 @@ export default function SettingsView() {
           )}
           {section === "calendars" && <CalendarSettingsPane />}
           {section === "data" && <DataSettings />}
+          {/* The sidebar's footnote, which below `md` follows the pane rather
+              than sitting above it and pushing the first setting off screen. */}
+          <p className="mt-8 text-xs leading-relaxed text-neutral-400 md:hidden">
+            {t("settings.storedLocally")}
+          </p>
         </div>
       </div>
     </div>
@@ -216,6 +230,7 @@ interface PaneProps {
 function GeneralSettings() {
   const { t } = useTranslation();
   const [language, setLanguage] = useState(getSettings().language);
+  const [theme, setTheme] = useState(getSettings().theme);
   const [location, setLocation] = useState(getSettings().weatherLocation);
   const [unit, setUnit] = useState(getSettings().temperatureUnit);
   const [watchlist, setWatchlist] = useState(getSettings().watchlist);
@@ -228,7 +243,16 @@ function GeneralSettings() {
     void changeLanguage(value);
   }
 
+  // Same rule as the language: applied on change, not on Save. There is
+  // nothing to validate, and the result *is* the preview.
+  function pickTheme(value: ThemePreference) {
+    setTheme(value);
+    saveSettings({ theme: value });
+    applyTheme(value);
+  }
+
   const systemMatch = LANGUAGES.find((l) => l.code === matchSystemLanguage(navigator.language || "en"));
+  const themeLabel = { system: "themeSystem", light: "themeLight", dark: "themeDark" } as const;
 
   return (
     <>
@@ -247,6 +271,24 @@ function GeneralSettings() {
           </option>
           {LANGUAGES.map((l) => (
             <option key={l.code} value={l.code}>{l.nativeName}</option>
+          ))}
+        </select>
+      </Field>
+
+      <Field label={t("settings.general.appearance")} hint={t("settings.general.appearanceHint")}>
+        <select
+          value={theme}
+          onChange={(e) => pickTheme(e.target.value as ThemePreference)}
+          className={INPUT_CLASS}
+        >
+          {THEME_PREFERENCES.map((p) => (
+            <option key={p} value={p}>
+              {p === "system"
+                // Name what the OS is currently asking for, so "system" isn't
+                // an unexplained third state.
+                ? t("settings.general.themeSystem", { theme: t(`settings.general.${themeLabel[systemTheme()]}`) })
+                : t(`settings.general.${themeLabel[p]}`)}
+            </option>
           ))}
         </select>
       </Field>

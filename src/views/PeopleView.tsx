@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import {
-  Plus, X, Trash2, Star, Mail, Phone, ExternalLink, ChevronUp, ChevronDown, Pencil, Eye,
+  Plus, X, Trash2, Star, Mail, Phone, ExternalLink, ChevronUp, ChevronDown, Pencil, Eye, ArrowLeft,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
@@ -78,8 +78,10 @@ export default function PeopleView({ onChange, initialId }: { onChange: () => vo
   return (
     <div className="flex h-full">
       <SlowLoad state={gate} />
-      {/* People list */}
-      <aside className="flex w-72 shrink-0 flex-col border-r border-neutral-200 dark:border-neutral-700">
+      {/* People list. Below `md` the list and the detail take turns owning the
+          screen (the detail's back button returns here); from `md` up both are
+          visible side by side exactly as before. */}
+      <aside className={`w-full shrink-0 flex-col border-r border-neutral-200 dark:border-neutral-700 md:flex md:w-72 ${selected ? "hidden" : "flex"}`}>
         <div className="space-y-2 border-b border-neutral-200 p-3 dark:border-neutral-700">
           <Button variant="primary" className="w-full" onClick={createPerson}>
             <span className="flex items-center justify-center gap-1.5"><Plus size={16} /> {t("people.newPerson")}</span>
@@ -115,7 +117,7 @@ export default function PeopleView({ onChange, initialId }: { onChange: () => vo
       </aside>
 
       {/* Detail / editor — keyed by id so local state resets on selection change */}
-      <div className="flex-1 overflow-y-auto">
+      <div className={`flex-1 overflow-y-auto ${selected ? "" : "hidden md:block"}`}>
         {selected ? (
           <PersonEditor
             key={selected.id}
@@ -123,6 +125,7 @@ export default function PeopleView({ onChange, initialId }: { onChange: () => vo
             targets={targets}
             onChanged={bump}
             onDeleted={() => { setSelectedId(null); bump(); }}
+            onBack={() => setSelectedId(null)}
           />
         ) : (
           <div className="flex h-full items-center justify-center text-neutral-400">
@@ -197,12 +200,14 @@ function isBlank(p: PersonRow): boolean {
 }
 
 function PersonEditor({
-  person, targets, onChanged, onDeleted,
+  person, targets, onChanged, onDeleted, onBack,
 }: {
   person: PersonRow;
   targets: LinkTarget[];
   onChanged: () => void;
   onDeleted: () => void;
+  /** Back to the list. Only reachable below `md`, where the panes alternate. */
+  onBack: () => void;
 }) {
   const { t } = useTranslation();
   // Local state is the source of truth while editing; DB writes are debounced
@@ -272,27 +277,38 @@ function PersonEditor({
   const subtitle = [form.title.trim(), form.organization.trim()].filter(Boolean).join(" · ");
 
   return (
-    <div className="mx-auto max-w-3xl p-6">
-      {/* Header */}
-      <div className="mb-4 flex items-center gap-4">
-        {preview ? (
-          <Avatar name={display} photo={form.photo} size={56} />
-        ) : (
-          <PhotoPicker name={display} value={form.photo} onChange={(photo) => patch({ photo })} size={56} />
-        )}
-        {preview ? (
-          <div className="min-w-0 flex-1">
-            <h2 className="truncate text-2xl font-bold dark:text-neutral-100">{display}</h2>
-            {subtitle && <p className="truncate text-sm text-neutral-500">{subtitle}</p>}
-          </div>
-        ) : (
-          <input
-            value={form.full_name}
-            onChange={(e) => patch({ full_name: e.target.value })}
-            placeholder={t("people.fullName")}
-            className="flex-1 bg-transparent text-2xl font-bold outline-none"
-          />
-        )}
+    <div className="mx-auto max-w-3xl p-4 md:p-6">
+      {/* Header. Wraps onto two lines below `md` — identity first, then the
+          actions — while the inner `md:flex-1` wrapper reproduces the single
+          desktop row exactly. */}
+      <div className="mb-4 flex flex-wrap items-center gap-2 md:gap-4">
+        <div className="flex w-full min-w-0 items-center gap-4 md:w-auto md:flex-1">
+          <button
+            onClick={onBack}
+            aria-label={t("common.back")}
+            className="-ml-1 -mr-2 shrink-0 rounded-lg p-1.5 text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-700 md:hidden"
+          >
+            <ArrowLeft size={20} />
+          </button>
+          {preview ? (
+            <Avatar name={display} photo={form.photo} size={56} />
+          ) : (
+            <PhotoPicker name={display} value={form.photo} onChange={(photo) => patch({ photo })} size={56} />
+          )}
+          {preview ? (
+            <div className="min-w-0 flex-1">
+              <h2 className="truncate text-2xl font-bold dark:text-neutral-100">{display}</h2>
+              {subtitle && <p className="truncate text-sm text-neutral-500">{subtitle}</p>}
+            </div>
+          ) : (
+            <input
+              value={form.full_name}
+              onChange={(e) => patch({ full_name: e.target.value })}
+              placeholder={t("people.fullName")}
+              className="min-w-0 flex-1 bg-transparent text-2xl font-bold outline-none"
+            />
+          )}
+        </div>
         <Button variant="ghost" onClick={() => patch({ favorite: !form.favorite })} aria-label={form.favorite ? t("people.unfavorite") : t("people.favorite")}>
           <Star size={18} className={form.favorite ? "text-amber-400" : "text-neutral-400"} fill={form.favorite ? "currentColor" : "none"} />
         </Button>
@@ -320,7 +336,7 @@ function PersonEditor({
         {preview ? <PersonSummary form={form} /> : <>
         {/* Basics */}
         <Section title={t("people.details")}>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <Field label={t("people.nickname")}><input value={form.nickname} onChange={(e) => patch({ nickname: e.target.value })} className={inputCls} /></Field>
             <Field label={t("people.birthday")}><input type="date" value={form.birthday} onChange={(e) => patch({ birthday: e.target.value })} className={inputCls} /></Field>
             <Field label={t("people.organization")}><input value={form.organization} onChange={(e) => patch({ organization: e.target.value })} className={inputCls} /></Field>
@@ -330,7 +346,9 @@ function PersonEditor({
 
         {/* Structured name (vCard N) */}
         <Section title={t("people.nameDetails")}>
-          <div className="grid grid-cols-5 gap-2">
+          {/* Five name parts fit a desktop row; on a phone they stack two
+              per line rather than shrinking to unusable slivers. */}
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
             <Field label={t("people.prefix")}><input value={form.honorific_prefix} onChange={(e) => patch({ honorific_prefix: e.target.value })} className={inputCls} /></Field>
             <Field label={t("people.first")}><input value={form.given_name} onChange={(e) => patch({ given_name: e.target.value })} className={inputCls} /></Field>
             <Field label={t("people.middle")}><input value={form.additional_names} onChange={(e) => patch({ additional_names: e.target.value })} className={inputCls} /></Field>
@@ -401,7 +419,7 @@ function PersonEditor({
         {/* Tags + Links — the cross-app integration. Shown in both modes: they
             write straight to the DB rather than through the draft, so there's
             nothing to "save", and Notes shows them in preview too. */}
-        <div className="grid grid-cols-2 gap-4 rounded-lg border border-neutral-200 p-4 dark:border-neutral-700">
+        <div className="grid grid-cols-1 gap-4 rounded-lg border border-neutral-200 p-4 dark:border-neutral-700 sm:grid-cols-2">
           <TagEditor type="person" id={person.id} />
           <LinksPanel type="person" id={person.id} targets={targets} />
         </div>
@@ -462,7 +480,7 @@ function PersonSummary({ form }: { form: Draft }) {
     <>
       {details.length > 0 && (
         <Section title={t("people.details")}>
-          <dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1 text-sm dark:text-neutral-100">
+          <dl className="grid grid-cols-[6rem_1fr] gap-x-3 gap-y-1 text-sm dark:text-neutral-100 sm:grid-cols-[8rem_1fr]">
             {details.map(([label, value]) => (
               <Fragment key={label}>
                 <dt className="text-neutral-500">{label}</dt>
@@ -510,7 +528,7 @@ function PersonSummary({ form }: { form: Draft }) {
 
       {custom.length > 0 && (
         <Section title={t("people.customFields")}>
-          <dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1 text-sm dark:text-neutral-100">
+          <dl className="grid grid-cols-[6rem_1fr] gap-x-3 gap-y-1 text-sm dark:text-neutral-100 sm:grid-cols-[8rem_1fr]">
             {custom.map((c, i) => (
               <Fragment key={i}>
                 <dt className="text-neutral-500">{c.label}</dt>
@@ -650,8 +668,8 @@ function AddressRows({ rows, onChange }: { rows: PersonAddress[]; onChange: (row
             <span className="flex-1" />
             <button onClick={() => remove(i)} className="rounded p-1 text-neutral-400 hover:text-red-500" aria-label={t("people.removeAddress")}><X size={14} /></button>
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <input value={a.street ?? ""} onChange={(e) => update(i, { street: e.target.value })} placeholder={t("people.street")} className={`col-span-2 ${inputCls}`} />
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <input value={a.street ?? ""} onChange={(e) => update(i, { street: e.target.value })} placeholder={t("people.street")} className={`sm:col-span-2 ${inputCls}`} />
             <input value={a.city ?? ""} onChange={(e) => update(i, { city: e.target.value })} placeholder={t("people.city")} className={inputCls} />
             <input value={a.region ?? ""} onChange={(e) => update(i, { region: e.target.value })} placeholder={t("people.region")} className={inputCls} />
             <input value={a.postal_code ?? ""} onChange={(e) => update(i, { postal_code: e.target.value })} placeholder={t("people.postalCode")} className={inputCls} />
@@ -755,7 +773,9 @@ function CustomFields({ values, onChange }: { values: PersonCustomField[]; onCha
               title={t("common.moveDown")}
             ><ChevronDown size={13} /></button>
           </span>
-          <span className="w-40 shrink-0 truncate text-sm text-neutral-600 dark:text-neutral-300" title={def.label}>{def.label}</span>
+          {/* 160px of label plus the arrows, a value field and a delete button
+              leaves nothing for the value on a phone. */}
+          <span className="w-24 shrink-0 truncate text-sm text-neutral-600 dark:text-neutral-300 md:w-40" title={def.label}>{def.label}</span>
           <input value={valueFor(def.label)} onChange={(e) => setValue(def.label, e.target.value)} placeholder={t("people.value")} className={`flex-1 ${inputBase}`} />
           <button onClick={() => setConfirmField(def)} className="rounded p-1.5 text-neutral-400 hover:text-red-500" aria-label={t("people.removeField", { label: def.label })}><X size={14} /></button>
         </div>

@@ -1,7 +1,8 @@
 {
   "app": {
     "name": "Sekunda",
-    "searchPlaceholder": "搜尋全部內容…"
+    "searchPlaceholder": "搜尋全部內容…",
+    "openMenu": "開啟選單"
   },
   "nav": {
     "today": "今天",
@@ -19,6 +20,7 @@
     "delete": "刪除",
     "add": "新增",
     "close": "關閉",
+    "back": "返回",
     "loading": "載入中…",
     "untitled": "未命名",
     "untitledParen": "（未命名）",
@@ -161,6 +163,11 @@
       "language": "語言",
       "systemOption": "使用系統語言（{{language}}）",
       "languageHint": "日期、時間與每週的第一天會依所選語言顯示。示範資料僅提供英文版本。",
+      "appearance": "外觀",
+      "appearanceHint": "淺色或深色。「使用系統外觀」會跟隨作業系統設定變更，包含排程切換。",
+      "themeSystem": "使用系統外觀（{{theme}}）",
+      "themeLight": "淺色",
+      "themeDark": "深色",
       "weatherLocation": "天氣地點",
       "weatherHint": "在「今天」頁面顯示天氣預報。天氣資料由 Open-Meteo.com 提供，不需要帳號，地點只會在取得預報時送出。留空即可關閉天氣功能。",
       "weatherPlaceholder": "搜尋城市或鄉鎮…",

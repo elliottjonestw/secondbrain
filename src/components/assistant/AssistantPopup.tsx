@@ -77,7 +77,7 @@ export default function AssistantPopup({
     return (
       <button
         onClick={() => setOpen(true)}
-        className="fixed bottom-4 right-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg transition hover:bg-blue-700"
+        className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-blue-600 text-white shadow-lg transition hover:bg-blue-700"
         aria-label={t("assistant.openChat")}
         title={t("assistant.openChat")}
       >
@@ -88,7 +88,10 @@ export default function AssistantPopup({
 
   return (
     // max-h keeps the window inside a short viewport; the transcript scrolls.
-    <div className="fixed bottom-4 right-4 z-40 flex max-h-[calc(100vh-2rem)] w-[380px] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-50 shadow-2xl dark:border-neutral-700 dark:bg-neutral-900">
+    // Below `md` a fixed 380px window would hang off a 375px screen, so it
+    // spans the width with a small gutter instead and takes three quarters of
+    // the height; from `md` up it is the same floating panel as before.
+    <div className="fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-40 flex max-h-[75vh] flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-neutral-50 shadow-2xl dark:border-neutral-700 dark:bg-neutral-900 md:inset-x-auto md:bottom-4 md:right-4 md:max-h-[calc(100vh-2rem)] md:w-[380px]">
       <div className="flex items-center gap-1 border-b border-neutral-200 bg-white px-3 py-2 dark:border-neutral-700 dark:bg-neutral-800">
         <Sparkles size={16} className="shrink-0 text-blue-500" />
         <span className="min-w-0 flex-1 truncate text-sm font-semibold">{t("assistant.title")}</span>

@@ -90,7 +90,7 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
   };
 
   return (
-    <div className="mx-auto h-full max-w-4xl overflow-y-auto p-6">
+    <div className="mx-auto h-full max-w-4xl overflow-y-auto p-4 md:p-6">
       {/* The page stays mounted while it loads so every widget can register its
           fetch with the barrier — hiding it, not unmounting it, is what lets the
           gate wait on loads that only start once their card exists. */}
@@ -137,7 +137,11 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
       </div>
 
       <BarrierProvider value={barrierRef.current}>
-      <div className="grid gap-4 md:grid-cols-2">
+      {/* `grid-cols-1` is not decoration: without it the single implicit track
+          is `auto`, which sizes to the widest card's max-content and pushes the
+          whole page past the viewport. Tailwind's numbered columns are
+          `minmax(0,1fr)`, which clamps. `md:grid-cols-2` already did. */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         {cards.visible.map((id) => {
           // A layout can name an id this build doesn't have; `mergeTodayLayout`
           // strips those, but rendering defensively costs nothing.

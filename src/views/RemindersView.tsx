@@ -81,18 +81,22 @@ export default function RemindersView({ onChange, initialId }: { onChange: () =>
   if (blocked) return blocked;
 
   return (
-    <div className="flex h-full">
+    // Column below `md` (the filters become a strip above the list), row from
+    // `md` — the original two-pane layout, unchanged.
+    <div className="flex h-full flex-col md:flex-row">
       <SlowLoad state={gate} />
-      {/* Filter sidebar (Apple Reminders-style smart lists) */}
-      <aside className="w-48 shrink-0 border-r border-neutral-200 p-3 dark:border-neutral-700">
+      {/* Filter sidebar (Apple Reminders-style smart lists). Below `md` it lies
+          down into a horizontally scrolling strip so the list keeps the width. */}
+      <aside className="shrink-0 border-b border-neutral-200 p-3 dark:border-neutral-700 md:w-48 md:border-b-0 md:border-r">
         <h3 className="mb-2 text-xs font-semibold uppercase text-neutral-400">{t("nav.reminders")}</h3>
+        <div className="flex gap-2 overflow-x-auto md:block">
         {FILTERS.map((f) => {
           const Icon = f.icon;
           return (
             <button
               key={f.id}
               onClick={() => setFilter(f.id)}
-              className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-sm ${
+              className={`flex w-auto shrink-0 items-center justify-between gap-2 whitespace-nowrap rounded px-2 py-1.5 text-sm md:w-full md:whitespace-normal ${
                 filter === f.id ? "bg-blue-100 dark:bg-blue-900/40" : "hover:bg-neutral-100 dark:hover:bg-neutral-700"
               }`}
             >
@@ -101,13 +105,14 @@ export default function RemindersView({ onChange, initialId }: { onChange: () =>
             </button>
           );
         })}
+        </div>
       </aside>
 
       {/* Reminder list */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-6">
         <div className="mx-auto max-w-2xl">
           {!notifOk && (
-            <div className="mb-3 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-800">
+            <div className="mb-3 rounded-lg bg-amber-100 px-3 py-2 text-sm text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
               {t("reminders.notificationsOff")}
             </div>
           )}
@@ -192,7 +197,7 @@ function ReminderDetail({ reminder, onClose, onSaved }: { reminder: ReminderRow;
       <div className="space-y-3">
         <input value={title} onChange={(e) => setTitle(e.target.value)} className="w-full rounded-lg border border-neutral-200 px-3 py-2 dark:border-neutral-600 dark:bg-neutral-700" />
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder={t("todos.notesPlaceholder")} rows={2} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm dark:border-neutral-600 dark:bg-neutral-700" />
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="text-sm">
             <span className="mb-1 block text-xs text-neutral-500">{t("reminders.dueLabel")}</span>
             <input type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700" />
@@ -202,7 +207,7 @@ function ReminderDetail({ reminder, onClose, onSaved }: { reminder: ReminderRow;
             <input type="datetime-local" value={remind} onChange={(e) => setRemind(e.target.value)} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700" />
           </label>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="text-sm">
             <span className="mb-1 block text-xs text-neutral-500">{t("todos.priority")}</span>
             <select value={priority} onChange={(e) => setPriority(Number(e.target.value))} className="w-full rounded border border-neutral-200 px-2 py-1.5 dark:border-neutral-600 dark:bg-neutral-700">

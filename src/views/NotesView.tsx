@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Plus, Pin, PinOff, Eye, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pin, PinOff, Eye, Pencil, Trash2, ArrowLeft } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
@@ -51,8 +51,11 @@ export default function NotesView({ onChange, initialId }: { onChange: () => voi
   return (
     <div className="flex h-full">
       <SlowLoad state={gate} />
-      {/* Notes list */}
-      <aside className="flex w-72 shrink-0 flex-col border-r border-neutral-200 dark:border-neutral-700">
+      {/* Notes list. Below `md` the two panes take turns owning the whole
+          screen — a 288px list beside an editor leaves neither usable on a
+          phone — and the editor's back button returns here. From `md` up both
+          are always mounted and visible, exactly as before. */}
+      <aside className={`w-full shrink-0 flex-col border-r border-neutral-200 dark:border-neutral-700 md:flex md:w-72 ${selected ? "hidden" : "flex"}`}>
         <div className="space-y-2 border-b border-neutral-200 p-3 dark:border-neutral-700">
           <Button variant="primary" className="w-full" onClick={createNote}><span className="flex items-center justify-center gap-1.5"><Plus size={16} /> {t("notes.newNote")}</span></Button>
           <input
@@ -85,7 +88,7 @@ export default function NotesView({ onChange, initialId }: { onChange: () => voi
       </aside>
 
       {/* Editor — keyed by note id so local state resets cleanly on selection change */}
-      <div className="flex-1 overflow-y-auto">
+      <div className={`flex-1 overflow-y-auto ${selected ? "" : "hidden md:block"}`}>
         {selected ? (
           <NoteEditor
             key={selected.id}
@@ -93,6 +96,7 @@ export default function NotesView({ onChange, initialId }: { onChange: () => voi
             targets={targets}
             onChanged={bump}
             onDeleted={() => { setSelectedId(null); bump(); }}
+            onBack={() => setSelectedId(null)}
           />
         ) : (
           <div className="flex h-full items-center justify-center text-neutral-400">
@@ -105,12 +109,14 @@ export default function NotesView({ onChange, initialId }: { onChange: () => voi
 }
 
 function NoteEditor({
-  note, targets, onChanged, onDeleted,
+  note, targets, onChanged, onDeleted, onBack,
 }: {
   note: NoteRow;
   targets: LinkTarget[];
   onChanged: () => void;
   onDeleted: () => void;
+  /** Back to the list. Only reachable below `md`, where the panes alternate. */
+  onBack: () => void;
 }) {
   const { t } = useTranslation();
   // Local state = source of truth while editing; DB writes are debounced so
@@ -303,14 +309,27 @@ function NoteEditor({
   }, []);
 
   return (
-    <div className="mx-auto max-w-3xl p-6">
-      <div className="mb-3 flex items-center gap-2">
-        <input
-          value={title}
-          onChange={(e) => { setTitle(e.target.value); scheduleSave({ title: e.target.value }); }}
-          placeholder={t("notes.titlePlaceholder")}
-          className="flex-1 bg-transparent text-2xl font-bold outline-none"
-        />
+    <div className="mx-auto max-w-3xl p-4 md:p-6">
+      {/* Wraps onto two lines below `md`: the title (with the back button that
+          returns to the list) and then the actions. The inner wrapper is
+          `md:flex-1`, which is what the title input used to be on its own, so
+          the desktop row is unchanged. */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="flex w-full min-w-0 items-center gap-2 md:w-auto md:flex-1">
+          <button
+            onClick={onBack}
+            aria-label={t("common.back")}
+            className="-ml-1 shrink-0 rounded-lg p-1.5 text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-700 md:hidden"
+          >
+            <ArrowLeft size={20} />
+          </button>
+          <input
+            value={title}
+            onChange={(e) => { setTitle(e.target.value); scheduleSave({ title: e.target.value }); }}
+            placeholder={t("notes.titlePlaceholder")}
+            className="min-w-0 flex-1 bg-transparent text-2xl font-bold outline-none"
+          />
+        </div>
         <Button variant="ghost" onClick={() => { const p = !pinned; setPinned(p); scheduleSave({ pinned: p }); }}>
           <span className="flex items-center gap-1.5">{pinned ? <><Pin size={15} fill="currentColor" /> {t("notes.pinned")}</> : <><PinOff size={15} /> {t("notes.pin")}</>}</span>
         </Button>
@@ -375,7 +394,7 @@ function NoteEditor({
         </div>
       )}
 
-      <div className="mt-4 grid grid-cols-3 gap-4 rounded-lg border border-neutral-200 p-4 dark:border-neutral-700">
+      <div className="mt-4 grid grid-cols-1 gap-4 rounded-lg border border-neutral-200 p-4 dark:border-neutral-700 md:grid-cols-3">
         <TagEditor type="note" id={note.id} />
         <PeoplePanel type="note" id={note.id} />
         <LinksPanel type="note" id={note.id} targets={targets} />

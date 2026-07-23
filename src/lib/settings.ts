@@ -7,6 +7,7 @@
 // @secondbrain/shared, so this cannot close a cycle.
 
 import { getCachedSession } from "./authStore";
+import type { ThemePreference } from "./theme";
 
 /** Which text-to-speech engine speaks assistant replies. */
 export type TtsEngine = "openai" | "system";
@@ -49,6 +50,12 @@ export interface AppSettings {
   preferredVoices: Record<string, string>;
   /** UI language: "system" to follow the OS, or a code from lib/i18n LANGUAGES. */
   language: string;
+  /**
+   * Light or dark appearance, or "system" to follow the OS. Applied by
+   * `lib/theme.ts`, which owns the `dark` class on <html> — Tailwind is on the
+   * class strategy precisely so this setting can override the OS.
+   */
+  theme: ThemePreference;
   /**
    * Where to show the weather for, or null for "don't". Resolved once by the
    * Settings place search and stored whole: the Today tile then needs no
@@ -217,6 +224,8 @@ const DEFAULTS: AppSettings = {
   speechRate: 1,
   preferredVoices: {},
   language: "system",
+  // Follow the OS unless told otherwise, same rule as the language.
+  theme: "system",
   // A fresh install gets a populated weather tile and ticker rather than two
   // cards advertising a setting. Both are ordinary values the user can change
   // or clear in Settings; clearing sticks, because a stored settings object
