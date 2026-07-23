@@ -8,7 +8,17 @@ import { listNotes, upsertNote, deleteNote, searchNotes, allLinkTargets, insertN
 import { Button } from "../components/ui";
 import MarkdownToolbar, { mdActions, MdEdit } from "../components/MarkdownToolbar";
 import DictateButton from "../components/DictateButton";
-import NoteImage, { SBIMG, primeNoteImage, releaseNoteImages, noteUrlTransform } from "../components/NoteImage";
+import NoteImage, {
+  SBIMG,
+  primeNoteImage,
+  releaseNoteImages,
+  noteUrlTransform,
+  parseNoteImageRef,
+  noteImageRef,
+  noteImageRefPattern,
+  ResizableNoteImage,
+  type NoteImageSize,
+} from "../components/NoteImage";
 import { NoteLink, normalizeEmbeds, youTubeId, youTubeUrl } from "../components/YouTubeEmbed";
 import { encodeNoteImage } from "../lib/images";
 import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/ItemMeta";
@@ -108,6 +118,9 @@ export default function NotesView({ onChange, initialId }: { onChange: () => voi
   );
 }
 
+/** Prefix of the reference an image wears while its bytes are still uploading. */
+const PENDING = "pending-";
+
 function NoteEditor({
   note, targets, onChanged, onDeleted, onBack,
 }: {
@@ -184,7 +197,7 @@ function NoteEditor({
   async function insertImage(file: File) {
     const el = textareaRef.current;
     const at = el ? [el.selectionStart, el.selectionEnd] : [body.length, body.length];
-    const token = `sbimg:pending-${++imageSeq.current}`;
+    const token = `${SBIMG}${PENDING}${++imageSeq.current}`;
     const alt = file.name.replace(/\.[^.]+$/, "") || t("notes.md.imageAlt");
     const md = `![${alt}](${token})`;
     const withPlaceholder = body.slice(0, at[0]) + md + body.slice(at[1]);
@@ -199,6 +212,35 @@ function NoteEditor({
       swapToken(token, null); // drop the placeholder rather than leave a dead ref
       setImageError(true);
     }
+  }
+
+  /**
+   * Set (or clear) the display size of one image reference.
+   *
+   * `offset` is where this `![…](…)` starts in the *preview* string, which is
+   * `normalizeEmbeds(body)` and so isn't always the body — but neither that
+   * rewrite nor anything else touches image references, so the reference's
+   * ordinal among those pointing at the same image is identical in both, and
+   * that is what identifies the one occurrence the user clicked. Matching on
+   * the id alone would resize every copy of an image used twice in a note.
+   */
+  function resizeImage(id: string, offset: number, size: NoteImageSize | null) {
+    const current = bodyRef.current;
+    const find = (s: string) => {
+      const re = noteImageRefPattern(id);
+      const out: number[] = [];
+      for (let m = re.exec(s); m; m = re.exec(s)) out.push(m.index);
+      return out;
+    };
+    const ordinal = find(normalizeEmbeds(current)).findIndex((i) => i >= offset);
+    const at = find(current)[ordinal];
+    if (ordinal === -1 || at === undefined) return; // edited away since the preview rendered
+
+    const length = current.indexOf(")", at) + 1 - at;
+    const next = current.slice(0, at) + `(${noteImageRef(id, size)})` + current.slice(at + length);
+    setBody(next);
+    bodyRef.current = next;
+    scheduleSave({ body: next });
   }
 
   /** Replace (or remove) a placeholder in whatever the body has become since.
@@ -350,7 +392,29 @@ function NoteEditor({
               catches embed `<iframe>`s that reached the body some other way. */}
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
-            components={{ img: NoteImage, a: NoteLink }}
+            components={{
+              // Stored images carry a size picker, since the preview is where
+              // you can see how big they are. The node's source offset is what
+              // tells the rewrite *which* appearance was clicked.
+              img: ({ src, alt, node }) => {
+                const ref = typeof src === "string" ? parseNoteImageRef(src) : null;
+                const offset = node?.position?.start.offset;
+                // An image still uploading has no row yet, and its placeholder
+                // is about to be swapped for the real reference — rewriting it
+                // here would leave `swapToken` nothing to match.
+                if (!ref || ref.id.startsWith(PENDING) || offset === undefined) {
+                  return <NoteImage src={src} alt={alt} />;
+                }
+                return (
+                  <ResizableNoteImage
+                    src={src}
+                    alt={alt}
+                    onResize={(size) => resizeImage(ref.id, offset, size)}
+                  />
+                );
+              },
+              a: NoteLink,
+            }}
             urlTransform={noteUrlTransform}
           >
             {body ? normalizeEmbeds(body) : t("notes.noContent")}

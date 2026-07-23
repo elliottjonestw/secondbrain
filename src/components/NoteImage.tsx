@@ -17,6 +17,51 @@ import { toObjectUrl } from "../lib/images";
 export const SBIMG = "sbimg:";
 
 /**
+ * How wide an image draws in a note.
+ *
+ * The choice rides in the reference itself (`sbimg:<id>?size=m`) rather than in
+ * a column, because the size belongs to *this appearance* of the image: the
+ * same picture can be a thumbnail in one paragraph and full width in another,
+ * and a body that's copied elsewhere carries its layout with it. A reference
+ * with no marker — every one written before this existed — means natural size,
+ * which is exactly what those notes already rendered.
+ */
+export type NoteImageSize = "s" | "m" | "l";
+export const NOTE_IMAGE_SIZES: NoteImageSize[] = ["s", "m", "l"];
+
+/** Widths are fractions of the note column, not caps: a small image picked as
+ *  "large" grows, which "max-w-*" alone would never do. `max-w-full` still
+ *  stops anything overflowing. */
+const SIZE_WIDTH: Record<NoteImageSize, string> = { s: "w-1/4", m: "w-1/2", l: "w-full" };
+
+function isSize(v: string): v is NoteImageSize {
+  return (NOTE_IMAGE_SIZES as string[]).includes(v);
+}
+
+/** Split a reference into its image id and size. Null for anything that isn't
+ *  an `sbimg:` reference (a plain http image pasted from the web). */
+export function parseNoteImageRef(src: string): { id: string; size: NoteImageSize | null } | null {
+  if (!src.startsWith(SBIMG)) return null;
+  const rest = src.slice(SBIMG.length);
+  const q = rest.indexOf("?size=");
+  if (q === -1) return { id: rest, size: null };
+  const size = rest.slice(q + "?size=".length);
+  return { id: rest.slice(0, q), size: isSize(size) ? size : null };
+}
+
+/** The reference to write into a body. */
+export function noteImageRef(id: string, size: NoteImageSize | null): string {
+  return size ? `${SBIMG}${id}?size=${size}` : `${SBIMG}${id}`;
+}
+
+/** Matches every markdown reference to one image, at any size — the parens are
+ *  part of the match so an id can't be found inside some longer word. Ids are
+ *  UUIDs, so there is nothing in one to escape. */
+export function noteImageRefPattern(id: string): RegExp {
+  return new RegExp(`\\(${SBIMG}${id}(?:\\?size=[a-z])?\\)`, "g");
+}
+
+/**
  * react-markdown sanitizes every URL through `defaultUrlTransform`, which
  * blanks any protocol outside http/https/mailto/xmpp/irc — `sbimg:` included.
  * The reference then reaches this component as `src=""`, and the browser draws
@@ -78,7 +123,9 @@ export function primeNoteImage(id: string, mime: string, data: string, width: nu
 
 export default function NoteImage({ src, alt }: { src?: string; alt?: string }) {
   const { t } = useTranslation();
-  const id = src?.startsWith(SBIMG) ? src.slice(SBIMG.length) : null;
+  const ref = src ? parseNoteImageRef(src) : null;
+  const id = ref?.id ?? null;
+  const width = ref?.size ? SIZE_WIDTH[ref.size] : "";
   const [entry, setEntry] = useState<Cached | null>(() => (id ? cache.get(id) ?? null : null));
   const [missing, setMissing] = useState(false);
 
@@ -121,7 +168,69 @@ export default function NoteImage({ src, alt }: { src?: string; alt?: string }) 
       // decoding, so a long note doesn't jump as each image lands.
       width={entry.width}
       height={entry.height}
-      className="h-auto max-w-full rounded"
+      className={`h-auto max-w-full rounded ${width}`}
     />
+  );
+}
+
+/**
+ * An image plus its size picker, for the note preview.
+ *
+ * The preview is where you can see how big the image *is*, so it's where the
+ * size is changed — clicking the image opens the picker. A hover-only control
+ * would be unreachable on the phone build.
+ */
+export function ResizableNoteImage({
+  src,
+  alt,
+  onResize,
+}: {
+  src?: string;
+  alt?: string;
+  onResize: (size: NoteImageSize | null) => void;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const size = (src ? parseNoteImageRef(src) : null)?.size ?? null;
+
+  const choices: Array<{ value: NoteImageSize | null; label: string }> = [
+    { value: "s", label: t("notes.md.sizeSmall") },
+    { value: "m", label: t("notes.md.sizeMedium") },
+    { value: "l", label: t("notes.md.sizeLarge") },
+    { value: null, label: t("notes.md.sizeNatural") },
+  ];
+
+  return (
+    // Spans throughout: react-markdown renders images inside a <p>, where a
+    // <div> is invalid nesting. `block` is what makes the percentage widths
+    // resolve against the note column rather than the image's own width.
+    <span className="relative block">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label={t("notes.md.sizeLabel")}
+        className="block w-full text-left"
+      >
+        <NoteImage src={src} alt={alt} />
+      </button>
+      {open && (
+        <span className="absolute left-2 top-2 flex gap-1 rounded-lg border border-neutral-200 bg-white p-1 shadow-sm dark:border-neutral-700 dark:bg-neutral-800">
+          {choices.map((c) => (
+            <button
+              key={c.value ?? "natural"}
+              type="button"
+              onClick={() => { onResize(c.value); setOpen(false); }}
+              className={`rounded px-2 py-1 text-xs ${
+                size === c.value
+                  ? "bg-blue-600 text-white"
+                  : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-700"
+              }`}
+            >
+              {c.label}
+            </button>
+          ))}
+        </span>
+      )}
+    </span>
   );
 }
