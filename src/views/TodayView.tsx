@@ -5,7 +5,7 @@
 // widget touches nothing here and a widget that throws loses its own tile
 // rather than the page.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ChevronLeft, ChevronRight, ChevronUp, ChevronDown,
@@ -19,6 +19,8 @@ import {
 import { WIDGET_IDS, findWidget } from "../components/today/registry";
 import { nextRevision } from "../components/today/dayData";
 import { CardBoundary } from "../components/today/CardBoundary";
+import { LoadBarrier, BarrierProvider, useBarrierGate } from "../components/today/loadBarrier";
+import { ViewLoading, SlowLoad } from "../components/ViewGate";
 import { Modal, Button } from "../components/ui";
 
 /**
@@ -67,6 +69,14 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
   const [revision, setRevision] = useState(nextRevision);
   const cards = useTodayLayout();
   const viewingToday = isToday(day);
+  // The first-load gate. The widgets own their data, so instead of one page
+  // `load()` the barrier waits for every widget's opening fetch to land (see
+  // loadBarrier.ts). Created once per mount; stepping days or mutating never
+  // re-blocks, because `useAsync` only reports its first load.
+  const barrierRef = useRef<LoadBarrier | null>(null);
+  if (!barrierRef.current) barrierRef.current = new LoadBarrier();
+  const gate = useBarrierGate(barrierRef.current);
+  const blocked = gate === "loading";
 
   const stepDay = (delta: number) => {
     const next = new Date(day);
@@ -81,6 +91,12 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
 
   return (
     <div className="mx-auto h-full max-w-4xl overflow-y-auto p-6">
+      {/* The page stays mounted while it loads so every widget can register its
+          fetch with the barrier — hiding it, not unmounting it, is what lets the
+          gate wait on loads that only start once their card exists. */}
+      {blocked && <ViewLoading />}
+      <SlowLoad state={{ status: gate === "slow" ? "slow" : "ready", error: null, retry: () => {} }} />
+      <div className={blocked ? "hidden" : undefined}>
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">{tr("nav.today")}</h1>
@@ -120,6 +136,7 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
         </Button>
       </div>
 
+      <BarrierProvider value={barrierRef.current}>
       <div className="grid gap-4 md:grid-cols-2">
         {cards.visible.map((id) => {
           // A layout can name an id this build doesn't have; `mergeTodayLayout`
@@ -140,6 +157,7 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
           );
         })}
       </div>
+      </BarrierProvider>
 
       <LayoutEditor
         open={editing}
@@ -149,6 +167,7 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
         onToggle={cards.toggle}
         onReset={cards.reset}
       />
+      </div>
     </div>
   );
 }
