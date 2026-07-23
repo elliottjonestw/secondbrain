@@ -13,6 +13,7 @@ import { weatherWidget } from "./WeatherWidget";
 import { stocksWidget } from "./StocksWidget";
 import { pinnedNotesWidget, recentNotesWidget } from "./NotesWidgets";
 import { birthdaysWidget } from "./BirthdaysWidget";
+import { rssWidget } from "./RssWidget";
 
 export const WIDGETS: readonly TodayWidget[] = [
   summaryWidget,
@@ -23,6 +24,7 @@ export const WIDGETS: readonly TodayWidget[] = [
   recentNotesWidget,
   birthdaysWidget,
   stocksWidget,
+  rssWidget,
 ];
 
 /** Default order, and the set of ids a saved layout is reconciled against. */

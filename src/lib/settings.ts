@@ -1,12 +1,20 @@
 // App settings, persisted in localStorage, scoped per signed-in account (see
 // the note on KEY). Kept out of the database on purpose: "clear all data" must
 // not erase the user's API key, and settings aren't part of the syncable
-// calendar data model — which also means they don't follow you to a new device.
+// calendar data model.
 //
-// The authStore import is safe in both directions: authStore depends only on
-// @secondbrain/shared, so this cannot close a cycle.
+// MOST settings are per-device and stay that way. The handful on Settings →
+// Widgets also follow the account through the Worker — see the cloud-sync
+// section at the bottom of this file, and the allowlist that keeps the two
+// secrets here (the OpenAI key, the iCloud app password) off the server.
+//
+// The authStore and api imports are safe in both directions: authStore depends
+// only on @secondbrain/shared, and api.ts depends on authStore/platform/shared
+// but never on this module, so neither can close a cycle.
 
-import { getCachedSession } from "./authStore";
+import { CLOUD_SETTING_KEYS, type CloudSettingKey } from "@secondbrain/shared";
+import { getCachedSession, getCurrentSpaceId } from "./authStore";
+import { apiRequest } from "./api";
 import type { ThemePreference } from "./theme";
 
 /** Which text-to-speech engine speaks assistant replies. */
@@ -75,6 +83,17 @@ export interface AppSettings {
    */
   watchlist: StockSymbol[];
   /**
+   * RSS/Atom feeds on the Today page, in the order they're read.
+   *
+   * Cloud-synced (see CLOUD_SETTING_KEYS): a subscription list is built up over
+   * months and is one of the things people most expect to find waiting on a new
+   * machine. Empty means the card doesn't render — like the weather tile with
+   * no location, an empty feed list would just advertise a setting.
+   */
+  rssFeeds: RssFeed[];
+  /** How many articles the feed card shows, across all subscribed feeds. */
+  rssItemCount: number;
+  /**
    * Order and visibility of the Today page's cards. Stored as the user arranged
    * it, NOT as the complete truth — read it through `mergeTodayLayout`, which
    * drops ids the app no longer has and appends ones it has gained. An empty
@@ -130,6 +149,35 @@ export function mergeTodayLayout(stored: TodayCardPref[], known: readonly string
   const valid = stored.filter((p) => known.includes(p.id));
   const seen = new Set(valid.map((p) => p.id));
   return [...valid, ...known.filter((id) => !seen.has(id)).map((id) => ({ id, hidden: false }))];
+}
+
+export const MIN_RSS_ITEMS = 1;
+export const MAX_RSS_ITEMS = 20;
+
+/** How many feeds one account may subscribe to. Every feed on the list is a
+ *  relayed request on each Today load that misses the cache, so this is the
+ *  same kind of cap as MAX_WATCHLIST and exists for the same reason. */
+export const MAX_FEEDS = 10;
+
+export function clampRssItemCount(count: number): number {
+  if (!Number.isFinite(count)) return DEFAULTS.rssItemCount;
+  return Math.min(MAX_RSS_ITEMS, Math.max(MIN_RSS_ITEMS, Math.round(count)));
+}
+
+/**
+ * A subscribed feed.
+ *
+ * `id` is a client-minted uuid rather than the URL: it keeps React keys and
+ * removal stable if a user ever edits a feed's address, and it means the list
+ * reorders like every other list in the app.
+ */
+export interface RssFeed {
+  id: string;
+  /** Absolute https URL of the feed document. Validated when it's added. */
+  url: string;
+  /** Channel title, resolved once at add time so the settings list and the
+   *  card can name the source without a fetch. Falls back to the host. */
+  title: string;
 }
 
 export type TemperatureUnit = "celsius" | "fahrenheit";
@@ -236,6 +284,10 @@ const DEFAULTS: AppSettings = {
     { symbol: "AAPL", name: "Apple Inc." },
     { symbol: "GOOGL", name: "Alphabet Inc." },
   ],
+  // No feeds by default: unlike a weather location, there is no sensible guess
+  // at what someone reads, and seeding one would be an editorial choice.
+  rssFeeds: [],
+  rssItemCount: 5,
   todayLayout: [],
   summaryThrottle: true,
   summaryMaxAgeHours: 6,
@@ -254,7 +306,217 @@ export function getSettings(): AppSettings {
 export function saveSettings(patch: Partial<AppSettings>): AppSettings {
   const next = { ...getSettings(), ...patch };
   localStorage.setItem(scopedKey(KEY), JSON.stringify(next));
+  // Anything on the cloud allowlist also goes to the server, in the background.
+  // Local storage is written first and unconditionally, so a failed or offline
+  // push costs the user nothing they can see.
+  pushCloudSettings(pickCloud(patch));
   return next;
+}
+
+// ---------------------------------------------------------------------------
+// The few settings that follow the ACCOUNT rather than the device
+//
+// Everything above is per-device by design, and most of it should stay that
+// way — a voice, a theme, a layout are answers about *this* machine. The
+// Widgets page is the exception: where you are, what you hold and what you read
+// are answers about you, and re-entering them on every new device is the kind
+// of small tax that makes an app feel like it doesn't know you.
+//
+// The rule that makes this safe is CLOUD_SETTING_KEYS in @secondbrain/shared:
+// the client only ever uploads a key on that list, and the Worker rejects any
+// key off it. **The OpenAI API key and the iCloud app-specific password are not
+// on it and must never be.** They are the two secrets in this file; the whole
+// point of the allowlist is that no amount of future code up here can leak them
+// to the server by accident. Adding a key means asking whether the value is a
+// secret first — if it is, the answer is no.
+//
+// Reads stay synchronous. `getSettings()` is called from render paths all over
+// the app, so the cloud is not a second source of truth to await: it is loaded
+// once at sign-in by `syncSettingsFromCloud`, written into the same
+// localStorage bucket, and read from there forever after. That makes the local
+// copy an offline cache as well, so the Widgets page works with no network.
+//
+// Conflicts are last-write-wins, per key, with no merge. Two devices changing
+// the same watchlist minutes apart is not worth a vector clock, and every value
+// here is one the user can see and re-set.
+// ---------------------------------------------------------------------------
+
+/**
+ * Keys whose local edits haven't reached the server yet.
+ *
+ * Without this an edit made offline would be silently reverted by the next
+ * sign-in, which is a data-loss bug wearing the costume of a sync feature. The
+ * pending list is consulted by `syncSettingsFromCloud`, which pushes those keys
+ * instead of letting the server's older value overwrite them.
+ */
+const PENDING_KEY = "secondbrain.settings.pending";
+
+function readPending(): CloudSettingKey[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(scopedKey(PENDING_KEY)) || "[]");
+    return Array.isArray(raw) ? raw.filter(isCloudKey) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePending(keys: CloudSettingKey[]): void {
+  try {
+    if (keys.length) localStorage.setItem(scopedKey(PENDING_KEY), JSON.stringify(keys));
+    else localStorage.removeItem(scopedKey(PENDING_KEY));
+  } catch {
+    /* storage full or disabled — the push below still tries */
+  }
+}
+
+function isCloudKey(key: string): key is CloudSettingKey {
+  return (CLOUD_SETTING_KEYS as readonly string[]).includes(key);
+}
+
+/** The cloud-eligible subset of a patch. This function is the only place a
+ *  value leaves the device, so the filter lives here and nowhere else. */
+function pickCloud(patch: Partial<AppSettings>): Partial<CloudSettings> {
+  // Built as a loose record and cast once: writing `out[key]` where `key` is a
+  // union of literals narrows the assignable type to the INTERSECTION of the
+  // value types, which is `never`. The read side (`patch[key]`) is sound, and
+  // the keys come from CLOUD_SETTING_KEYS, so the shape is right by
+  // construction — this is TypeScript's limit, not a loosened check.
+  const out: Record<string, unknown> = {};
+  for (const key of CLOUD_SETTING_KEYS) {
+    if (key in patch) out[key] = patch[key];
+  }
+  return out as Partial<CloudSettings>;
+}
+
+/** The shape stored per key. Named so the picker above can't drift from
+ *  AppSettings without a compile error. */
+type CloudSettings = Pick<AppSettings, CloudSettingKey>;
+
+/**
+ * Send cloud-eligible settings to the server, in the background.
+ *
+ * Deliberately not awaited by `saveSettings`: every caller of that is a UI
+ * event handler, and blocking a checkbox on a round-trip to make a *preference*
+ * durable is the wrong trade. Failure marks the keys pending and returns — the
+ * next successful save or sign-in flushes them.
+ */
+function pushCloudSettings(values: Partial<CloudSettings>): void {
+  const keys = Object.keys(values).filter(isCloudKey);
+  if (!keys.length) return;
+  // Signed out, there is no account for these to follow. The anon bucket is
+  // local-only by definition.
+  if (!currentUserId() || !getCurrentSpaceId()) return;
+
+  const pending = new Set([...readPending(), ...keys]);
+  writePending([...pending]);
+
+  void (async () => {
+    try {
+      await apiRequest(spaceSettingsPath(), { method: "PATCH", body: values });
+      // Only clear what this request actually carried: another save may have
+      // added a key while this one was in flight.
+      writePending(readPending().filter((k) => !keys.includes(k)));
+    } catch {
+      // Offline, or the server said no. The keys stay pending; nothing is
+      // surfaced, because the local value — the one the user is looking at —
+      // was saved either way.
+    }
+  })();
+}
+
+/**
+ * Pull this account's settings from the server into the local bucket.
+ *
+ * Called once when the app mounts with a session. Anything still pending from
+ * an offline edit is pushed first and then left alone, so the server's older
+ * copy can't undo a change the user made on this device while disconnected.
+ *
+ * Never throws: a failure here means the Widgets page shows this device's last
+ * known values, which is exactly what it did before any of this existed.
+ */
+export async function syncSettingsFromCloud(): Promise<void> {
+  if (!currentUserId() || !getCurrentSpaceId()) return;
+
+  const pending = readPending();
+  if (pending.length) {
+    const local = getSettings();
+    // Same union-key cast as `pickCloud` — see the note there.
+    const values: Record<string, unknown> = {};
+    for (const key of pending) values[key] = local[key];
+    pushCloudSettings(values as Partial<CloudSettings>);
+  }
+
+  try {
+    const remote = await apiRequest<Partial<Record<CloudSettingKey, unknown>>>(spaceSettingsPath());
+    const patch: Partial<AppSettings> = {};
+    for (const key of CLOUD_SETTING_KEYS) {
+      // A key edited offline is authoritative here — see above.
+      if (pending.includes(key)) continue;
+      if (!(key in remote)) continue;
+      const value = remote[key];
+      if (isPlausible(key, value)) (patch as Record<string, unknown>)[key] = value;
+    }
+    if (Object.keys(patch).length) {
+      // Straight to storage: routing through saveSettings would push what we
+      // just pulled back to the server on every launch.
+      localStorage.setItem(scopedKey(KEY), JSON.stringify({ ...getSettings(), ...patch }));
+      notifyCloudSettingsApplied();
+    }
+  } catch {
+    /* offline or unauthenticated — the local copy stands in */
+  }
+}
+
+/**
+ * Is a value from the server the right *kind* of thing for this key?
+ *
+ * Not full validation — a shallow check, for the same reason `weather.ts`
+ * screens its cache: this data was written by a build that may be older or
+ * newer than this one, and a `rssFeeds` that arrives as a string must become a
+ * refusal rather than a `TypeError` inside a render. Anything that fails is
+ * ignored, leaving the local default in place.
+ */
+function isPlausible(key: CloudSettingKey, value: unknown): boolean {
+  switch (key) {
+    case "weatherLocation":
+      return value === null
+        || (typeof value === "object" && typeof (value as WeatherLocation).latitude === "number");
+    case "temperatureUnit":
+      return value === "celsius" || value === "fahrenheit";
+    case "watchlist":
+      return Array.isArray(value) && value.every((s) => typeof s?.symbol === "string");
+    case "rssFeeds":
+      return Array.isArray(value) && value.every((f) => typeof f?.url === "string" && typeof f?.id === "string");
+    case "rssItemCount":
+      return typeof value === "number" && Number.isFinite(value);
+  }
+}
+
+function spaceSettingsPath(): string {
+  return `/v1/spaces/${getCurrentSpaceId()}/settings`;
+}
+
+/**
+ * Notified when a cloud pull actually CHANGED something locally.
+ *
+ * Settings are read synchronously from storage during render, which works
+ * because every other write happens in an event handler that re-renders its own
+ * pane anyway. The cloud pull is the one write that lands out of band — mid-way
+ * through a Today page that has already drawn — so it needs a way to say so.
+ *
+ * Deliberately NOT fired by `saveSettings`. The Today layout editor saves on
+ * every reorder, and a general "settings changed" signal would make each ▲
+ * click refetch every widget's data. This fires once per sign-in, at most.
+ */
+const cloudApplied = new Set<() => void>();
+
+export function onCloudSettingsApplied(fn: () => void): () => void {
+  cloudApplied.add(fn);
+  return () => { cloudApplied.delete(fn); };
+}
+
+function notifyCloudSettingsApplied(): void {
+  for (const fn of cloudApplied) fn();
 }
 
 /**

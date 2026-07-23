@@ -39,7 +39,8 @@ export type WidgetLabelKey =
   | "today.stocksCard"
   | "today.pinnedNotes"
   | "today.recentNotes"
-  | "today.birthdays";
+  | "today.birthdays"
+  | "today.rssCard";
 
 export interface TodayWidget {
   /**

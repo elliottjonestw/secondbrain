@@ -5,7 +5,7 @@
 // widget touches nothing here and a widget that throws loses its own tile
 // rather than the page.
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ChevronLeft, ChevronRight, ChevronUp, ChevronDown,
@@ -14,7 +14,8 @@ import {
 import type { GoTo } from "../types";
 import { startOfDay, fmtFullDate, isToday } from "../lib/format";
 import {
-  getSettings, saveSettings, mergeTodayLayout, type TodayCardPref,
+  getSettings, saveSettings, mergeTodayLayout, onCloudSettingsApplied,
+  type TodayCardPref,
 } from "../lib/settings";
 import { WIDGET_IDS, findWidget } from "../components/today/registry";
 import { nextRevision } from "../components/today/dayData";
@@ -88,6 +89,15 @@ export default function TodayView({ onChange, goTo }: { onChange: () => void; go
     setRevision(nextRevision());
     onChange();
   };
+
+  // The account's widget settings arrive from the server shortly after launch,
+  // by which time this page has already drawn from whatever this device had.
+  // Widgets read those settings at render (a weather location, a watchlist, a
+  // feed list), so a pull that changed something has to re-run their fetches —
+  // otherwise a fresh device shows an empty News card until the user navigates
+  // away and back. Bumping the revision is the same signal a mutation sends,
+  // and it fires at most once per sign-in.
+  useEffect(() => onCloudSettingsApplied(() => setRevision(nextRevision())), []);
 
   return (
     <div className="mx-auto h-full max-w-4xl overflow-y-auto p-4 md:p-6">

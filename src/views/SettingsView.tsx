@@ -3,7 +3,7 @@ import {
   Eye, EyeOff, Check, CalendarDays, ExternalLink, Loader2, AlertCircle,
   Sparkles, Mic, Languages, Database, Download, Upload, LucideIcon,
   Trash2, Volume2, MapPin, X, ChevronUp, ChevronDown,
-  UserCog, MailCheck, MailWarning,
+  UserCog, MailCheck, MailWarning, LayoutGrid, Rss,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -11,9 +11,11 @@ import {
   getSettings, saveSettings, getCalendarSettings, saveCalendarSettings,
   MIN_SPEECH_RATE, MAX_SPEECH_RATE, clampSpeechRate,
   MIN_SUMMARY_MAX_AGE_HOURS, MAX_SUMMARY_MAX_AGE_HOURS, clampSummaryMaxAge,
+  MIN_RSS_ITEMS, MAX_RSS_ITEMS, MAX_FEEDS, clampRssItemCount,
   type AppSettings, type CalDavAccount, type TtsEngine,
-  type TemperatureUnit, type WeatherLocation, type StockSymbol,
+  type TemperatureUnit, type WeatherLocation, type StockSymbol, type RssFeed,
 } from "../lib/settings";
+import { fetchFeed, normalizeFeedUrl, hostOf, invalidateFeed } from "../lib/rss";
 import {
   LANGUAGES, SYSTEM_LANGUAGE, changeLanguage, matchSystemLanguage, currentLanguage,
 } from "../lib/i18n";
@@ -31,7 +33,7 @@ import { discoverAccount } from "../lib/caldav/discovery";
 import { invalidateCache, listCalendars, setCalendarVisible, LOCAL_CALENDAR_NAME } from "../lib/calendars";
 import { LOCAL_CALENDAR_ID } from "../types";
 import { exportBackup, importBackup } from "../lib/backup";
-import { clearAllData } from "../db";
+import { clearAllData, newId } from "../db";
 import { deleteAccount, resendVerification } from "../lib/auth";
 import { getCachedSession } from "../lib/authStore";
 import { ApiError, OfflineError } from "../lib/api";
@@ -39,11 +41,12 @@ import { Button } from "../components/ui";
 
 const APPLE_PASSWORD_URL = "https://account.apple.com/account/manage";
 
-type Section = "general" | "account" | "assistant" | "voice" | "calendars" | "data";
+type Section = "general" | "account" | "widgets" | "assistant" | "voice" | "calendars" | "data";
 
 const SECTIONS: { id: Section; labelKey: `settings.sections.${Section}`; icon: LucideIcon }[] = [
   { id: "general", labelKey: "settings.sections.general", icon: Languages },
   { id: "account", labelKey: "settings.sections.account", icon: UserCog },
+  { id: "widgets", labelKey: "settings.sections.widgets", icon: LayoutGrid },
   { id: "assistant", labelKey: "settings.sections.assistant", icon: Sparkles },
   { id: "voice", labelKey: "settings.sections.voice", icon: Mic },
   { id: "calendars", labelKey: "settings.sections.calendars", icon: CalendarDays },
@@ -116,6 +119,7 @@ export default function SettingsView() {
         <div className="mx-auto max-w-2xl">
           {section === "general" && <GeneralSettings />}
           {section === "account" && <AccountSettings />}
+          {section === "widgets" && <WidgetSettings />}
           {section === "assistant" && (
             <AssistantSettings draft={draft} patch={patch} onSave={save} saved={saved} />
           )}
@@ -231,9 +235,6 @@ function GeneralSettings() {
   const { t } = useTranslation();
   const [language, setLanguage] = useState(getSettings().language);
   const [theme, setTheme] = useState(getSettings().theme);
-  const [location, setLocation] = useState(getSettings().weatherLocation);
-  const [unit, setUnit] = useState(getSettings().temperatureUnit);
-  const [watchlist, setWatchlist] = useState(getSettings().watchlist);
 
   // Applied immediately rather than on a Save button: the whole point of a
   // language picker is seeing the result, and there's nothing to validate.
@@ -293,7 +294,38 @@ function GeneralSettings() {
         </select>
       </Field>
 
-      <Field label={t("settings.general.weatherLocation")} hint={t("settings.general.weatherHint")}>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Widgets — what the Today page's cards show
+//
+// Its own section rather than a tail on General, because these four settings
+// have nothing to do with how the app is displayed and everything to do with
+// one page's contents. They also share a property nothing in General has: they
+// FOLLOW THE ACCOUNT (see the cloud-sync note in lib/settings.ts), so the pane
+// says so once rather than repeating it per field.
+//
+// Every editor here saves on change rather than behind a Save button, the same
+// rule the language and theme pickers follow: there is nothing to validate that
+// the pickers haven't already validated, and the result is the preview.
+// ---------------------------------------------------------------------------
+function WidgetSettings() {
+  const { t } = useTranslation();
+  const [location, setLocation] = useState(getSettings().weatherLocation);
+  const [unit, setUnit] = useState(getSettings().temperatureUnit);
+  const [watchlist, setWatchlist] = useState(getSettings().watchlist);
+  const [feeds, setFeeds] = useState(getSettings().rssFeeds);
+  const [itemCount, setItemCount] = useState(getSettings().rssItemCount);
+
+  return (
+    <>
+      <PaneHeader title={t("settings.widgets.title")}>
+        {t("settings.widgets.description")}
+      </PaneHeader>
+
+      <Field label={t("settings.widgets.weatherLocation")} hint={t("settings.widgets.weatherHint")}>
         <WeatherLocationPicker
           location={location}
           onPick={(loc) => { setLocation(loc); saveSettings({ weatherLocation: loc }); }}
@@ -302,7 +334,7 @@ function GeneralSettings() {
 
       {/* Only worth asking once there's weather to show. */}
       {location && (
-        <Field label={t("settings.general.temperatureUnit")}>
+        <Field label={t("settings.widgets.temperatureUnit")}>
           <select
             value={unit}
             onChange={(e) => {
@@ -312,19 +344,192 @@ function GeneralSettings() {
             }}
             className={INPUT_CLASS}
           >
-            <option value="celsius">{t("settings.general.celsius")}</option>
-            <option value="fahrenheit">{t("settings.general.fahrenheit")}</option>
+            <option value="celsius">{t("settings.widgets.celsius")}</option>
+            <option value="fahrenheit">{t("settings.widgets.fahrenheit")}</option>
           </select>
         </Field>
       )}
 
-      <Field label={t("settings.general.watchlist")} hint={t("settings.general.watchlistHint")}>
+      <Field label={t("settings.widgets.watchlist")} hint={t("settings.widgets.watchlistHint")}>
         <WatchlistEditor
           watchlist={watchlist}
           onChange={(next) => { setWatchlist(next); saveSettings({ watchlist: next }); }}
         />
       </Field>
+
+      <Field label={t("settings.widgets.feeds")} hint={t("settings.widgets.feedsHint")}>
+        <FeedEditor
+          feeds={feeds}
+          onChange={(next) => { setFeeds(next); saveSettings({ rssFeeds: next }); }}
+        />
+      </Field>
+
+      {/* Only worth asking once there's something to count. */}
+      {!!feeds.length && (
+        <Field label={t("settings.widgets.rssItemCount")} hint={t("settings.widgets.rssItemCountHint")}>
+          <input
+            type="number"
+            min={MIN_RSS_ITEMS}
+            max={MAX_RSS_ITEMS}
+            value={itemCount}
+            onChange={(e) => setItemCount(Number(e.target.value))}
+            // Clamped on blur, not on change: clamping mid-typing turns a
+            // half-typed "10" into "1" and then fights the user for the "0".
+            onBlur={() => {
+              const next = clampRssItemCount(itemCount);
+              setItemCount(next);
+              saveSettings({ rssItemCount: next });
+            }}
+            className={`${INPUT_CLASS} w-24`}
+          />
+        </Field>
+      )}
     </>
+  );
+}
+
+/**
+ * The Today feed card's subscriptions: add by URL, reorder, remove.
+ *
+ * Adding FETCHES the feed before accepting it, which is why this has a busy
+ * state and an error notice rather than just appending a string. Two things
+ * come of that round-trip: the channel's real title, so the list and the card
+ * can name the source, and an immediate answer to the commonest mistake —
+ * pasting a site's home page instead of its feed. Storing an unverified URL
+ * would defer that failure to the Today page, where it can only appear as a
+ * card that quietly shows less than it should.
+ *
+ * Reordering is ▲/▼ buttons, not drag — HTML5 drag does not work in this
+ * webview, confirmed everywhere it was tried.
+ */
+/** Why an add failed. A map rather than a built key, so every one of these is
+ *  checked against the catalog at compile time. */
+const FEED_ERRORS = {
+  invalid: "settings.widgets.feedInvalid",
+  duplicate: "settings.widgets.feedDuplicate",
+  unreachable: "settings.widgets.feedUnreachable",
+} as const;
+
+function FeedEditor({
+  feeds, onChange,
+}: { feeds: RssFeed[]; onChange: (next: RssFeed[]) => void }) {
+  const { t } = useTranslation();
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<"invalid" | "unreachable" | "duplicate" | null>(null);
+
+  // Aborts the previous check when a new one starts, so a fast double-Enter
+  // can't add the earlier feed after the later one.
+  const ctlRef = useRef<AbortController | null>(null);
+  useEffect(() => () => ctlRef.current?.abort(), []);
+
+  const full = feeds.length >= MAX_FEEDS;
+
+  async function add() {
+    const normalized = normalizeFeedUrl(url);
+    if (!normalized) { setFailed("invalid"); return; }
+    if (feeds.some((f) => f.url === normalized)) { setFailed("duplicate"); return; }
+
+    ctlRef.current?.abort();
+    const ctl = new AbortController();
+    ctlRef.current = ctl;
+    setBusy(true);
+    setFailed(null);
+    try {
+      const feed = await fetchFeed(normalized, ctl.signal);
+      onChange([...feeds, { id: newId(), url: normalized, title: feed.title || hostOf(normalized) }]);
+      setUrl("");
+    } catch {
+      if (ctl.signal.aborted) return;
+      setFailed("unreachable");
+    } finally {
+      if (!ctl.signal.aborted) setBusy(false);
+    }
+  }
+
+  function move(index: number, delta: number) {
+    const to = index + delta;
+    if (to < 0 || to >= feeds.length) return;
+    const next = [...feeds];
+    [next[index], next[to]] = [next[to], next[index]];
+    onChange(next);
+  }
+
+  function remove(feed: RssFeed) {
+    // Drop the cached articles too, so re-adding the feed later doesn't show
+    // whatever was current when it was removed.
+    invalidateFeed(feed.url);
+    onChange(feeds.filter((f) => f.id !== feed.id));
+  }
+
+  return (
+    <div>
+      {!!feeds.length && (
+        <ul className="mb-2 overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-600">
+          {feeds.map((f, i) => (
+            <li
+              key={f.id}
+              className="flex items-center gap-2 border-b border-neutral-100 px-3 py-2 last:border-0 dark:border-neutral-700"
+            >
+              <Rss size={14} className="shrink-0 text-neutral-400" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium">{f.title}</div>
+                <div className="truncate text-xs text-neutral-400">{hostOf(f.url)}</div>
+              </div>
+              <button
+                onClick={() => move(i, -1)}
+                disabled={i === 0}
+                className="text-neutral-400 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-neutral-400"
+                aria-label={t("settings.widgets.moveUp")}
+                title={t("settings.widgets.moveUp")}
+              >
+                <ChevronUp size={15} />
+              </button>
+              <button
+                onClick={() => move(i, 1)}
+                disabled={i === feeds.length - 1}
+                className="text-neutral-400 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-neutral-400"
+                aria-label={t("settings.widgets.moveDown")}
+                title={t("settings.widgets.moveDown")}
+              >
+                <ChevronDown size={15} />
+              </button>
+              <button
+                onClick={() => remove(f)}
+                className="text-neutral-400 hover:text-red-500"
+                aria-label={t("settings.widgets.removeFeed")}
+                title={t("settings.widgets.removeFeed")}
+              >
+                <X size={15} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {full ? (
+        <p className="text-xs text-neutral-400">
+          {t("settings.widgets.feedsFull", { count: MAX_FEEDS })}
+        </p>
+      ) : (
+        <div className="flex gap-2">
+          <input
+            value={url}
+            onChange={(e) => { setUrl(e.target.value); setFailed(null); }}
+            onKeyDown={(e) => { if (e.key === "Enter") void add(); }}
+            placeholder={t("settings.widgets.feedPlaceholder")}
+            spellCheck={false}
+            autoComplete="off"
+            className={INPUT_CLASS}
+          />
+          <Button onClick={() => void add()} disabled={busy || !url.trim()}>
+            {busy ? t("common.loading") : t("settings.widgets.addFeed")}
+          </Button>
+        </div>
+      )}
+
+      {failed && <div className="mt-2"><Notice tone="error">{t(FEED_ERRORS[failed])}</Notice></div>}
+    </div>
   );
 }
 
@@ -408,8 +613,8 @@ function WatchlistEditor({
                 onClick={() => move(i, -1)}
                 disabled={i === 0}
                 className="text-neutral-400 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-neutral-400"
-                aria-label={t("settings.general.moveUp")}
-                title={t("settings.general.moveUp")}
+                aria-label={t("settings.widgets.moveUp")}
+                title={t("settings.widgets.moveUp")}
               >
                 <ChevronUp size={15} />
               </button>
@@ -417,16 +622,16 @@ function WatchlistEditor({
                 onClick={() => move(i, 1)}
                 disabled={i === watchlist.length - 1}
                 className="text-neutral-400 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-neutral-400"
-                aria-label={t("settings.general.moveDown")}
-                title={t("settings.general.moveDown")}
+                aria-label={t("settings.widgets.moveDown")}
+                title={t("settings.widgets.moveDown")}
               >
                 <ChevronDown size={15} />
               </button>
               <button
                 onClick={() => onChange(watchlist.filter((w) => w.symbol !== s.symbol))}
                 className="text-neutral-400 hover:text-red-500"
-                aria-label={t("settings.general.removeSymbol")}
-                title={t("settings.general.removeSymbol")}
+                aria-label={t("settings.widgets.removeSymbol")}
+                title={t("settings.widgets.removeSymbol")}
               >
                 <X size={15} />
               </button>
@@ -437,7 +642,7 @@ function WatchlistEditor({
 
       {full ? (
         <p className="text-xs text-neutral-400">
-          {t("settings.general.watchlistFull", { count: MAX_WATCHLIST })}
+          {t("settings.widgets.watchlistFull", { count: MAX_WATCHLIST })}
         </p>
       ) : (
         <div className="flex gap-2">
@@ -445,17 +650,17 @@ function WatchlistEditor({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") void search(); }}
-            placeholder={t("settings.general.watchlistPlaceholder")}
+            placeholder={t("settings.widgets.watchlistPlaceholder")}
             className={INPUT_CLASS}
           />
           <Button onClick={() => void search()} disabled={busy || !query.trim()}>
-            {busy ? t("common.loading") : t("settings.general.searchSymbol")}
+            {busy ? t("common.loading") : t("settings.widgets.searchSymbol")}
           </Button>
         </div>
       )}
 
-      {failed && <div className="mt-2"><Notice tone="error">{t("settings.general.symbolSearchFailed")}</Notice></div>}
-      {results?.length === 0 && <p className="mt-2 text-xs text-neutral-400">{t("settings.general.noSymbols")}</p>}
+      {failed && <div className="mt-2"><Notice tone="error">{t("settings.widgets.symbolSearchFailed")}</Notice></div>}
+      {results?.length === 0 && <p className="mt-2 text-xs text-neutral-400">{t("settings.widgets.noSymbols")}</p>}
       {!!results?.length && (
         <ul className="mt-2 overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-600">
           {results.map((r) => {
@@ -537,8 +742,8 @@ function WeatherLocationPicker({
         <button
           onClick={() => { onPick(null); setResults(null); setQuery(""); }}
           className="text-neutral-400 hover:text-red-500"
-          aria-label={t("settings.general.clearLocation")}
-          title={t("settings.general.clearLocation")}
+          aria-label={t("settings.widgets.clearLocation")}
+          title={t("settings.widgets.clearLocation")}
         >
           <X size={15} />
         </button>
@@ -553,16 +758,16 @@ function WeatherLocationPicker({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") void search(); }}
-          placeholder={t("settings.general.weatherPlaceholder")}
+          placeholder={t("settings.widgets.weatherPlaceholder")}
           className={INPUT_CLASS}
         />
         <Button onClick={() => void search()} disabled={busy || !query.trim()}>
-          {busy ? t("common.loading") : t("settings.general.searchPlace")}
+          {busy ? t("common.loading") : t("settings.widgets.searchPlace")}
         </Button>
       </div>
 
-      {failed && <div className="mt-2"><Notice tone="error">{t("settings.general.placeSearchFailed")}</Notice></div>}
-      {results?.length === 0 && <p className="mt-2 text-xs text-neutral-400">{t("settings.general.noPlaces")}</p>}
+      {failed && <div className="mt-2"><Notice tone="error">{t("settings.widgets.placeSearchFailed")}</Notice></div>}
+      {results?.length === 0 && <p className="mt-2 text-xs text-neutral-400">{t("settings.widgets.noPlaces")}</p>}
       {!!results?.length && (
         <ul className="mt-2 overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-600">
           {results.map((p) => (

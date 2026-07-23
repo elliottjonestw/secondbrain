@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import {
+  cloudSettingsPatchSchema,
   customFieldCreateSchema,
   customFieldReorderSchema,
   eventCreateSchema,
@@ -76,6 +77,7 @@ import {
   getNoteImageBytes,
   getNoteImageRow,
 } from "../db/images";
+import { getSpaceSettings, updateSpaceSettings } from "../db/settings";
 import { clearSpaceData, exportTablePage, importTableRows } from "../db/backup";
 import {
   createLink,
@@ -131,6 +133,31 @@ spaces.delete("/spaces/:spaceId/lists/:id", async (c) => {
   await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
   await deleteList(c.env.DB, spaceId(c), c.req.param("id"));
   return c.body(null, 204);
+});
+
+// ---------------------------------------------------------------------------
+// Settings that follow the account (Settings → Widgets)
+//
+// Only the keys in CLOUD_SETTING_KEYS are accepted — the schema is what rejects
+// anything else, and that rejection is the guarantee that no client, present or
+// future, can push the OpenAI key or the iCloud password here. A patch with an
+// unknown key is a 400, not a silent drop: a client sending one has a bug worth
+// hearing about, and failing quietly is how a secret ends up half-synced.
+// ---------------------------------------------------------------------------
+
+spaces.get("/spaces/:spaceId/settings", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "read");
+  return c.json(await getSpaceSettings(c.env.DB, spaceId(c)));
+});
+
+spaces.patch("/spaces/:spaceId/settings", async (c) => {
+  await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+  const body = await c.req.json().catch(() => null);
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    throw badRequest("Expected a JSON object.");
+  }
+  const patch = cloudSettingsPatchSchema.parse(body);
+  return c.json(await updateSpaceSettings(c.env.DB, spaceId(c), patch));
 });
 
 // ---------------------------------------------------------------------------

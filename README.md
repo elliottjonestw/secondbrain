@@ -98,7 +98,7 @@ open "src-tauri/target/release/bundle/macos/Sekunda.app"
 > **M5 (hardening) is in.** Password reset and email confirmation over
 > [Resend](https://resend.com) (free tier, no card); account deletion that
 > removes the user, their space, every row in it and the note-image bytes in
-> KV, gated on re-entering the password; per-user rate limits on the two proxy
+> KV, gated on re-entering the password; per-user rate limits on the proxy
 > routes so a stolen session can't be used as a relay; a Content-Security-Policy
 > on the web build and hardening headers on every API response; and the Tauri
 > HTTP scope narrowed off `http://*`. **Reset requires `RESEND_API_KEY` to be
@@ -136,11 +136,28 @@ In **Cloudflare D1**, scoped to your account's space, reached only through the
 Worker — nothing is kept on the device but a read cache. Migrations live in
 `worker/migrations/` and are applied with `wrangler d1 migrations apply`.
 
-App **settings** (your OpenAI key + model, your calendar-account configuration,
-your weather location, and your stock watchlist) live in the webview's
-`localStorage`, not in the database — so they survive a data wipe and never
-travel in a backup file. The flip side is that they don't follow you to a new
-device either; you re-enter them once per machine.
+App **settings** live outside the domain database, so they survive a data wipe
+and never travel in a backup file. They are split by what the setting *is*:
+
+- **Per-device, in the webview's `localStorage`** — your OpenAI key + model,
+  your voice and speech settings, your calendar-account configuration, the UI
+  language, the theme, and your Today card layout. These are answers about a
+  particular machine, and you re-enter them once per machine. The two secrets
+  among them (the OpenAI key and the iCloud app-specific password) are stored
+  in plain text on the device and are **never sent to the server**.
+- **Per-account, in the cloud** — everything on **Settings → Widgets**: your
+  weather location and temperature unit, your stock watchlist, your **RSS
+  subscriptions**, and how many articles the news card shows. These are answers
+  about *you*, not about a machine, so they are stored in D1 against your
+  account and pulled down when you sign in on a new device.
+
+The line between the two is an explicit allowlist (`CLOUD_SETTING_KEYS` in
+`packages/shared`), enforced on both sides: the client only ever uploads a key
+on that list, and the Worker rejects a patch containing any key that isn't. That
+is what guarantees no future change can quietly sync a credential. Cloud
+settings are last-write-wins per key, are kept in `localStorage` as well so the
+app still works offline, and an edit made offline is pushed when you reconnect
+rather than being overwritten by the server's older copy.
 
 **Note images are stored separately from the note text.** The markdown body holds only a reference (`![alt](sbimg:<id>)`); the bytes live in Workers KV, with only metadata in D1, and are fetched by the preview that renders them. Inlining them as data URIs would put every image on the `notes` row — which the sidebar re-reads on every keystroke in the search box — and feed them to a *trigram* full-text index. Measured on one 300 KB image, that's a 638 KB search index versus 331 bytes.
 
@@ -148,7 +165,7 @@ device either; you re-enter them once per machine.
 
 ## Features
 
-- **Today** — dashboard of the day's schedule (across every visible calendar), due/overdue tasks & reminders, pinned + recent notes, and upcoming birthdays. Schedule events and notes are clickable — they jump straight to that item. **Arrows beside the date step to any other day** (with a "Today" button to come back); the schedule, due items and birthdays follow it, while "overdue" only ever counts against *now*, so it pulls extra items in on today alone. A **written summary of the day** appears as its own card when the assistant is configured; without an OpenAI key the card still shows, explaining what it's for and how to switch it on — see below. A fresh install starts with **New York** as the weather location and **Apple + Alphabet** on the stock watchlist, so both tiles are there on day one; change or clear them in Settings. The forecast tile joins the grid whenever a location is set, following the day you're looking at; and a market ticker joins it whenever the **stock watchlist** is non-empty (today only — a quote describes now, so it says nothing about any other day). **Edit** opens a card manager: reorder the cards with the arrows, or hide the ones you don't want — and a hidden card stops fetching, so switching off the summary or the weather stops the request as well as the tile.
+- **Today** — dashboard of the day's schedule (across every visible calendar), due/overdue tasks & reminders, pinned + recent notes, and upcoming birthdays. Schedule events and notes are clickable — they jump straight to that item. **Arrows beside the date step to any other day** (with a "Today" button to come back); the schedule, due items and birthdays follow it, while "overdue" only ever counts against *now*, so it pulls extra items in on today alone. A **written summary of the day** appears as its own card when the assistant is configured; without an OpenAI key the card still shows, explaining what it's for and how to switch it on — see below. A fresh install starts with **New York** as the weather location and **Apple + Alphabet** on the stock watchlist, so both tiles are there on day one; change or clear them in Settings. The forecast tile joins the grid whenever a location is set, following the day you're looking at; a market ticker joins it whenever the **stock watchlist** is non-empty, and a news card joins it whenever you follow at least one **RSS feed** (both today-only — a quote and a headline describe now, so they say nothing about any other day). **Edit** opens a card manager: reorder the cards with the arrows, or hide the ones you don't want — and a hidden card stops fetching, so switching off the summary or the weather stops the request as well as the tile.
 - **Calendar** — month / week / day views, event CRUD, RRULE recurrence, all-day + color-coded events. Todos with due dates appear as dashed chips. A bottom bar (on every calendar view) has **ICS import/export** on the left, with the export path and any calendar-unavailable warning on the right (the bottom-right corner belongs to the assistant's floating button). Supports **multiple calendars** — the built-in one plus connected Apple/iCloud calendars — viewable individually or together (see below).
 - **Apple Calendar (iCloud)** — connect your iCloud account in Settings and your Apple calendars appear alongside the built-in one, each with its own color and a visibility toggle so you can view them **individually or together**. Create, edit, delete, and skip-an-occurrence all write straight back to iCloud. When creating an event you pick its calendar; a **default calendar** setting decides where events land otherwise (including ones the assistant creates).
 - **Reminders** — Apple-Reminders-style with a filter sidebar (**All / Scheduled / Flagged / Completed**, each with live counts). Due date + optional alert time, recurrence, priority, link to a to-do. Native OS notifications fire when due (polled once a minute while the app is open).
@@ -160,8 +177,11 @@ device either; you re-enter them once per machine.
 - **Stocks** — an optional market ticker on Today, in the spirit of the iOS Stocks widget: one row per symbol with the ticker, its name, an **intraday sparkline drawn against the previous close**, the current price in its own currency, and the day's move as a signed percentage (green up, red down). A **Closed** marker appears when that market isn't trading, which for a watchlist spanning several exchanges is most of the time. A new install is seeded with Apple and Alphabet; search for a company or ticker in Settings to add more, reorder with the arrows, and the card follows that order — equities, ETFs and indices all work, on any exchange the provider covers (an index level renders as a plain number, not an amount of money). Like the forecast, nothing is written to the database: quotes are fetched live and cached in `localStorage` for five minutes while a market is open and half an hour once it has closed, since a closed market's number cannot change. With an empty watchlist the card doesn't exist, and the card only renders on today.
 
   A caveat worth stating plainly: quotes come from **Yahoo Finance's chart endpoint, which needs no account and no API key** — but unlike Open-Meteo it is *undocumented*, with no published terms and no stability guarantee, so it may change or stop working without notice. It also sends no CORS headers, so the web build reaches it through a narrow authenticated proxy on the Worker while the desktop app calls it directly. It was chosen because no keyless, documented equity API currently exists: Stooq (the closest match to how Open-Meteo was picked) is now behind a bot check, and Alpha Vantage, Finnhub, Twelve Data, marketstack and FMP all require registration. All of it is isolated in `lib/stocks.ts`, so replacing the provider is one file; and the card fails soft — an unreachable service shows "Couldn't reach the markets" inside that tile and nothing else on the page notices.
+- **News (RSS)** — an optional headline card on Today, fed by **RSS or Atom feeds you subscribe to** in Settings → Widgets. Paste a feed address and it is fetched and checked on the spot: the channel's real title becomes the label in your list and the byline on each headline, and a URL that turns out to be a site's home page rather than its feed is refused there and then instead of quietly showing nothing later. Several feeds merge into **one list, newest first**, deduplicated so a story syndicated to two feeds you follow appears once; you choose how many headlines the card shows. Clicking one **opens the article in your browser**, never inside the app — a news site is arbitrary third-party HTML and has no business rendering inside a webview holding your session. Nothing is written to the database: articles are fetched live and cached in `localStorage` for half an hour, the same rule the forecast and the ticker follow, and a publisher that goes down keeps showing its last-seen headlines rather than blanking the card. Your **subscription list follows your account**, so it is waiting for you on a new device. With no feeds subscribed the card doesn't exist, and it only renders on today.
+
+  Feeds are fetched through a **narrow authenticated relay on the Worker**, on desktop as well as web — the one external service where the desktop app doesn't get a direct path. Feeds overwhelmingly send no CORS headers, which rules out the browser; and while the desktop HTTP plugin has no CORS problem, every host it may reach has to be listed in the Tauri capability scope, which an arbitrary subscription list can never be. Widening that scope to "any https host" would hand any script running in the webview a general-purpose HTTP client outside the browser's origin rules, so relaying is the cheaper risk. The relay is the only route in the app that accepts a URL, and it is fenced accordingly: session required, per-user rate limit, https only, no credentials in the URL, private and loopback addresses refused, redirects followed by hand and re-checked at each hop, a 2 MB cap, and upstream headers dropped. See `worker/src/routes/feed.ts`.
 - **Assistant** — an AI chat that answers questions about your data and can create, update, or delete items, by typing **or by voice** (see below). It's reachable two ways: its own page, or a **floating chat window** available from every other page (see below).
-- **Settings** — a sidebar splits configuration into **General** (language, weather location + temperature unit, stock watchlist), **Assistant** (OpenAI key + model, plus how long the Today briefing is held before it's rewritten), **Voice** (voice engine, spoken-reply voice, speaking rate, speech-to-text model), **Calendars** (connect iCloud, pick visible calendars, set the default), and **Data** (back up, restore, and reset, see below).
+- **Settings** — a sidebar splits configuration into **General** (language, appearance), **Account**, **Widgets** (weather location + temperature unit, stock watchlist, RSS feeds + article count — the settings that follow your account), **Assistant** (OpenAI key + model, plus how long the Today briefing is held before it's rewritten), **Voice** (voice engine, spoken-reply voice, speaking rate, speech-to-text model), **Calendars** (connect iCloud, pick visible calendars, set the default), and **Data** (back up, restore, and reset, see below).
 - **Backup & restore** — **Settings → Data** exports *everything the app holds for you* — every event, reminder, to-do, note, person, list, tag and link, including the images embedded in your notes — to a single JSON file, and imports one back. Import **replaces all current data** (there's a confirmation), then reloads. The **OpenAI key and iCloud account are deliberately excluded** — those device-bound secrets never travel in the backup file; non-secret preferences (UI language, model names, calendar visibility/default) are included. See `src/lib/backup.ts`.
 - **Reset** — **Settings → Data** also has a **Reset all data** button that permanently deletes every event, reminder, to-do, note, person, list, tag and link (behind a confirmation), then reloads to a clean, empty app. It clears the same tables as a demo reset via `clearAllData` (`src/lib/demo.ts`); the OpenAI key and iCloud account are left untouched since they live in `localStorage`, not the database.
 - **Light & dark** — the whole app has a dark theme, chosen in **Settings → General → Appearance**: *Light*, *Dark*, or *Use system appearance*, which follows the OS and keeps following it while the app is open (macOS flips on a schedule). It applies instantly, with no restart, and is stored per account alongside the language. Two things move together: the `dark` class Tailwind keys off, and the CSS `color-scheme` that decides how the *browser* draws native controls — without the second, the event form's date and time pickers stay light on a dark dialog.
@@ -340,7 +360,8 @@ added by the cloud migration.
 
 ```
 worker/                 # Cloudflare Worker — the API (see worker/README.md)
-  migrations/           #   D1 schema; 0001 squashes local 001–007 + tenancy
+  migrations/           #   D1 schema; 0001 squashes local 001–007 + tenancy,
+                        #   0006 adds the cloud-synced Widgets settings
   src/                  #   Hono app, error boundary, CORS, routes
 packages/shared/        # types + zod schemas + normalization, imported by BOTH
                         #   the client and the Worker, as TypeScript source, so
@@ -363,7 +384,9 @@ src/
 worker/src/
   authorize.ts          # the single tenancy choke point (membership + role)
   db/                    # all SQL, every query scoped by space_id
-  routes/spaces.ts       # /v1/spaces/:spaceId/(lists|todos)
+  routes/spaces.ts       # /v1/spaces/:spaceId/(lists|todos|...|settings)
+  routes/feed.ts         # the RSS relay — the ONE route that takes a URL
+  db/settings.ts         # the cloud-synced Widgets settings (key/value per space)
   types.ts              # domain types mirroring the schema
   locales/
     en/app.json         # translation catalogs (English is the source of truth)
@@ -384,13 +407,18 @@ worker/src/
     notifications.ts    # due-item notification poller
     format.ts           # date helpers
     images.ts           # decode/downscale/re-encode (person photos, note images)
-    settings.ts         # app settings (OpenAI key/model, voice, calendar accounts,
-                        #   weather location + unit, stock watchlist)
+    settings.ts         # app settings: per-device in localStorage (OpenAI key/model,
+                        #   voice, calendar accounts, theme, layout) PLUS the cloud
+                        #   sync for the Widgets ones (weather location + unit,
+                        #   watchlist, RSS feeds + count). The allowlist that keeps
+                        #   secrets off the server lives in packages/shared.
     ai.ts               # AI assistant: read + write tools + agentic loop
     weather.ts          # Open-Meteo forecast, hourly, air quality + place search
                         #   (keyless, never stored)
     stocks.ts           # stock quotes + intraday series + symbol search
                         #   (keyless but undocumented, never stored)
+    rss.ts              # RSS/Atom fetch (via the Worker relay) + parse + merge
+                        #   (never stored; cached in localStorage for 30 min)
     voice.ts            # mic recording, Whisper transcription, TTS engines + fallback
     openaiTts.ts        # OpenAI neural voices (natural spoken replies)
     demo.ts             # reset + seed demo data

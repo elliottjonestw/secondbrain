@@ -18,8 +18,10 @@ import { getOccurrences } from "../../lib/calendars";
 import { startOfDay, endOfDay } from "../../lib/format";
 import { getDayWeather, type DayWeather } from "../../lib/weather";
 import { getQuotes, type Quote } from "../../lib/stocks";
+import { getFeed, mergeFeeds, type FeedItem } from "../../lib/rss";
 import {
-  getSettings, type WeatherLocation, type TemperatureUnit, type StockSymbol,
+  getSettings, clampRssItemCount,
+  type WeatherLocation, type TemperatureUnit, type StockSymbol, type RssFeed,
 } from "../../lib/settings";
 
 let cacheRevision = -1;
@@ -138,4 +140,33 @@ export function watchlist(): StockSymbol[] {
 export function loadQuotes(symbols: StockSymbol[], revision: number): Promise<(Quote | null)[]> {
   const key = `stocks|${symbols.map((s) => s.symbol).join(",")}`;
   return cached(revision, key, () => getQuotes(symbols));
+}
+
+/** The subscribed feeds, or empty when the card is off. Cloud-synced, but read
+ *  synchronously from the local copy like every other setting. */
+export function rssFeeds(): RssFeed[] {
+  return getSettings().rssFeeds;
+}
+
+export function rssItemCount(): number {
+  return clampRssItemCount(getSettings().rssItemCount);
+}
+
+/**
+ * Articles from every subscribed feed, merged newest-first.
+ *
+ * No day in the key, for the same reason quotes have none: a feed describes now
+ * — which is also why the card hides itself on any day but today. The URLs are
+ * in the key so subscribing to something in Settings and coming back is a miss
+ * rather than a list missing the feed just added.
+ *
+ * Each feed settles on its own inside `getFeed`, which never throws: one dead
+ * publisher costs its own rows, not the card.
+ */
+export function loadFeedItems(feeds: RssFeed[], revision: number): Promise<FeedItem[]> {
+  const key = `rss|${feeds.map((f) => f.url).join(",")}`;
+  return cached(revision, key, async () => {
+    const loaded = await Promise.all(feeds.map((f) => getFeed(f.url)));
+    return mergeFeeds(loaded, rssItemCount());
+  });
 }

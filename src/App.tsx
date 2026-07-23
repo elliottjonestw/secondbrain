@@ -14,7 +14,7 @@ import { useAssistantChat, type UiMessage } from "./components/assistant/useAssi
 import SettingsView from "./views/SettingsView";
 import type { NavTarget } from "./types";
 import { startReminderPoller } from "./lib/notifications";
-import { isAssistantConfigured } from "./lib/settings";
+import { isAssistantConfigured, syncSettingsFromCloud } from "./lib/settings";
 import { logout } from "./lib/auth";
 import { applyTheme, watchSystemTheme } from "./lib/theme";
 import { getCachedSession } from "./lib/authStore";
@@ -119,6 +119,13 @@ export default function App() {
   // time it mounts. All that's left is to start the reminder poller.
   useEffect(() => {
     startReminderPoller();
+    // The Widgets settings follow the account, so this pulls them into the
+    // local bucket once per sign-in (AuthGate remounts this per user). NOT
+    // awaited before `setReady`: it never throws, and blocking the whole app on
+    // a settings round-trip would trade a working offline launch for a weather
+    // location arriving a second earlier. A widget reading the old value for
+    // that second re-renders when the day's revision next bumps.
+    void syncSettingsFromCloud();
     setReady(true);
   }, []);
 

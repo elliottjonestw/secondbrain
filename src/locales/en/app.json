@@ -155,9 +155,10 @@
       "voice": "Voice",
       "calendars": "Calendars",
       "data": "Data",
-      "account": "Account"
+      "account": "Account",
+      "widgets": "Widgets"
     },
-    "storedLocally": "Configuration is stored locally on this device.",
+    "storedLocally": "Most settings are stored on this device. The Widgets ones follow your account.",
     "general": {
       "title": "General",
       "description": "Choose how the app is displayed. Your language preference is stored on this device.",
@@ -168,7 +169,11 @@
       "appearanceHint": "Light or dark. \"Use system appearance\" follows your OS and changes with it, including on a schedule.",
       "themeSystem": "Use system appearance ({{theme}})",
       "themeLight": "Light",
-      "themeDark": "Dark",
+      "themeDark": "Dark"
+    },
+    "widgets": {
+      "title": "Widgets",
+      "description": "What the cards on your Today page show. These settings follow your account, so they are waiting for you on any device you sign in on.",
       "weatherLocation": "Weather location",
       "weatherHint": "Shows the forecast on your Today page. Weather data by Open-Meteo.com — no account needed, and the location is only sent when a forecast is fetched. Leave empty to turn the weather off.",
       "weatherPlaceholder": "Search for a town or city…",
@@ -188,7 +193,18 @@
       "removeSymbol": "Remove from watchlist",
       "watchlistFull": "A watchlist holds up to {{count}} symbols.",
       "moveUp": "Move up",
-      "moveDown": "Move down"
+      "moveDown": "Move down",
+      "feeds": "News feeds",
+      "feedsHint": "RSS or Atom feeds shown on your Today page. Paste a feed address — usually the site’s /feed or /rss page, not its home page. Articles open in your browser.",
+      "feedPlaceholder": "https://example.com/feed",
+      "addFeed": "Add",
+      "removeFeed": "Remove feed",
+      "feedsFull": "You can follow up to {{count}} feeds.",
+      "feedInvalid": "That doesn’t look like a feed address. It must start with https://.",
+      "feedDuplicate": "You already follow that feed.",
+      "feedUnreachable": "Couldn’t read a feed at that address. Check it points at the feed itself rather than the site’s home page.",
+      "rssItemCount": "Articles to show",
+      "rssItemCountHint": "How many headlines the card lists, across all your feeds, newest first."
     },
     "voice": {
       "description": "Talk to the assistant and it replies aloud; type and it replies in text. Voice uses the same tools as the chat, so it can answer questions and make changes.",
@@ -417,7 +433,10 @@
     "stocksCard": "Stocks",
     "stocks": "Markets",
     "stocksUnavailable": "Couldn't reach the markets.",
-    "marketClosed": "Closed"
+    "marketClosed": "Closed",
+    "rssCard": "News",
+    "rss": "From your feeds",
+    "rssUnavailable": "Couldn’t reach your feeds."
   },
   "weather": {
     "conditions": {

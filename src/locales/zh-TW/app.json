@@ -154,9 +154,10 @@
       "voice": "語音",
       "calendars": "行事曆",
       "data": "資料",
-      "account": "帳號"
+      "account": "帳號",
+      "widgets": "小工具"
     },
-    "storedLocally": "設定僅儲存在此裝置上。",
+    "storedLocally": "多數設定儲存在此裝置上，「小工具」的設定則會跟著你的帳號。",
     "general": {
       "title": "一般",
       "description": "選擇應用程式的顯示方式。語言偏好設定會儲存在此裝置上。",
@@ -167,7 +168,11 @@
       "appearanceHint": "淺色或深色。「使用系統外觀」會跟隨作業系統設定變更，包含排程切換。",
       "themeSystem": "使用系統外觀（{{theme}}）",
       "themeLight": "淺色",
-      "themeDark": "深色",
+      "themeDark": "深色"
+    },
+    "widgets": {
+      "title": "小工具",
+      "description": "設定「今天」頁面各張卡片要顯示的內容。這些設定會跟著你的帳號，在任何登入的裝置上都能直接使用。",
       "weatherLocation": "天氣地點",
       "weatherHint": "在「今天」頁面顯示天氣預報。天氣資料由 Open-Meteo.com 提供，不需要帳號，地點只會在取得預報時送出。留空即可關閉天氣功能。",
       "weatherPlaceholder": "搜尋城市或鄉鎮…",
@@ -187,7 +192,18 @@
       "removeSymbol": "從追蹤清單移除",
       "watchlistFull": "追蹤清單最多可加入 {{count}} 檔。",
       "moveUp": "上移",
-      "moveDown": "下移"
+      "moveDown": "下移",
+      "feeds": "新聞來源",
+      "feedsHint": "顯示在「今天」頁面的 RSS 或 Atom 來源。請貼上訂閱網址，通常是網站的 /feed 或 /rss 頁面，而非首頁。文章會在瀏覽器中開啟。",
+      "feedPlaceholder": "https://example.com/feed",
+      "addFeed": "新增",
+      "removeFeed": "移除來源",
+      "feedsFull": "最多可訂閱 {{count}} 個來源。",
+      "feedInvalid": "這看起來不像訂閱網址，必須以 https:// 開頭。",
+      "feedDuplicate": "你已經訂閱這個來源了。",
+      "feedUnreachable": "無法讀取這個網址的內容。請確認它指向訂閱來源本身，而不是網站首頁。",
+      "rssItemCount": "顯示文章數",
+      "rssItemCountHint": "卡片會依時間由新到舊，列出所有來源合計的標題數量。"
     },
     "voice": {
       "description": "用說的跟助理對話，它會朗讀回覆；用打字的則以文字回覆。語音與聊天使用相同的工具，因此同樣可以查詢與修改資料。",
@@ -415,7 +431,10 @@
     "stocksUnavailable": "無法取得股市資料。",
     "marketClosed": "休市",
     "birthdays": "即將到來的生日",
-    "noBirthdays": "未來 30 天內沒有生日。"
+    "noBirthdays": "未來 30 天內沒有生日。",
+    "rssCard": "新聞",
+    "rss": "你的訂閱",
+    "rssUnavailable": "目前無法取得訂閱內容。"
   },
   "weather": {
     "conditions": {

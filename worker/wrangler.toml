@@ -87,6 +87,15 @@ name = "QUOTE_LIMIT"
 namespace_id = "1002"
 simple = { limit = 60, period = 60 }
 
+# The RSS relay. Higher than the others because a Today page load costs one
+# request per subscribed feed (the client caches for 30 minutes on top), and
+# because this one moves whole documents rather than a JSON quote — the cap is
+# what stops a stolen session using it as a general-purpose fetcher.
+[[ratelimits]]
+name = "FEED_LIMIT"
+namespace_id = "1004"
+simple = { limit = 60, period = 60 }
+
 # Outbound mail. Low on purpose — this one is spent by strangers (anyone can
 # ask for a reset link for any address), it costs real money at the provider,
 # and it lands in somebody else's inbox.
@@ -133,6 +142,11 @@ simple = { limit = 120, period = 60 }
 [[env.staging.ratelimits]]
 name = "QUOTE_LIMIT"
 namespace_id = "1002"
+simple = { limit = 60, period = 60 }
+
+[[env.staging.ratelimits]]
+name = "FEED_LIMIT"
+namespace_id = "1004"
 simple = { limit = 60, period = 60 }
 
 [[env.staging.ratelimits]]
@@ -188,6 +202,11 @@ simple = { limit = 120, period = 60 }
 [[env.production.ratelimits]]
 name = "QUOTE_LIMIT"
 namespace_id = "1002"
+simple = { limit = 60, period = 60 }
+
+[[env.production.ratelimits]]
+name = "FEED_LIMIT"
+namespace_id = "1004"
 simple = { limit = 60, period = 60 }
 
 [[env.production.ratelimits]]

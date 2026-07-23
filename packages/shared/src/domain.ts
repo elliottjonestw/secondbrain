@@ -443,3 +443,46 @@ export const linkCreateSchema = z.object({
 });
 
 export type LinkCreate = z.infer<typeof linkCreateSchema>;
+
+// ---------------------------------------------------------------------------
+// Cloud-synced settings (Settings → Widgets)
+//
+// Most settings stay in localStorage, per device and per account. These few
+// follow the account instead, because they are answers the user shouldn't have
+// to give again on a new machine: where they are, what they hold, what they
+// read.
+//
+// CLOUD_SETTING_KEYS IS A SECURITY BOUNDARY, not a convenience list. Both sides
+// import it — the client will only upload a key on it, and the route rejects
+// any key off it — so the OpenAI API key, the iCloud app-specific password and
+// anything else secret CANNOT reach the server through this endpoint even from
+// a client that tries. Before adding a key, ask whether the value is a secret;
+// if it is, the answer is no. See worker/migrations/0006_space_settings.sql.
+// ---------------------------------------------------------------------------
+
+export const CLOUD_SETTING_KEYS = [
+  "weatherLocation",
+  "temperatureUnit",
+  "watchlist",
+  "rssFeeds",
+  "rssItemCount",
+] as const;
+
+export type CloudSettingKey = (typeof CLOUD_SETTING_KEYS)[number];
+
+const cloudSettingKeySchema = z.enum(CLOUD_SETTING_KEYS);
+
+/**
+ * A partial write: only the keys present are touched, and a key set to null is
+ * deleted. Values are opaque JSON — their shapes belong to the client, and the
+ * Worker only stores and returns them.
+ *
+ * `z.unknown()` is deliberate. Validating `watchlist` here would mean the
+ * server has to be redeployed before a client can add a field to a widget's
+ * settings, for no gain: nothing server-side reads these, and a value that
+ * fails the client's own shape check is dropped on read the same way a stale
+ * localStorage blob is.
+ */
+export const cloudSettingsPatchSchema = z.record(cloudSettingKeySchema, z.unknown());
+
+export type CloudSettingsPatch = z.infer<typeof cloudSettingsPatchSchema>;

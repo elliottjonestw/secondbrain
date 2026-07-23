@@ -38,7 +38,7 @@ export interface Bindings {
   EMAIL_FROM: string;
 
   /**
-   * Per-user caps on the two proxy routes. Cloudflare's rate-limiting binding
+   * Per-user caps on the proxy routes. Cloudflare's rate-limiting binding
    * rather than a D1 counter: this runs in-colo in about a millisecond, where
    * a D1 row would add a ~105 ms round-trip to the primary to EVERY relayed
    * CalDAV call — on a calendar refresh that is dozens of them — and burn
@@ -52,6 +52,8 @@ export interface Bindings {
    */
   DAV_LIMIT: RateLimiter;
   QUOTE_LIMIT: RateLimiter;
+  /** The RSS relay — the one route that takes a URL. See routes/feed.ts. */
+  FEED_LIMIT: RateLimiter;
   /** Outbound mail, keyed by address AND by IP — see routes/auth.ts. */
   EMAIL_LIMIT: RateLimiter;
 
