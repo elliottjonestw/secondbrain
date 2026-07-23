@@ -60,9 +60,8 @@ open "src-tauri/target/release/bundle/macos/Sekunda.app"
 > devices; it now lives in a Cloudflare D1 database behind a Workers API, with
 > user accounts and a local read cache. See
 > [`docs/cloud-migration-plan.md`](docs/cloud-migration-plan.md) for the design
-> and [`worker/README.md`](worker/README.md) for the backend. **What's left is
-> M5 (password reset, email verification, account deletion)** — see the end of
-> this note.
+> and [`worker/README.md`](worker/README.md) for the backend. **The migration is
+> complete through M5 (hardening)** — see the end of this note.
 >
 > **Every domain now lives in the cloud.** M0 built the infrastructure and the
 > multi-tenant schema; M1 added accounts; M2–M4 moved all the data —
@@ -94,9 +93,18 @@ open "src-tauri/target/release/bundle/macos/Sekunda.app"
 > D1 database, KV namespace and secrets, so nothing crosses between them.
 > Packaged builds read `VITE_API_URL` from `.env.production` and target
 > production; the dev app runs client and Worker together locally
-> (`npm run tauri dev`). **What's left is M5: password reset, email
-> verification and account deletion — nobody else should register until those
-> exist**, because a forgotten password currently means a lost account.
+> (`npm run tauri dev`).
+>
+> **M5 (hardening) is in.** Password reset and email confirmation over
+> [Resend](https://resend.com) (free tier, no card); account deletion that
+> removes the user, their space, every row in it and the note-image bytes in
+> KV, gated on re-entering the password; per-user rate limits on the two proxy
+> routes so a stolen session can't be used as a relay; a Content-Security-Policy
+> on the web build and hardening headers on every API response; and the Tauri
+> HTTP scope narrowed off `http://*`. **Reset requires `RESEND_API_KEY` to be
+> set on the Worker** — until it is, the reset and confirmation endpoints
+> refuse identically for every address (deliberately: a response that varied
+> would be the account-existence oracle the whole flow avoids).
 >
 > **The app is no longer standalone.** It now depends on the deployed Worker
 > being reachable — no Worker, no login. That is the trade the cloud migration
@@ -109,8 +117,20 @@ open "src-tauri/target/release/bundle/macos/Sekunda.app"
 > password — and it fits Cloudflare's free plan, whose 10 ms CPU cap per request
 > cannot accommodate a correctly tuned password hash.
 >
-> **There is no password reset yet** (planned for M5). Until then a forgotten
-> password means an unrecoverable account — the sign-up screen says so.
+> **A password reset never breaks that property.** The reset link doesn't
+> authorise "change this password" — it authorises replacing the account's KDF
+> salt, parameters and verifier with values the *client* computed from the new
+> password. Reset tokens are random, stored hashed, single-use, expire in 30
+> minutes, and using one signs every device out. What a reset does *not* do is
+> kill an access token already in flight: those are stateless 15-minute JWTs
+> verified without a database read, so there is a bounded window where a stolen
+> one still works. That is a known trade, not an oversight.
+>
+> **Deleting an account is permanent and needs the password again**, not just a
+> valid session — an access token can be fifteen minutes old on an unattended
+> machine. It removes the user, the space, every domain row and the note-image
+> bytes in KV. It is deliberately separate from Settings → Data → "clear all
+> data", which empties a space you keep.
 
 In **Cloudflare D1**, scoped to your account's space, reached only through the
 Worker — nothing is kept on the device but a read cache. Migrations live in
@@ -425,4 +445,7 @@ See [CLAUDE.md](CLAUDE.md) for architecture principles, conventions, and the got
 - **A custom (non-preset) RRULE is described in English** even in Chinese. `rrule`'s `toText()` substitutes token by token, and Chinese word order differs enough ("every week on Monday" vs 每週一) that the output would read worse than English. The repeat presets themselves are translated, which covers the common cases.
 - **Profile photos accept PNG/JPEG/WebP/GIF, not HEIC** — the webview can't decode HEIC, so a photo dragged straight out of Apple Photos is rejected with an error rather than silently failing; export it as JPEG first. Photos are stored inline on the person row, so they're included in a Settings → Data backup (and inflate the JSON by ~30 KB each) rather than living as separate files.
 - The demo dataset and the assistant's own prose are **English-only**; the assistant replies in whatever language you write to it in.
-- The OpenAI API key **and the iCloud app-specific password** are stored in plaintext in `localStorage` (typical for a local single-user app); anyone with access to the machine profile can read them. Moving credentials to the OS keychain is future work.
+- The OpenAI API key **and the iCloud app-specific password** are stored in plaintext in `localStorage`, keyed per signed-in account. On the desktop that's typical for a local app — anyone with the machine profile can read them, and moving them to the OS keychain is future work. **On the web build it is more serious**: `github.io` is a public origin, so any script execution there reads the OpenAI key, the iCloud password *and* the refresh token. The built page ships a `Content-Security-Policy` meta tag (`default-src 'self'`, no inline or remote script, `connect-src` limited to the API and the handful of CORS-sending services) precisely to narrow that, but GitHub Pages cannot send real headers, so `frame-ancestors` is unavailable and the CSP is the only layer. The durable fix is for the web build not to hold those secrets at all.
+- **The Worker relays iCloud credentials for the web build.** `POST /v1/dav` forwards the app-specific password and calendar contents in plaintext because iCloud sends no CORS headers; TLS terminates at the Worker, so both are visible to it in memory. Nothing is stored or logged, a session is required, only iCloud hosts are reachable, redirects are never followed, and it is rate-limited per user — but it is an accepted exposure, not an eliminated one. The desktop app doesn't use it.
+- **Password reset needs email configured on the server.** Without `RESEND_API_KEY`, requesting a reset link returns the same "if that address has an account…" response it always does and no mail is sent; the operator sees it in `wrangler tail`, the user sees nothing. Email confirmation is *not* a precondition for signing in — enforcing it would have locked out every account created before it existed.
+- **Rate limits on the proxy routes are counted per Cloudflare colo**, not globally, because they use Cloudflare's in-colo rate-limiting binding rather than a database row (a D1 counter would add ~105 ms to every relayed CalDAV call). A caller spread across datacentres therefore gets the budget several times over. That's sound for what these limits defend against — one stolen session relaying from one place — and genuinely distributed abuse hits the Worker's own 100k requests/day first.

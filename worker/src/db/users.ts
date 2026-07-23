@@ -17,6 +17,9 @@ export interface UserRow {
   verifier_hash: string;
   created_at: string;
   updated_at: string;
+  /** ISO once the address has been confirmed by a mailed link; null otherwise,
+   *  which includes every account created before verification existed. */
+  email_verified_at: string | null;
 }
 
 export async function findUserByEmail(

@@ -3,14 +3,14 @@ import { Brain, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Session } from "@secondbrain/shared";
 import { Button } from "../components/ui";
-import { login, register } from "../lib/auth";
+import { login, register, requestPasswordReset } from "../lib/auth";
 import { ApiError, OfflineError } from "../lib/api";
 
 /** Mirrors the server's floor. Enforced here only — the server never receives
  *  a password to measure, by design. */
 const MIN_PASSWORD = 12;
 
-type Mode = "login" | "register";
+type Mode = "login" | "register" | "forgot";
 
 export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => void }) {
   const { t } = useTranslation();
@@ -20,20 +20,41 @@ export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => v
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set once a reset link has been requested. The message is deliberately the
+  // same whether or not that address has an account — the server answers
+  // identically so this form can't be used to test an email list, and showing
+  // anything more specific here would hand back the answer it withheld.
+  const [resetSent, setResetSent] = useState(false);
 
   const isRegister = mode === "register";
+  const isForgot = mode === "forgot";
 
   function switchMode(next: Mode) {
     setMode(next);
     setError(null);
     setPassword("");
     setConfirm("");
+    setResetSent(false);
   }
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (busy) return;
     setError(null);
+
+    if (isForgot) {
+      setBusy(true);
+      try {
+        await requestPasswordReset(email);
+        setResetSent(true);
+      } catch (err) {
+        if (err instanceof OfflineError) setError(t("auth.offline"));
+        else if (err instanceof ApiError) setError(err.message);
+        else setError(t("auth.genericError"));
+      }
+      setBusy(false);
+      return;
+    }
 
     if (isRegister) {
       if (password.length < MIN_PASSWORD) {
@@ -71,7 +92,11 @@ export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => v
           <Brain size={36} className="text-blue-600" />
           <h1 className="text-xl font-bold">{t("app.name")}</h1>
           <p className="text-sm text-neutral-500">
-            {isRegister ? t("auth.registerSubtitle") : t("auth.loginSubtitle")}
+            {isForgot
+              ? t("auth.forgotSubtitle")
+              : isRegister
+                ? t("auth.registerSubtitle")
+                : t("auth.loginSubtitle")}
           </p>
         </div>
 
@@ -90,6 +115,7 @@ export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => v
             />
           </label>
 
+          {!isForgot && (
           <label className="block">
             <span className="mb-1 block text-xs font-medium text-neutral-500">{t("auth.password")}</span>
             <input
@@ -105,6 +131,20 @@ export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => v
               className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-blue-400 disabled:opacity-50 dark:border-neutral-600 dark:bg-neutral-800"
             />
           </label>
+          )}
+
+          {mode === "login" && (
+            <p className="text-right text-xs">
+              <button
+                type="button"
+                onClick={() => switchMode("forgot")}
+                disabled={busy}
+                className="text-blue-600 hover:underline disabled:opacity-50"
+              >
+                {t("auth.forgotPassword")}
+              </button>
+            </p>
+          )}
 
           {isRegister && (
             <>
@@ -120,10 +160,17 @@ export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => v
                   className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-blue-400 disabled:opacity-50 dark:border-neutral-600 dark:bg-neutral-800"
                 />
               </label>
-              {/* There is no password reset yet (M5). Saying so before someone
-                  commits a password they can't recover is the honest order. */}
-              <p className="text-xs text-amber-700 dark:text-amber-500">{t("auth.noRecoveryWarning")}</p>
+              {/* Recovery now exists, and it runs entirely through this
+                  address — so it is worth saying before someone signs up with
+                  a mailbox they can't reach. */}
+              <p className="text-xs text-neutral-500">{t("auth.verifyOnRegisterNote")}</p>
             </>
+          )}
+
+          {resetSent && (
+            <p className="rounded-lg bg-neutral-100 px-3 py-2 text-sm leading-relaxed text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+              {t("auth.resetSent")}
+            </p>
           )}
 
           {error && (
@@ -137,24 +184,39 @@ export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => v
               {busy && <Loader2 size={15} className="animate-spin" />}
               {busy
                 ? t("auth.working")
-                : isRegister
-                  ? t("auth.createAccount")
-                  : t("auth.signIn")}
+                : isForgot
+                  ? t("auth.sendResetLink")
+                  : isRegister
+                    ? t("auth.createAccount")
+                    : t("auth.signIn")}
             </span>
           </Button>
         </form>
 
-        <p className="mt-5 text-center text-sm text-neutral-500">
-          {isRegister ? t("auth.haveAccount") : t("auth.noAccount")}{" "}
-          <button
-            type="button"
-            onClick={() => switchMode(isRegister ? "login" : "register")}
-            disabled={busy}
-            className="font-medium text-blue-600 hover:underline disabled:opacity-50"
-          >
-            {isRegister ? t("auth.signIn") : t("auth.createAccount")}
-          </button>
-        </p>
+        {isForgot ? (
+          <p className="mt-5 text-center text-sm">
+            <button
+              type="button"
+              onClick={() => switchMode("login")}
+              disabled={busy}
+              className="font-medium text-blue-600 hover:underline disabled:opacity-50"
+            >
+              {t("auth.backToSignIn")}
+            </button>
+          </p>
+        ) : (
+          <p className="mt-5 text-center text-sm text-neutral-500">
+            {isRegister ? t("auth.haveAccount") : t("auth.noAccount")}{" "}
+            <button
+              type="button"
+              onClick={() => switchMode(isRegister ? "login" : "register")}
+              disabled={busy}
+              className="font-medium text-blue-600 hover:underline disabled:opacity-50"
+            >
+              {isRegister ? t("auth.signIn") : t("auth.createAccount")}
+            </button>
+          </p>
+        )}
       </div>
     </div>
   );

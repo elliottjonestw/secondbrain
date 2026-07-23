@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AppEnv } from "../env";
 import { badRequest } from "../http";
 import { requireAuth } from "../middleware/auth";
+import { enforceRateLimit } from "../rateLimit";
 
 /**
  * A CalDAV relay for the WEB build only, because iCloud sends no CORS headers
@@ -35,11 +36,18 @@ import { requireAuth } from "../middleware/auth";
  *     reqwest drops it across hosts. Following redirects in the Worker would
  *     silently forward the credential to whatever Location iCloud returned.
  *
+ *   - **It is rate-limited per user** (`DAV_LIMIT`), so a stolen session cannot
+ *     be pointed at iCloud as a general-purpose relay, or used to grind
+ *     someone's Apple account into a lockout. The budget is set well above what
+ *     a full calendar refresh across a realistic number of calendars costs; if
+ *     a legitimate sync ever trips it, raise the binding rather than removing
+ *     the check.
+ *
  * Known hardening still owed (the user has accepted this for now):
- *   - No rate limit, so a compromised session can use this as a relay to iCloud.
  *   - The credential still lives in the browser's localStorage on the published
  *     origin, where any XSS on that domain reads it. The proxy does not change
- *     that, and it is the more serious of the two exposures.
+ *     that, and it is the more serious of the two exposures — the web build's
+ *     CSP (index.html) is what narrows it.
  */
 export const dav = new Hono<AppEnv>();
 
@@ -76,6 +84,15 @@ const davSchema = z.object({
 });
 
 dav.post("/dav", async (c) => {
+  // Before anything is parsed or forwarded: the cheapest possible refusal, and
+  // it must sit ahead of the upstream fetch so a refused request never puts the
+  // credential on the wire.
+  await enforceRateLimit(
+    c.env.DAV_LIMIT,
+    `dav:${c.get("userId")}`,
+    "Too many calendar requests. Wait a moment and try again.",
+  );
+
   const parsed = davSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) throw badRequest("Expected { url, method, headers?, body? }.");
   const { url, method, headers = {}, body } = parsed.data;

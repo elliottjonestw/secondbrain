@@ -383,13 +383,46 @@ Constant-time comparison, identical error text and timing for "no such user" and
 "wrong password", and Cloudflare Rate Limiting on `/auth/*` keyed by IP and by
 email.
 
-### 5.6 Deferred deliberately
+### 5.6 Recovery (shipped in M5)
 
-Email verification and password reset need an email sender (MailChannels is no
-longer free for Workers; Resend's free tier is the pragmatic choice). Both are
-**out of scope for the vertical slice** and land in M5. Until then a forgotten
-password means a lost account — acceptable while you're the only user, not
-acceptable before anyone else registers.
+> Originally deferred as out of scope for the vertical slice. Delivered in M5,
+> on Resend (MailChannels is no longer free for Workers; Resend's free tier is
+> ~100/day and needs no card, which keeps §11's card-free guarantee).
+
+The shape that matters: **a reset token does not authorise a password change.**
+It authorises replacing the account's `kdf_salt`, `kdf_params` and
+`verifier_hash` with values the *client* derived from the new password. The
+server therefore still never sees a plaintext password — at the one moment the
+design would be easiest to abandon.
+
+- Tokens are 32 random bytes, stored as `sha256(token)` (a D1 dump must not
+  contain working reset links), single-use via a conditional `UPDATE … WHERE
+  used_at IS NULL … RETURNING` so a race cannot redeem one twice, and expire in
+  30 minutes.
+- **Using one revokes every session.** A reset is what someone does when they
+  believe their password is known; leaving the attacker's refresh token alive
+  would make it cosmetic.
+- **The request endpoint is not an existence oracle**, mirroring `/auth/kdf`:
+  one response for known addresses, unknown addresses, a provider outage and an
+  unconfigured `RESEND_API_KEY` alike. The failure modes had to be flattened
+  too — a distinct "email isn't set up" for real accounts would leak just as
+  loudly as a 404.
+- Requests are limited per address *and* per IP: the address key stops one
+  mailbox being flooded, the IP key stops a client walking a list.
+- The token rides in the URL **fragment**, never the query string, so it is
+  never sent to a server and never appears in a `Referer`.
+
+**The one bound worth naming:** access tokens are stateless 15-minute JWTs
+verified without a database read (§5.4), so a reset does not invalidate one
+already in flight. An attacker holding one keeps access for its remaining life
+and cannot extend it. Closing that window means a session lookup per request or
+a revocation list in KV — not judged worth it, but a known bound rather than an
+oversight.
+
+Email confirmation ships alongside and is deliberately **not** a login
+precondition: it arrived after accounts existed, so enforcing it would have
+locked out every earlier user, and the property it buys (the address can
+receive mail) is only needed at reset time, which tests the mailbox directly.
 
 ### 5.7 Client-side gate
 
@@ -595,9 +628,38 @@ mechanical if M2's pattern is right.
 **M4 — Images out of D1.** KV namespace, upload/read endpoints, `NoteImage`
 blob resolution, delete-cascades-to-KV, E2E spec rewrite.
 
-**M5 — Hardening.** Email verification and password reset, logical
-export/backup endpoint replacing `lib/backup.ts`, account deletion, D1 read
-replication, error monitoring, load sanity-check.
+**M5 — Hardening.** *Delivered.* Email confirmation and password reset over
+Resend (§5.6); the logical export/backup endpoint replacing `lib/backup.ts`;
+account deletion, gated on re-deriving the key from a freshly typed password
+and removing the user, their sole-member spaces, every domain row and the KV
+image bytes; per-user rate limits on the two proxy routes (`/v1/dav`,
+`/v1/quotes/*`) via Cloudflare's in-colo limiter rather than a D1 counter; a
+build-time CSP on the web bundle plus `nosniff`/`X-Frame-Options`/
+`Referrer-Policy` on every API response; and the Tauri HTTP scope narrowed off
+`http://*`.
+
+Two items were closed with a decision rather than code, which is the honest
+outcome for both:
+
+- **D1 read replication: not enabled.** It doesn't address the measured cost —
+  the ~105 ms in §10 is a round-trip to a primary already in the caller's
+  region — and switching it on without adopting the Sessions API means a client
+  can read back a list missing the todo it just wrote. This app writes and
+  re-reads on every checkbox tick, so that is the main flow, not an edge case.
+  Revisit with users far from the primary, and adopt the Sessions API in the
+  same change.
+- **Error monitoring: Workers logs (`[observability]`), not a service.** Every
+  hosted alternative is another account and usually a card, and the failure it
+  catches — a 500 a user reports by its `X-Request-Id` — is found just as fast
+  with `wrangler tail`. What makes it sufficient is that the error handler logs
+  method and *routed path* alongside the id, so a line is actionable on its own;
+  it never logs a URL or a body.
+
+The load sanity-check is `worker/scripts/loadcheck.mjs`. It deliberately
+measures shape rather than throughput: each endpoint's latency should be
+proportional to the number of D1 queries it makes, and anything much worse is
+an N+1 or a missing index — the failure that quietly burns the rows-scanned
+quota.
 
 **Update `README.md` in the same session as each milestone** — this changes
 features, architecture, the data model, permissions and the AI toolset, which
@@ -637,7 +699,16 @@ is every category the golden rule names.
 - **No offline note search.** The response cache can't answer FTS queries; a
   crude scan over cached notes is the fallback if it's missed.
 - **No offline writes**, by design.
-- **No password reset until M5.** Don't let anyone else register before then.
+- **Password reset needs `RESEND_API_KEY` set on the environment.** Until it
+  is, the flow exists but silently sends nothing — visibly to the operator in
+  `wrangler tail`, invisibly to the user, because the response cannot vary
+  without becoming an existence oracle (§5.6).
+- **A reset doesn't invalidate an access token already in flight** — a bounded
+  15-minute window, explained in §5.6.
+- **Proxy rate limits are per-colo, not global**, being Cloudflare's in-colo
+  limiter. Sound against one stolen session relaying from one place; a
+  genuinely distributed caller gets the budget several times over, and hits the
+  Worker's own 100k/day first.
 - **No real-time sync.** Poll-on-focus only.
 - **Note images are capped at 1 GB in total, and 1,000 uploads per day**, being
   the Workers KV free-tier limits (§4.6). At the ~300 KB `encodeNoteImage`

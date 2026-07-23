@@ -11,7 +11,8 @@
     "migrate:production": "wrangler d1 migrations apply secondbrain-prod --env production --remote",
     "deploy:staging": "wrangler deploy --env staging",
     "deploy:production": "wrangler deploy --env production",
-    "cf-typegen": "wrangler types"
+    "cf-typegen": "wrangler types",
+    "loadcheck": "node scripts/loadcheck.mjs"
   },
   "dependencies": {
     "@secondbrain/shared": "*",

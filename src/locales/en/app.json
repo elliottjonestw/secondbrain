@@ -28,7 +28,8 @@
     "loadFailed": "Couldn't load this page",
     "loadFailedDetail": "Something went wrong while fetching your data.",
     "loadOffline": "You're offline, and this page hasn't been saved for offline use yet.",
-    "retry": "Try again"
+    "retry": "Try again",
+    "continue": "Continue"
   },
   "priority": {
     "0": "None",
@@ -151,7 +152,8 @@
       "assistant": "Assistant",
       "voice": "Voice",
       "calendars": "Calendars",
-      "data": "Data"
+      "data": "Data",
+      "account": "Account"
     },
     "storedLocally": "Configuration is stored locally on this device.",
     "general": {
@@ -286,6 +288,22 @@
       "resetButton": "Reset all data",
       "resetting": "Resetting…",
       "confirmReset": "This permanently deletes ALL data in the app — every event, reminder, to-do, note, person, list and tag. This cannot be undone. Continue?"
+    },
+    "account": {
+      "title": "Account",
+      "description": "Your sign-in address, and removing the account entirely.",
+      "emailHeading": "Email address",
+      "emailVerified": "Confirmed",
+      "emailUnverifiedHint": "This address isn't confirmed yet. Confirming it is what lets you reset a forgotten password, so it's worth doing now.",
+      "resendVerification": "Send confirmation email",
+      "sending": "Sending…",
+      "verificationSent": "Confirmation email sent. Check your inbox.",
+      "deleteHeading": "Delete account",
+      "deleteHint": "Removes the account, its space, and everything in it — calendar, reminders, to-dos, notes, people and images. This cannot be undone, and it is not the same as \"clear all data\", which keeps the account.",
+      "confirmWithPassword": "Enter your password to confirm",
+      "deleteButton": "Delete my account",
+      "deleting": "Deleting…",
+      "confirmDelete": "Delete this account permanently? Everything in it will be erased and cannot be recovered."
     }
   },
   "todos": {
@@ -588,11 +606,23 @@
     "confirmPassword": "Confirm password",
     "passwordTooShort": "Password must be at least {{min}} characters.",
     "passwordMismatch": "Those passwords don't match.",
-    "noRecoveryWarning": "There is no password reset yet — if you forget this password, the account can't be recovered.",
     "haveAccount": "Already have an account?",
     "noAccount": "Don't have an account?",
     "working": "Working…",
     "offline": "You're offline. Connect to the internet to sign in.",
-    "genericError": "Something went wrong. Please try again."
+    "genericError": "Something went wrong. Please try again.",
+    "forgotPassword": "Forgot password?",
+    "forgotSubtitle": "We'll email you a link to choose a new password.",
+    "sendResetLink": "Email a reset link",
+    "resetSent": "If that address has an account, a reset link is on its way. It expires in 30 minutes.",
+    "backToSignIn": "Back to sign in",
+    "resetSubtitle": "Choose a new password for your account.",
+    "newPassword": "New password",
+    "setPassword": "Save new password",
+    "resetDone": "Password changed.",
+    "resetSignedOutEverywhere": "Every device has been signed out. Sign in again with your new password.",
+    "verifying": "Confirming your email address…",
+    "verifyDone": "Email address confirmed.",
+    "verifyOnRegisterNote": "We'll email a link to confirm this address. It's how a forgotten password gets reset, so use one you can reach."
   }
 }

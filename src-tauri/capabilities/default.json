@@ -30,8 +30,7 @@
         { "url": "https://secondbrain-api-staging.elliottj.workers.dev/*" },
         { "url": "https://secondbrain-api.elliottj.workers.dev/*" },
         { "url": "http://localhost:*/*" },
-        { "url": "http://127.0.0.1:*/*" },
-        { "url": "http://*" }
+        { "url": "http://127.0.0.1:*/*" }
       ]
     }
   ]

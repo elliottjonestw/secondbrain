@@ -3,6 +3,7 @@ import { ZodError } from "zod";
 import type { AppEnv } from "./env";
 import { ApiError } from "./http";
 import { corsMiddleware } from "./middleware/cors";
+import { securityHeaders } from "./middleware/securityHeaders";
 import { health } from "./routes/health";
 import { auth } from "./routes/auth";
 import { spaces } from "./routes/spaces";
@@ -27,6 +28,8 @@ app.use("*", async (c, next) => {
   c.header("X-Request-Id", c.get("requestId"));
 });
 
+// Outside CORS so it also covers preflights and anything cors() short-circuits.
+app.use("*", securityHeaders());
 app.use("*", corsMiddleware());
 
 app.route("/v1", health);
@@ -61,7 +64,18 @@ app.onError((err, c) => {
     );
   }
 
-  console.error("unhandled", { requestId: c.get("requestId"), err });
+  // Method and path alongside the id, because `[observability]` is the whole
+  // of this project's error monitoring — there is no Sentry, deliberately, as
+  // every such service is another account and another card. What makes that
+  // sufficient is that a log line has to be self-contained: "requestId abc123"
+  // with no route is a line nobody can act on. The URL is NOT logged, only the
+  // routed path, so ids and query strings stay out of retention.
+  console.error("unhandled", {
+    requestId: c.get("requestId"),
+    method: c.req.method,
+    path: c.req.routePath,
+    err,
+  });
   return c.json(
     { error: { code: "internal", message: "Something went wrong." } },
     500,

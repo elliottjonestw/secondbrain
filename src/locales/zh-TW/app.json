@@ -28,7 +28,8 @@
     "loadFailed": "無法載入此頁面",
     "loadFailedDetail": "取得資料時發生問題。",
     "loadOffline": "目前離線，且這個頁面尚未儲存供離線使用。",
-    "retry": "重試"
+    "retry": "重試",
+    "continue": "繼續"
   },
   "priority": {
     "0": "無",
@@ -150,7 +151,8 @@
       "assistant": "助理",
       "voice": "語音",
       "calendars": "行事曆",
-      "data": "資料"
+      "data": "資料",
+      "account": "帳號"
     },
     "storedLocally": "設定僅儲存在此裝置上。",
     "general": {
@@ -284,6 +286,22 @@
       "resetButton": "重設所有資料",
       "resetting": "重設中…",
       "confirmReset": "這會永久刪除應用程式中的所有資料——每一項活動、提醒、待辦事項、筆記、聯絡人、清單與標籤，且無法復原。要繼續嗎？"
+    },
+    "account": {
+      "title": "帳號",
+      "description": "你的登入地址，以及完整刪除帳號。",
+      "emailHeading": "電子郵件地址",
+      "emailVerified": "已確認",
+      "emailUnverifiedHint": "這個地址尚未確認。忘記密碼時需要靠它重設，建議現在完成確認。",
+      "resendVerification": "寄送確認信",
+      "sending": "寄送中…",
+      "verificationSent": "確認信已寄出，請查看你的收件匣。",
+      "deleteHeading": "刪除帳號",
+      "deleteHint": "將刪除帳號、所屬空間，以及其中所有內容 — 行事曆、提醒、待辦、筆記、人物與圖片。此操作無法復原，也不同於「清除所有資料」（後者會保留帳號）。",
+      "confirmWithPassword": "輸入密碼以確認",
+      "deleteButton": "刪除我的帳號",
+      "deleting": "刪除中…",
+      "confirmDelete": "確定要永久刪除這個帳號嗎？其中所有內容都會被抹除且無法復原。"
     }
   },
   "todos": {
@@ -586,11 +604,23 @@
     "confirmPassword": "確認密碼",
     "passwordTooShort": "密碼至少需要 {{min}} 個字元。",
     "passwordMismatch": "兩次輸入的密碼不一致。",
-    "noRecoveryWarning": "目前尚未提供密碼重設功能 — 若忘記此密碼，帳號將無法復原。",
     "haveAccount": "已經有帳號了嗎？",
     "noAccount": "還沒有帳號嗎？",
     "working": "處理中…",
     "offline": "目前離線。請連上網路後再登入。",
-    "genericError": "發生錯誤，請再試一次。"
+    "genericError": "發生錯誤，請再試一次。",
+    "forgotPassword": "忘記密碼？",
+    "forgotSubtitle": "我們會寄一封信給你，讓你設定新密碼。",
+    "sendResetLink": "寄送重設連結",
+    "resetSent": "若該地址已註冊帳號，重設連結即將寄出。連結將在 30 分鐘後失效。",
+    "backToSignIn": "返回登入",
+    "resetSubtitle": "為你的帳號設定新密碼。",
+    "newPassword": "新密碼",
+    "setPassword": "儲存新密碼",
+    "resetDone": "密碼已變更。",
+    "resetSignedOutEverywhere": "所有裝置皆已登出。請使用新密碼重新登入。",
+    "verifying": "正在確認你的電子郵件地址…",
+    "verifyDone": "電子郵件地址已確認。",
+    "verifyOnRegisterNote": "我們會寄送確認連結到這個地址。忘記密碼時需要靠它重設，請使用你收得到信的地址。"
   }
 }

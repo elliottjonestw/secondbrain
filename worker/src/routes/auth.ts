@@ -1,19 +1,23 @@
 import { Hono } from "hono";
 import {
   DEFAULT_KDF_PARAMS,
+  deleteAccountSchema,
+  forgotPasswordSchema,
   kdfChallengeSchema,
   loginSchema,
   normalizeEmail,
   normalizeKey,
   refreshSchema,
   registerSchema,
+  resetPasswordSchema,
+  verifyEmailSchema,
   type KdfChallenge,
   type KdfParams,
   type Session,
   type TokenPair,
 } from "@secondbrain/shared";
 import type { AppEnv, Bindings } from "../env";
-import { badRequest, conflict, unauthorized } from "../http";
+import { ApiError, badRequest, conflict, unauthorized } from "../http";
 import {
   computeVerifier,
   decoyKdfSalt,
@@ -43,6 +47,21 @@ import {
   listMemberships,
   type UserRow,
 } from "../db/users";
+import {
+  applyNewPassword,
+  consumeEmailVerification,
+  consumePasswordReset,
+  issueEmailVerification,
+  issuePasswordReset,
+} from "../db/recovery";
+import { deleteAccount } from "../db/account";
+import { deleteNoteImageBlobs } from "../db/images";
+import {
+  EmailNotConfigured,
+  sendPasswordResetEmail,
+  sendVerificationEmail,
+} from "../auth/email";
+import { enforceRateLimit } from "../rateLimit";
 import { requireAuth } from "../middleware/auth";
 
 export const auth = new Hono<AppEnv>();
@@ -57,7 +76,12 @@ function requireSecret(env: Bindings, name: "JWT_SECRET" | "AUTH_PEPPER"): strin
 
 async function sessionFor(db: D1Database, user: UserRow): Promise<Session> {
   return {
-    user: { id: user.id, email: user.email, created_at: user.created_at },
+    user: {
+      id: user.id,
+      email: user.email,
+      created_at: user.created_at,
+      email_verified: user.email_verified_at !== null,
+    },
     spaces: await listMemberships(db, user.id),
   };
 }
@@ -147,6 +171,7 @@ auth.post("/auth/register", async (c) => {
     verifier_hash: verifierHash,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
+    email_verified_at: null,
   };
 
   await createUserWithSpace(
@@ -169,8 +194,21 @@ auth.post("/auth/register", async (c) => {
     ],
   );
 
+  // Confirmation mail is fire-and-forget, after the response is decided.
+  // Registration must not fail because Resend is down or unconfigured — the
+  // account is already usable, verification is a prompt in Settings, and there
+  // is a "resend" button for exactly this case.
+  c.executionCtx.waitUntil(sendVerification(c.env, user).catch(() => {}));
+
   return c.json<TokenPair>(await issueTokens(c.env, user, null), 201);
 });
+
+/** Mint a verification token and mail it. Throws; every caller decides whether
+ *  that matters to the response. */
+async function sendVerification(env: Bindings, user: UserRow): Promise<void> {
+  const token = await issueEmailVerification(env.DB, user.id, user.email_norm);
+  await sendVerificationEmail(env, user.email, token);
+}
 
 /**
  * Step 2 of login: exchange a derived key for tokens.
@@ -244,4 +282,191 @@ auth.get("/auth/me", requireAuth(), async (c) => {
   const user = await findUserById(c.env.DB, c.get("userId"));
   if (!user) throw unauthorized("Account no longer exists.");
   return c.json<Session>(await sessionFor(c.env.DB, user));
+});
+
+// ---------------------------------------------------------------------------
+// Password reset
+//
+// The reset path is the one place where the "the server never sees a password"
+// design could quietly be abandoned, and isn't. A token does not authorise a
+// password change; it authorises replacing this account's KDF salt, params and
+// verifier with values the CLIENT computed from the new password. The wire
+// carries a derived key on the way in, exactly as registration does.
+// ---------------------------------------------------------------------------
+
+/** Every outcome of "ask for a reset link" — success, unknown address, mail
+ *  provider down, mail not configured — returns this. See the schema comment:
+ *  a response that varies is an account-existence oracle, and the failure modes
+ *  leak just as loudly as the success. */
+const RESET_SENT = {
+  message: "If that address has an account, a reset link is on its way.",
+} as const;
+
+auth.post("/auth/password/forgot", async (c) => {
+  const { email } = forgotPasswordSchema.parse(await c.req.json());
+  const emailNorm = normalizeEmail(email);
+
+  // Both keys, because they stop different things: the address key stops one
+  // mailbox being flooded (mail we pay for, and a nuisance the recipient
+  // can't switch off), the IP key stops one client walking an address list to
+  // see which ones bounce.
+  const limitMessage = "Too many reset requests. Wait a minute and try again.";
+  await enforceRateLimit(c.env.EMAIL_LIMIT, `reset:${emailNorm}`, limitMessage);
+  await enforceRateLimit(c.env.EMAIL_LIMIT, `reset-ip:${clientIp(c.req.raw)}`, limitMessage);
+
+  // A locked account is not told it is locked here — that would be the oracle
+  // by another route. It simply gets no mail, and the lock expires.
+  const user = await findUserByEmail(c.env.DB, emailNorm);
+  if (!user) return c.json(RESET_SENT);
+
+  // Mail is sent inline rather than in waitUntil so a provider failure can be
+  // *counted*: without the key configured this is a permanent condition the
+  // operator needs to see, and a swallowed error in a background task is how
+  // "reset does nothing" survives for months.
+  try {
+    const token = await issuePasswordReset(c.env.DB, user.id);
+    await sendPasswordResetEmail(c.env, user.email, token);
+  } catch (err) {
+    // Logged without the address: [observability] is on, and an email address
+    // in log retention is exactly the data this endpoint refuses to confirm.
+    console.error("password reset mail failed", {
+      requestId: c.get("requestId"),
+      configured: !(err instanceof EmailNotConfigured),
+    });
+  }
+
+  return c.json(RESET_SENT);
+});
+
+/**
+ * Redeem a reset token.
+ *
+ * `bad_request` for unknown, expired and already-used alike. Telling them apart
+ * would tell someone holding a stale link whether the account is real and
+ * whether a fresher link is worth hunting for.
+ */
+auth.post("/auth/password/reset", async (c) => {
+  const body = resetPasswordSchema.parse(await c.req.json());
+  const pepper = requireSecret(c.env, "AUTH_PEPPER");
+
+  const userId = await consumePasswordReset(c.env.DB, body.token);
+  if (!userId) throw badRequest("That reset link is no longer valid. Request a new one.");
+
+  const verifierSalt = toBase64(randomBytes(16));
+  let verifierHash: string;
+  try {
+    verifierHash = await computeVerifier(pepper, verifierSalt, body.derived_key);
+  } catch {
+    throw badRequest("derived_key must be valid base64.");
+  }
+
+  await applyNewPassword(c.env.DB, userId, {
+    kdfSalt: body.kdf_salt,
+    kdfParams: JSON.stringify(body.kdf_params),
+    verifierSalt,
+    verifierHash,
+  });
+
+  // The failed-login lock is cleared too: someone who has just proved control
+  // of the mailbox should not be held out by the guesses that made them reset.
+  const user = await findUserById(c.env.DB, userId);
+  if (user) await clearBucket(c.env.DB, emailBucket(user.email_norm));
+
+  // No tokens issued. Every session was revoked a moment ago, including any
+  // the attacker held, and handing this request a fresh one would mean a
+  // stolen reset link is itself a login. The client signs in normally.
+  //
+  // What a reset does NOT do is kill an access token already in flight: those
+  // are stateless JWTs, checked with an HMAC and no database read, which is the
+  // trade that keeps ~105 ms of D1 off every request. So an attacker holding
+  // one keeps read/write access for up to its remaining 15 minutes, and cannot
+  // extend it — their refresh token is dead. Closing that window means a
+  // session lookup per request or a revocation list in KV; it has not been
+  // judged worth it, but it is a known bound, not an oversight.
+  return c.body(null, 204);
+});
+
+// ---------------------------------------------------------------------------
+// Email verification
+// ---------------------------------------------------------------------------
+
+/** Anonymous on purpose: the link is opened wherever the mail was read, which
+ *  is routinely a device with no session. The token is the credential. */
+auth.post("/auth/email/verify", async (c) => {
+  const { token } = verifyEmailSchema.parse(await c.req.json());
+  const ok = await consumeEmailVerification(c.env.DB, token);
+  if (!ok) throw badRequest("That confirmation link is no longer valid.");
+  return c.body(null, 204);
+});
+
+/** Send another link to the signed-in account's own address. Authenticated,
+ *  so this cannot be used to mail anyone who has not asked for it. */
+auth.post("/auth/email/verify/send", requireAuth(), async (c) => {
+  const user = await findUserById(c.env.DB, c.get("userId"));
+  if (!user) throw unauthorized("Account no longer exists.");
+  if (user.email_verified_at) return c.body(null, 204);
+
+  await enforceRateLimit(
+    c.env.EMAIL_LIMIT,
+    `verify:${user.id}`,
+    "Too many requests. Wait a minute and try again.",
+  );
+
+  try {
+    await sendVerification(c.env, user);
+  } catch (err) {
+    if (err instanceof EmailNotConfigured) {
+      throw new ApiError("internal", "Email isn't set up on this server yet.");
+    }
+    throw new ApiError("internal", "Couldn't send that email. Try again shortly.");
+  }
+  return c.body(null, 204);
+});
+
+// ---------------------------------------------------------------------------
+// Account deletion
+// ---------------------------------------------------------------------------
+
+/**
+ * Delete the caller's account and everything in it, permanently.
+ *
+ * Re-authentication, not merely a valid session: an access token lives fifteen
+ * minutes and this is the only irreversible operation in the API. The client
+ * re-derives a key from a freshly typed password, which is why this takes a
+ * `derived_key` and not a confirmation flag.
+ *
+ * The verifier check is throttled through the same buckets as login. Without
+ * it this endpoint is an unmetered password oracle for anyone holding a stolen
+ * access token — cheaper to attack than login, because it needs no email.
+ */
+auth.post("/auth/account/delete", requireAuth(), async (c) => {
+  const body = deleteAccountSchema.parse(await c.req.json());
+  const pepper = requireSecret(c.env, "AUTH_PEPPER");
+
+  const user = await findUserById(c.env.DB, c.get("userId"));
+  if (!user) throw unauthorized("Account no longer exists.");
+
+  const buckets = [emailBucket(user.email_norm), ipBucket(clientIp(c.req.raw))];
+  await assertNotLocked(c.env.DB, buckets);
+
+  let ok = false;
+  try {
+    const candidate = await computeVerifier(pepper, user.verifier_salt, body.derived_key);
+    ok = timingSafeEqual(candidate, user.verifier_hash);
+  } catch {
+    throw badRequest("derived_key must be valid base64.");
+  }
+
+  if (!ok) {
+    await recordFailure(c.env.DB, buckets);
+    throw unauthorized("That password is incorrect.");
+  }
+
+  const blobKeys = await deleteAccount(c.env.DB, user.id);
+  // After the rows are gone, so the worst outcome is unreferenced bytes rather
+  // than rows pointing at bytes that aren't there. KV is not transactional and
+  // deletes have their own daily counter, so this is one call per image.
+  await deleteNoteImageBlobs(c.env.IMAGES, blobKeys);
+
+  return c.body(null, 204);
 });

@@ -3,10 +3,18 @@
 The backend half of the cloud migration — see [`docs/cloud-migration-plan.md`](../docs/cloud-migration-plan.md)
 for the full plan and the reasoning behind each decision.
 
-**Status: the data migration is complete.** Auth plus every domain — todos,
+**Status: complete through M5 (hardening).** Auth plus every domain — todos,
 lists, reminders, people, events, notes (with trigram FTS), tags, links, note
-images, and backup/export — is served from here. What remains is M5: password
-reset, email verification and account deletion.
+images, and backup/export — is served from here, along with password reset,
+email confirmation, account deletion, per-user limits on the proxy routes and
+hardening headers on every response.
+
+One thing to know before deploying M5: **the reset and confirmation endpoints
+need `RESEND_API_KEY`** (`npx wrangler secret put RESEND_API_KEY --env …`).
+Without it they refuse identically for every address — deliberately, since a
+response that varied with whether an account exists is the existence oracle the
+whole flow is designed to avoid. The operator sees the failure in
+`wrangler tail`; the caller cannot.
 
 ## Local development
 
@@ -169,15 +177,33 @@ longer merely slow, it is metered.
 migrations/0001_init.sql   squashed local 001–007 + multi-tenancy
            0002_*.sql      auth throttling
            0003_*.sql      note_images.r2_key -> blob_key (R2 -> KV)
+           0004_*.sql      password reset + email confirmation tokens
 src/index.ts               Hono app, error boundary, /v1 mount
 src/env.ts                 bindings + request-scoped variables
 src/http.ts                ApiError — the single failure shape
 src/authorize.ts           the ONE access-control choke point
-src/middleware/            cors (per-environment allowlist) · auth
-src/routes/                health · auth · spaces (all domain endpoints)
+src/rateLimit.ts           per-user caps on the proxy routes
+src/auth/                  crypto · tokens · throttle (failed logins) · email
+src/middleware/            cors (per-environment allowlist) · auth ·
+                           securityHeaders
+src/routes/                health · auth · spaces (all domain endpoints) ·
+                           quotes + dav (the two narrow proxies)
 src/db/                    the ONLY place SQL is written — one file per domain,
-                           plus backup.ts (logical export/import/wipe)
+                           plus backup.ts (logical export/import/wipe),
+                           recovery.ts (reset/confirm tokens) and
+                           account.ts (deletion)
+scripts/loadcheck.mjs      latency sanity-check; `npm run loadcheck -w @secondbrain/worker`
 ```
+
+### Two limiters, on purpose
+
+`auth_throttle` (migration 0002) counts **failures** against an account and
+locks it — durable, globally consistent state, worth a D1 round-trip because it
+runs at most once per sign-in. `rateLimit.ts` counts **successes** on hot paths
+(a calendar refresh is dozens of relayed requests) using Cloudflare's in-colo
+rate-limiting binding, because a D1 hop per call would be the dominant cost of
+the feature. The in-colo counter is per-datacentre rather than global; see the
+comment in `rateLimit.ts` for why that's the right trade here.
 
 ## Rules for this Worker
 

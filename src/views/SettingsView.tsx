@@ -3,6 +3,7 @@ import {
   Eye, EyeOff, Check, CalendarDays, ExternalLink, Loader2, AlertCircle,
   Sparkles, Mic, Languages, Database, Download, Upload, LucideIcon,
   Cloud, Server, RefreshCw, Trash2, Volume2, MapPin, X, ChevronUp, ChevronDown,
+  UserCog, MailCheck, MailWarning,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -30,14 +31,18 @@ import { invalidateCache, listCalendars, setCalendarVisible, LOCAL_CALENDAR_NAME
 import { LOCAL_CALENDAR_ID } from "../types";
 import { exportBackup, importBackup } from "../lib/backup";
 import { clearAllData } from "../db";
+import { deleteAccount, resendVerification } from "../lib/auth";
+import { getCachedSession } from "../lib/authStore";
+import { ApiError, OfflineError } from "../lib/api";
 import { Button } from "../components/ui";
 
 const APPLE_PASSWORD_URL = "https://account.apple.com/account/manage";
 
-type Section = "general" | "assistant" | "voice" | "calendars" | "data";
+type Section = "general" | "account" | "assistant" | "voice" | "calendars" | "data";
 
 const SECTIONS: { id: Section; labelKey: `settings.sections.${Section}`; icon: LucideIcon }[] = [
   { id: "general", labelKey: "settings.sections.general", icon: Languages },
+  { id: "account", labelKey: "settings.sections.account", icon: UserCog },
   { id: "assistant", labelKey: "settings.sections.assistant", icon: Sparkles },
   { id: "voice", labelKey: "settings.sections.voice", icon: Mic },
   { id: "calendars", labelKey: "settings.sections.calendars", icon: CalendarDays },
@@ -106,6 +111,7 @@ export default function SettingsView() {
       <div className="flex-1 overflow-y-auto p-8">
         <div className="mx-auto max-w-2xl">
           {section === "general" && <GeneralSettings />}
+          {section === "account" && <AccountSettings />}
           {section === "assistant" && (
             <AssistantSettings draft={draft} patch={patch} onSave={save} saved={saved} />
           )}
@@ -1204,6 +1210,156 @@ function CalendarSettingsPane() {
       </section>
     </>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Account (email confirmation, deletion)
+// ---------------------------------------------------------------------------
+
+/**
+ * The identity pane, as opposed to the data pane below it.
+ *
+ * The distinction matters and the two are deliberately kept apart: "clear all
+ * data" empties a space that still belongs to you, while "delete account"
+ * removes the account, the space and the membership. Putting the second next to
+ * the first, under the same heading, is how someone reaches for the wrong one.
+ */
+function AccountSettings() {
+  const { t } = useTranslation();
+  // The cached session, read once per mount. It is a display value — the server
+  // re-decides everything — and the only paths that change it (confirming an
+  // address, deleting the account) reload the page afterwards.
+  const session = getCachedSession();
+  const [busy, setBusy] = useState<"verify" | "delete" | null>(null);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+  const [password, setPassword] = useState("");
+
+  async function doResend() {
+    setError("");
+    setStatus("");
+    setBusy("verify");
+    try {
+      await resendVerification();
+      setStatus(t("settings.account.verificationSent"));
+    } catch (e) {
+      setError(messageFor(e, t("auth.offline")));
+    }
+    setBusy(null);
+  }
+
+  async function doDelete() {
+    setError("");
+    setStatus("");
+    if (!session) return;
+    // Two gates, not one. The password proves it's the account's owner and not
+    // whoever found the laptop unlocked; the confirm proves the click was
+    // meant. Neither alone is enough for something with no undo.
+    if (!window.confirm(t("settings.account.confirmDelete"))) return;
+
+    setBusy("delete");
+    try {
+      // Derives argon2id from the typed password, so this takes a moment.
+      await deleteAccount(session.user.email, password);
+      // Everything this device knew is gone; a reload lands on the login
+      // screen with no session to restore.
+      window.location.reload();
+    } catch (e) {
+      setError(messageFor(e, t("auth.offline")));
+      setBusy(null);
+    }
+  }
+
+  if (!session) return null;
+  const verified = session.user.email_verified;
+
+  return (
+    <>
+      <PaneHeader title={t("settings.account.title")}>
+        {t("settings.account.description")}
+      </PaneHeader>
+
+      <section className="mb-6 rounded-xl border border-neutral-200 p-5 dark:border-neutral-700">
+        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+          {t("settings.account.emailHeading")}
+        </h2>
+        <p className="mb-3 text-sm font-medium">{session.user.email}</p>
+
+        {verified ? (
+          <p className="flex items-center gap-1.5 text-sm text-green-600">
+            <MailCheck size={16} /> {t("settings.account.emailVerified")}
+          </p>
+        ) : (
+          <>
+            <p className="mb-3 flex items-start gap-1.5 text-xs leading-relaxed text-amber-700 dark:text-amber-500">
+              <MailWarning size={15} className="mt-0.5 shrink-0" />
+              <span>{t("settings.account.emailUnverifiedHint")}</span>
+            </p>
+            <Button disabled={busy !== null} onClick={() => void doResend()}>
+              {busy === "verify" ? (
+                <span className="flex items-center gap-1.5">
+                  <Loader2 size={15} className="animate-spin" /> {t("settings.account.sending")}
+                </span>
+              ) : (
+                t("settings.account.resendVerification")
+              )}
+            </Button>
+          </>
+        )}
+
+        {status && (
+          <div className="mt-3 flex items-center gap-1 text-sm text-green-600">
+            <Check size={16} /> {status}
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-xl border border-red-200 p-5 dark:border-red-900/60">
+        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-red-600 dark:text-red-400">
+          {t("settings.account.deleteHeading")}
+        </h2>
+        <p className="mb-4 text-xs leading-relaxed text-neutral-400">
+          {t("settings.account.deleteHint")}
+        </p>
+
+        <Field label={t("settings.account.confirmWithPassword")}>
+          <SecretInput
+            value={password}
+            onChange={setPassword}
+            placeholder={t("auth.password")}
+            mono={false}
+          />
+        </Field>
+
+        <Button
+          variant="danger"
+          // The password is required by the server too; disabling here just
+          // avoids spending an argon2id derivation on an empty string.
+          disabled={busy !== null || password.length === 0}
+          onClick={() => void doDelete()}
+        >
+          {busy === "delete" ? (
+            <span className="flex items-center gap-1.5">
+              <Loader2 size={15} className="animate-spin" /> {t("settings.account.deleting")}
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5"><Trash2 size={15} /> {t("settings.account.deleteButton")}</span>
+          )}
+        </Button>
+
+        {error && <div className="mt-3"><Notice tone="error">{error}</Notice></div>}
+      </section>
+    </>
+  );
+}
+
+/** Offline is worth its own message here — both actions in this pane need the
+ *  network, and "something went wrong" for a dropped connection sends people
+ *  looking for a bug that isn't there. */
+function messageFor(e: unknown, offline: string): string {
+  if (e instanceof OfflineError) return offline;
+  if (e instanceof ApiError) return e.message;
+  return e instanceof Error ? e.message : String(e);
 }
 
 // ---------------------------------------------------------------------------

@@ -7,8 +7,35 @@ compatibility_flags = ["nodejs_compat"]
 
 # Workers logs, so a 500 in production is diagnosable without adding a logging
 # service. Off by default; there is no reason to run without it.
+#
+# This IS the error monitoring for this project, and that is a decision rather
+# than a gap: every hosted alternative is another account, most want a card, and
+# the failure this catches (a 500 a user reports by its X-Request-Id) is found
+# just as fast with `wrangler tail`. What makes it work is that the error
+# handler in src/index.ts logs method and routed path with the id — see the
+# comment there, and note it deliberately never logs a URL or a body.
 [observability]
 enabled = true
+
+# ---------------------------------------------------------------------------
+# D1 read replication is deliberately NOT enabled.
+#
+# It is free and one line (`read_replication = { mode = "auto" }`), which makes
+# it tempting. Two reasons not to:
+#
+#   1. It doesn't help the measured problem. The ~105 ms per query recorded in
+#      docs/cloud-migration-plan.md §10 is a round-trip to a primary in the same
+#      region as the caller. A replica nearer than "already next to you" does
+#      not exist.
+#   2. Turning it on without also adopting D1's Sessions API means reads can
+#      land on a replica that has not caught up, so a client that just wrote a
+#      todo can immediately read a list without it. This app writes and then
+#      re-reads constantly — every checkbox tick — so that is not an edge case,
+#      it is the main flow, and it would present as "my change didn't save".
+#
+# Revisit when there are users far from the primary, and adopt the Sessions API
+# in the same change, not after it.
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Top level = local development (`npm run dev -w worker`). `wrangler dev` runs
@@ -34,12 +61,52 @@ migrations_dir = "migrations"
 binding = "IMAGES"
 id = "REPLACE_ME_AFTER_wrangler_kv_namespace_create"
 
+# ---------------------------------------------------------------------------
+# Per-user caps on the routes that reach somebody else's server.
+#
+# Cloudflare's rate-limiting binding rather than a D1 counter: it runs in-colo
+# in about a millisecond, where a D1 row would add a ~105 ms round-trip to the
+# primary to every relayed CalDAV call — dozens per calendar refresh — and
+# spend write quota doing it. It is included in the Workers free plan and needs
+# no card, which the alternatives (a Durable Object per user) do not manage as
+# cleanly. See worker/src/rateLimit.ts for why per-colo counting is the right
+# trade here, and note the binding must be repeated under every [env.*] block:
+# wrangler does NOT inherit bindings into named environments, and a missing one
+# is a hard failure at request time by design.
+#
+# `namespace_id` is an arbitrary number that names the counter; changing one
+# resets it. `period` may only be 10 or 60.
+# ---------------------------------------------------------------------------
+[[ratelimits]]
+name = "DAV_LIMIT"
+namespace_id = "1001"
+simple = { limit = 120, period = 60 }
+
+[[ratelimits]]
+name = "QUOTE_LIMIT"
+namespace_id = "1002"
+simple = { limit = 60, period = 60 }
+
+# Outbound mail. Low on purpose — this one is spent by strangers (anyone can
+# ask for a reset link for any address), it costs real money at the provider,
+# and it lands in somebody else's inbox.
+[[ratelimits]]
+name = "EMAIL_LIMIT"
+namespace_id = "1003"
+simple = { limit = 3, period = 60 }
+
 [vars]
 ENVIRONMENT = "development"
 # Comma-separated. Tauri's webview origin differs by OS — `tauri://localhost`
 # on macOS/iOS, `http://tauri.localhost` on Windows/Android — so both are
 # always allowed or the app breaks on half its target platforms.
 ALLOWED_ORIGINS = "http://localhost:1420,http://localhost:1421,tauri://localhost,http://tauri.localhost"
+# Where reset/verification links point. Taken from config, never from the
+# request's Origin header — a link is minted from this value, and reading it
+# from something the caller controls would let anyone have us mail a live token
+# aimed at their own site. No trailing slash.
+APP_URL = "http://localhost:1420"
+EMAIL_FROM = "Sekunda <onboarding@resend.dev>"
 
 # ---------------------------------------------------------------------------
 # Staging
@@ -57,8 +124,32 @@ migrations_dir = "migrations"
 binding = "IMAGES"
 id = "239ecd43e0f14fc082db5819701fd892"
 
+# Repeated, not inherited — see the top-level block.
+[[env.staging.ratelimits]]
+name = "DAV_LIMIT"
+namespace_id = "1001"
+simple = { limit = 120, period = 60 }
+
+[[env.staging.ratelimits]]
+name = "QUOTE_LIMIT"
+namespace_id = "1002"
+simple = { limit = 60, period = 60 }
+
+[[env.staging.ratelimits]]
+name = "EMAIL_LIMIT"
+namespace_id = "1003"
+simple = { limit = 3, period = 60 }
+
 [env.staging.vars]
 ENVIRONMENT = "staging"
+# The published web build. A reset link is only useful where the app actually
+# runs, and the desktop build can't receive one — a user resets on the web and
+# then signs in on the desktop with the new password.
+APP_URL = "https://elliottjonestw.github.io/sekunda-web"
+# Resend's shared sandbox sender. It can only deliver to the address that owns
+# the Resend account, which is enough to test the flow end to end; sending to
+# real users needs a verified domain and this value changed to an address on it.
+EMAIL_FROM = "Sekunda <onboarding@resend.dev>"
 # The web build is served from GitHub Pages by .github/workflows/web.yml.
 # Its ORIGIN is the pages host only — no path, no trailing slash — so a
 # project site at .../sekunda-web/ is still just the github.io origin.
@@ -85,8 +176,26 @@ migrations_dir = "migrations"
 binding = "IMAGES"
 id = "5f4698a44ab74ee98889b629a1b4f17b"
 
+# Repeated, not inherited — see the top-level block.
+[[env.production.ratelimits]]
+name = "DAV_LIMIT"
+namespace_id = "1001"
+simple = { limit = 120, period = 60 }
+
+[[env.production.ratelimits]]
+name = "QUOTE_LIMIT"
+namespace_id = "1002"
+simple = { limit = 60, period = 60 }
+
+[[env.production.ratelimits]]
+name = "EMAIL_LIMIT"
+namespace_id = "1003"
+simple = { limit = 3, period = 60 }
+
 [env.production.vars]
 ENVIRONMENT = "production"
+APP_URL = "https://elliottjonestw.github.io/sekunda-web"
+EMAIL_FROM = "Sekunda <onboarding@resend.dev>"
 # The web build is served from GitHub Pages by .github/workflows/web.yml.
 # Its ORIGIN is the pages host only — no path, no trailing slash — so a
 # project site at .../sekunda-web/ is still just the github.io origin.

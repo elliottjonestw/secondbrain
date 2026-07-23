@@ -22,6 +22,17 @@ export interface User {
   id: string;
   email: string;
   created_at: string;
+  /**
+   * Whether the address has been confirmed by clicking a mailed link.
+   *
+   * Deliberately NOT a precondition for signing in. Verification arrived after
+   * accounts already existed, so enforcing it would lock out every user who
+   * registered before it shipped — and the property it actually buys (the
+   * address can receive mail, therefore password reset can reach its owner) is
+   * only needed at reset time, which checks the mailbox directly by sending to
+   * it. It is surfaced in Settings as a prompt, not a gate.
+   */
+  email_verified: boolean;
 }
 
 export interface SpaceMembership {
@@ -135,10 +146,54 @@ export const refreshSchema = z.object({
   refresh_token: z.string().min(1),
 });
 
+/**
+ * Ask for a reset link. Answers identically for every address.
+ *
+ * The response must be indistinguishable for a known and an unknown address,
+ * for the same reason `/auth/kdf` returns a decoy salt rather than a 404 —
+ * otherwise anyone with an email list can test it for membership. That
+ * includes the failure modes: "email sending isn't configured" has to be
+ * returned for everyone or for nobody.
+ */
+export const forgotPasswordSchema = z.object({ email: emailSchema });
+
+/**
+ * Complete a reset.
+ *
+ * The client sends a *new* salt and a key derived under it, never a password —
+ * the reset path preserves the property that the server has never seen a
+ * plaintext password, at the one moment it would be most tempting to break it.
+ * `kdf_params` travels too so an old account picks up current parameters when
+ * it changes password, which is the only moment they can safely be raised.
+ */
+export const resetPasswordSchema = z.object({
+  token: z.string().min(20).max(200),
+  kdf_salt: saltSchema,
+  kdf_params: kdfParamsSchema,
+  derived_key: derivedKeySchema,
+});
+
+export const verifyEmailSchema = z.object({
+  token: z.string().min(20).max(200),
+});
+
+/**
+ * Delete the caller's account. Re-authentication, not just a valid session:
+ * an access token can be fifteen minutes old and sitting on an unlocked
+ * laptop, and this is the one irreversible operation in the API.
+ */
+export const deleteAccountSchema = z.object({
+  derived_key: derivedKeySchema,
+});
+
 export type RegisterRequest = z.infer<typeof registerSchema>;
 export type LoginRequest = z.infer<typeof loginSchema>;
 export type RefreshRequest = z.infer<typeof refreshSchema>;
 export type KdfChallengeRequest = z.infer<typeof kdfChallengeSchema>;
+export type ForgotPasswordRequest = z.infer<typeof forgotPasswordSchema>;
+export type ResetPasswordRequest = z.infer<typeof resetPasswordSchema>;
+export type VerifyEmailRequest = z.infer<typeof verifyEmailSchema>;
+export type DeleteAccountRequest = z.infer<typeof deleteAccountSchema>;
 
 /** What register / login / refresh all return. */
 export interface TokenPair {

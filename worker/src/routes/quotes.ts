@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { AppEnv } from "../env";
 import { badRequest } from "../http";
 import { requireAuth } from "../middleware/auth";
+import { enforceRateLimit } from "../rateLimit";
 
 /**
  * A deliberately narrow proxy for Yahoo's quote endpoints.
@@ -19,6 +20,10 @@ import { requireAuth } from "../middleware/auth";
  *    found it.
  *  - **It requires a session.** Without `requireAuth` this is an open relay
  *    that anyone could point at our 100k requests/day.
+ *  - **It is rate-limited per user** (`QUOTE_LIMIT`). A session is not a blank
+ *    cheque: authentication says who is relaying, the limit says how much. A
+ *    watchlist refresh is a handful of calls, so the budget is generous and
+ *    only abuse reaches it.
  *  - **The two upstream paths are fixed**, and `range`/`interval` are checked
  *    against an allowlist rather than forwarded, so the query string can't be
  *    used to smuggle anything.
@@ -33,6 +38,18 @@ import { requireAuth } from "../middleware/auth";
 export const quotes = new Hono<AppEnv>();
 
 quotes.use("/quotes/*", requireAuth());
+
+// One budget across both upstream paths — they cost the same and an attacker
+// has no reason to prefer either, so splitting them would only double the
+// total a stolen session can spend.
+quotes.use("/quotes/*", async (c, next) => {
+  await enforceRateLimit(
+    c.env.QUOTE_LIMIT,
+    `quotes:${c.get("userId")}`,
+    "Too many market requests. Wait a moment and try again.",
+  );
+  await next();
+});
 
 const CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart";
 const SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search";

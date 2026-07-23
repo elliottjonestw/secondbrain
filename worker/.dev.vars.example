@@ -14,3 +14,23 @@
 # outstanding access token (refresh tokens survive — they're stored hashed in
 # D1 and are not signed with this).
 JWT_SECRET=dev-only-do-not-use-in-any-deployed-environment
+
+# Mixed into every stored password verifier. NEVER rotate this on an
+# environment that has users — unlike JWT_SECRET, which merely signs everyone
+# out, changing this invalidates every verifier and locks every account out
+# permanently. Set once, per environment.
+AUTH_PEPPER=dev-only-do-not-use-in-any-deployed-environment
+
+# Resend API key, for password-reset and email-confirmation mail.
+#
+# Optional. With it unset, the reset and confirmation endpoints refuse
+# IDENTICALLY for every address rather than half-working — which is the point:
+# a response that varied with whether the address exists would be the account
+# existence oracle the whole flow is built to avoid. Local development normally
+# leaves it unset and reads tokens out of D1 directly.
+#
+#   npx wrangler secret put RESEND_API_KEY --env staging
+#
+# Sending to anyone other than the Resend account owner also needs a verified
+# domain and EMAIL_FROM (in wrangler.toml) pointed at an address on it.
+# RESEND_API_KEY=

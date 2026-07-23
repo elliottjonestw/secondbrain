@@ -24,6 +24,37 @@ export interface Bindings {
   /** Comma-separated allowlist; see corsMiddleware. */
   ALLOWED_ORIGINS: string;
 
+  /**
+   * Where the web build is served from, used to build the links in reset and
+   * verification emails. No trailing slash.
+   *
+   * It is a var rather than derived from the request's Origin header on
+   * purpose: a link is minted from whatever value is here, and taking it from
+   * an attacker-controllable header would let anyone have us mail a valid
+   * token pointed at their own site.
+   */
+  APP_URL: string;
+  /** `From:` on outbound mail. Must be an address on a domain verified in Resend. */
+  EMAIL_FROM: string;
+
+  /**
+   * Per-user caps on the two proxy routes. Cloudflare's rate-limiting binding
+   * rather than a D1 counter: this runs in-colo in about a millisecond, where
+   * a D1 row would add a ~105 ms round-trip to the primary to EVERY relayed
+   * CalDAV call — on a calendar refresh that is dozens of them — and burn
+   * write quota doing it.
+   *
+   * The trade is that the counter is per-colo, so a caller spread across
+   * datacentres gets the limit several times over. That is the right trade for
+   * what these limits defend against: one stolen session being used as a relay
+   * comes from one client in one place, and genuinely distributed abuse runs
+   * into the Worker's own 100k requests/day before it matters here.
+   */
+  DAV_LIMIT: RateLimiter;
+  QUOTE_LIMIT: RateLimiter;
+  /** Outbound mail, keyed by address AND by IP — see routes/auth.ts. */
+  EMAIL_LIMIT: RateLimiter;
+
   // Secrets — set with `wrangler secret put`, never in wrangler.toml.
   // Absent until M1; typed optional so M0 compiles without them.
   /** HMAC key for signing access-token JWTs. */
@@ -38,6 +69,23 @@ export interface Bindings {
    * permanently. It must be set once and never changed.
    */
   AUTH_PEPPER?: string;
+  /**
+   * Resend API key, for reset and verification mail.
+   *
+   * Optional in the type because an environment can be deployed without it,
+   * and the code has to behave predictably when it is: every mail-sending
+   * endpoint refuses identically for every address rather than half-working.
+   * See `sendEmail`.
+   */
+  RESEND_API_KEY?: string;
+}
+
+/**
+ * Cloudflare's rate-limiting binding. Not exported by @cloudflare/workers-types
+ * at the version pinned here, so it is declared rather than imported.
+ */
+export interface RateLimiter {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
 }
 
 /** Request-scoped values set by middleware. */

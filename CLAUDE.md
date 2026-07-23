@@ -73,6 +73,10 @@ npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
 
 **Platform**
 - **External APIs go through `lib/httpFetch.ts`, never a direct `import { fetch } from "@tauri-apps/plugin-http"`.** Inside Tauri it resolves to the plugin (the webview's own fetch is blocked by CORS from `tauri://`, and the URL must be scoped in `capabilities/default.json`); in a browser the plugin's IPC command doesn't exist, so a static import compiles, ships, and throws on every call. It is resolved at runtime for that reason. The plugin was also doing duty as a CORS *bypass*, which the web build doesn't get: Open-Meteo and OpenAI send CORS headers so they work; **Yahoo and iCloud send none.** Stocks therefore route through the Worker's `/v1/quotes` proxy on web only (`stocks.ts` picks by `isTauri()` — desktop calls Yahoo directly rather than spending request quota on a problem browsers alone have). Connected calendars relay through the Worker's `/v1/dav` route on web only (`caldav/client.ts` picks by `isTauri()`; desktop still talks to Apple directly). **That relay sees the user's iCloud app-specific password and their calendar contents in plaintext** — TLS terminates at the Worker. It was accepted deliberately to make calendars work on the web; `worker/src/routes/dav.ts` records what keeps it tolerable (nothing stored, nothing logged, session required, iCloud-only, redirects never followed) and what hardening is still owed. **Never add a `console.log` of a request or response in that file** — observability is on, so the password would land in log retention.
+- **Two rate limiters, and they are not interchangeable.** `auth_throttle` (migration 0002, `auth/throttle.ts`) counts *failures* against an account and locks it — durable, globally consistent, worth a D1 round-trip because it runs once per sign-in. `rateLimit.ts` counts *successes* on hot paths (`/v1/dav`, `/v1/quotes/*`) with Cloudflare's in-colo binding, because a D1 hop per relayed CalDAV call would be the dominant cost of the feature. The binding is **per-colo, not global**, and it must be repeated under every `[env.*]` block in `wrangler.toml` — wrangler does not inherit bindings into named environments, and a missing one throws at request time by design (failing open would silently un-limit the relay).
+- **Anything that mails a token must answer identically for every address** — known, unknown, provider down, `RESEND_API_KEY` unset. `/auth/kdf` set the precedent with its decoy salt; `/auth/password/forgot` follows it. The trap is the *failure* modes: a distinct "email isn't configured" for real accounts leaks exactly what the flow exists to hide. Reset tokens ride in the URL **fragment**, never the query string, so they never reach a server log or a `Referer`.
+- **A reset replaces credential material, it does not "change a password"** — the server never sees one, on this path least of all. The client derives a new key under a *new* salt; reusing the old salt would let a captured derived key be replayed. Using a token revokes every session, but **not** access tokens already issued: those are stateless 15-minute JWTs, so there is a bounded window. Documented, not accidental.
+- **The web build's CSP is injected at build time by a Vite plugin, not written in `index.html`** — the dev server needs `eval` and a websocket that a shipped bundle must not allow, and `connect-src` has to name whichever `VITE_API_URL` the build targeted. Three directives are load-bearing: `'wasm-unsafe-eval'` (hash-wasm compiles argon2id at runtime — without it sign-in fails *inside the KDF* and reads as "wrong password"), `blob:` in `img-src` (note images can't carry a Bearer header on an `<img src>`), and `ipc: http://ipc.localhost` in `connect-src` (the same `dist/index.html` is what Tauri packages — omit these and every plugin call silently fails). `frame-ancestors` is absent because meta-delivered CSP ignores it. Verify with `npx vite build` and serving `dist/`, never with `npm run dev`.
 - **A proxy route takes a symbol, never a URL** (`worker/src/routes/quotes.ts`). A `?url=` parameter would make it an SSRF tool and a free bandwidth relay. It also requires a session, fixes the upstream paths, allowlists the query parameters, and returns only JSON with upstream headers dropped so the origin can't be handed cookies. Any future proxy copies that shape.
 - **A Worker deploy takes ~a minute to reach every edge location.** Verifying immediately after `wrangler deploy` samples a mix of old and new versions — it looks like a config that didn't apply, or worse, an intermittent bug. Re-test after a minute before believing a post-deploy failure.
 - **`reqwest` drops `Authorization` on cross-host redirects** and iCloud always redirects to a per-user shard, so `davRequest` sets `maxRedirections: 0` and re-attaches auth per hop. Simplifying it gives a 401 that looks like bad credentials.
@@ -183,15 +187,21 @@ packages/shared/  # zod schemas + inferred types, matchQuery ranking, normalizeK
                   # DATA_TABLES. Imported by BOTH sides; no Cloudflare/Tauri imports.
 worker/
   src/index.ts               # Hono app          authorize.ts  # the ONE access check
-  src/routes/                # one file per area (auth · spaces · health)
+  src/rateLimit.ts           # per-user caps on the proxy routes (in-colo, not D1)
+  src/auth/                  # crypto · tokens · throttle (failed logins) · email
+  src/middleware/            # cors · auth · securityHeaders
+  src/routes/                # one file per area (auth · spaces · health · quotes · dav)
   src/db/                    # the ONLY place SQL is written; every query takes space_id
+                             #   (+ recovery.ts, account.ts — identity, keyed by user)
   migrations/000N_*.sql      # 0001 init (squashed + tenancy) · 0002 auth throttle ·
-                             #   0003 image blob_key
+                             #   0003 image blob_key · 0004 reset/confirm tokens
   wrangler.toml              # D1 + KV bindings per environment
 src-tauri/
   src/lib.rs                 # plugin wiring ONLY — no database, no migrations
   capabilities/default.json  # http scope: the Worker + api.openai.com + *.icloud.com +
-                             #   *.open-meteo.com + localhost (Ollama, dev Worker)
+                             #   *.open-meteo.com + localhost/127.0.0.1 (Ollama, dev
+                             #   Worker). NO blanket `http://*` — it was removed in M5;
+                             #   a plaintext-HTTP host now needs an explicit entry.
 ```
 
 ## Conventions & don'ts
