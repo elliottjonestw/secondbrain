@@ -308,6 +308,7 @@
   },
   "todos": {
     "lists": "Lists",
+    "defaultListName": "Personal",
     "newList": "New list",
     "deleteList": "Delete list",
     "confirmDeleteList": "Delete list \"{{name}}\"? Its tasks move to another list.",

@@ -306,6 +306,7 @@
   },
   "todos": {
     "lists": "清單",
+    "defaultListName": "個人",
     "newList": "新增清單",
     "deleteList": "刪除清單",
     "confirmDeleteList": "要刪除清單「{{name}}」嗎？其中的任務會移至其他清單。",

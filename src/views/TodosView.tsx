@@ -94,8 +94,18 @@ export default function TodosView({ onChange, initialId }: { onChange: () => voi
     if (!title) return;
     setMutError(null);
     try {
+      // Todos are list-scoped and there is no "unfiled" bucket, so a task needs
+      // a real list. Registration seeds one, but "clear all data" empties the
+      // lists table too — leaving activeList "", which the server rejects as an
+      // invalid uuid (not null). Recreate a default list on demand so the first
+      // task after a wipe lands somewhere instead of failing with a 400.
+      let listId = activeList;
+      if (!listId) {
+        listId = await upsertList({ name: tr("todos.defaultListName"), color: CATEGORY_COLORS[0] });
+        setActiveList(listId);
+      }
       await upsertTodo({
-        title, notes: null, list_id: activeList, due_at: null, priority: 0,
+        title, notes: null, list_id: listId, due_at: null, priority: 0,
         completed: 0, completed_at: null, parent_todo_id: null,
         position: topLevel.length,
       });
