@@ -14,8 +14,6 @@ import { useAssistantChat, type UiMessage } from "./components/assistant/useAssi
 import SettingsView from "./views/SettingsView";
 import type { NavTarget } from "./types";
 import { startReminderPoller } from "./lib/notifications";
-import { warmSession } from "./lib/api";
-import { installLoadingDiagnostics } from "./lib/debugLog";
 import { isAssistantConfigured } from "./lib/settings";
 import { logout } from "./lib/auth";
 import { getCachedSession } from "./lib/authStore";
@@ -114,26 +112,7 @@ export default function App() {
   // time it mounts. All that's left is to start the reminder poller.
   useEffect(() => {
     startReminderPoller();
-    installLoadingDiagnostics();
     setReady(true);
-  }, []);
-
-  // The access token lives 15 minutes in memory and isn't persisted, so after
-  // the tab has been hidden past that, the first navigation back has to refresh
-  // before it can load — and a socket that went stale while the tab slept makes
-  // that refresh slow enough to flash the "Still loading…" banner behind a
-  // view's first-load gate. Re-mint the token the moment the tab is visible
-  // again (or the network returns) so that cost is paid in the background
-  // instead of on screen. `warmSession` is a no-op when signed out or already
-  // fresh, and deduped against any refresh already in flight.
-  useEffect(() => {
-    const warm = () => { if (document.visibilityState === "visible") void warmSession(); };
-    document.addEventListener("visibilitychange", warm);
-    window.addEventListener("online", warm);
-    return () => {
-      document.removeEventListener("visibilitychange", warm);
-      window.removeEventListener("online", warm);
-    };
   }, []);
 
 
