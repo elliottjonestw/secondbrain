@@ -1,5 +1,6 @@
 import type { ApiErrorBody, ErrorCode } from "@secondbrain/shared";
 import { isTauri } from "./platform";
+import { dbg } from "./debugLog";
 import {
   clearAuth,
   getAccessToken,
@@ -168,9 +169,13 @@ async function refreshAccessToken(): Promise<void> {
 export async function warmSession(): Promise<void> {
   if (!getRefreshToken()) return; // signed out — nothing to warm
   if (getAccessToken()) return; // still valid — no work to do
+  const started = Date.now();
+  dbg("warmSession refresh start");
   try {
     await refreshAccessToken();
-  } catch {
+    dbg(`warmSession refresh OK in ${Date.now() - started}ms`);
+  } catch (e) {
+    dbg(`warmSession refresh FAILED in ${Date.now() - started}ms`, String(e));
     /* handled on the next real request */
   }
 }

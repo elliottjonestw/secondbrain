@@ -15,6 +15,7 @@ import SettingsView from "./views/SettingsView";
 import type { NavTarget } from "./types";
 import { startReminderPoller } from "./lib/notifications";
 import { warmSession } from "./lib/api";
+import { installLoadingDiagnostics } from "./lib/debugLog";
 import { isAssistantConfigured } from "./lib/settings";
 import { logout } from "./lib/auth";
 import { getCachedSession } from "./lib/authStore";
@@ -113,6 +114,7 @@ export default function App() {
   // time it mounts. All that's left is to start the reminder poller.
   useEffect(() => {
     startReminderPoller();
+    installLoadingDiagnostics();
     setReady(true);
   }, []);
 

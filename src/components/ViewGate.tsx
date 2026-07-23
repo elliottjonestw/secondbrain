@@ -20,7 +20,12 @@ import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, CloudOff } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { OfflineError, ApiError } from "../lib/api";
+import { dbg } from "../lib/debugLog";
 import { Button } from "./ui";
+
+// Distinguishes one useFirstLoad instance from another in the logs, so a
+// remount (new id) reads differently from a reload (same id, new effect run).
+let gateSeq = 0;
 
 /** How long the first load may block the page before it's shown regardless. */
 const SLOW_AFTER_MS = 8000;
@@ -55,11 +60,24 @@ export function useFirstLoad(load: () => Promise<unknown>, deps: unknown[] = [])
   // Whether the page has been unblocked already, by any route: success,
   // failure, or the slow-load escape hatch.
   const opened = useRef(false);
+  // Stable per-instance id for diagnostics. A fresh id in the log means React
+  // built a new component (a remount); a repeated id means the same component
+  // re-ran its effect (a reload).
+  const gateId = useRef<number>(0);
+  if (gateId.current === 0) gateId.current = ++gateSeq;
+
+  useEffect(() => {
+    dbg(`gate#${gateId.current} MOUNT`);
+    return () => dbg(`gate#${gateId.current} UNMOUNT`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     let live = true;
     const first = !opened.current;
     if (first) { setStatus("loading"); setError(null); }
+    const started = Date.now();
+    dbg(`gate#${gateId.current} load start`, { first });
 
     // The escape hatch. A request that hangs — a proxy swallowing it, a
     // Worker cold-starting badly — must not own the page forever.
@@ -67,6 +85,7 @@ export function useFirstLoad(load: () => Promise<unknown>, deps: unknown[] = [])
       ? setTimeout(() => {
           if (!live) return;
           opened.current = true;
+          dbg(`gate#${gateId.current} SLOW banner shown (still pending after ${SLOW_AFTER_MS}ms)`);
           setStatus("slow");
         }, SLOW_AFTER_MS)
       : undefined;
@@ -75,10 +94,12 @@ export function useFirstLoad(load: () => Promise<unknown>, deps: unknown[] = [])
       .then(() => {
         if (!live) return;
         opened.current = true;
+        dbg(`gate#${gateId.current} load OK in ${Date.now() - started}ms`, { first });
         setStatus("ready");
       })
       .catch((e) => {
         if (!live) return;
+        dbg(`gate#${gateId.current} load FAILED in ${Date.now() - started}ms`, { first, error: String(e) });
         // A failed *reload* must not blank a page that already has content —
         // views surface those through their own banner.
         if (!first) return;
