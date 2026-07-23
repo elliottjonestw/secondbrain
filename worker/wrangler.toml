@@ -146,10 +146,13 @@ ENVIRONMENT = "staging"
 # runs, and the desktop build can't receive one — a user resets on the web and
 # then signs in on the desktop with the new password.
 APP_URL = "https://elliottjonestw.github.io/sekunda-web"
-# Resend's shared sandbox sender. It can only deliver to the address that owns
-# the Resend account, which is enough to test the flow end to end; sending to
-# real users needs a verified domain and this value changed to an address on it.
-EMAIL_FROM = "Sekunda <onboarding@resend.dev>"
+# An address on the mandachinese.com domain, verified in Resend. The Resend
+# free plan allows one verified domain, so staging and production share it —
+# fine, because the address only appears in the From line, not as a routing
+# key. This replaces the sandbox onboarding@resend.dev, which delivers only to
+# the Resend account owner; a verified-domain sender is what lets reset and
+# confirmation mail reach real users.
+EMAIL_FROM = "Sekunda <sekunda@mandachinese.com>"
 # The web build is served from GitHub Pages by .github/workflows/web.yml.
 # Its ORIGIN is the pages host only — no path, no trailing slash — so a
 # project site at .../sekunda-web/ is still just the github.io origin.
@@ -195,7 +198,8 @@ simple = { limit = 3, period = 60 }
 [env.production.vars]
 ENVIRONMENT = "production"
 APP_URL = "https://elliottjonestw.github.io/sekunda-web"
-EMAIL_FROM = "Sekunda <onboarding@resend.dev>"
+# See the staging block: the mandachinese.com sender, verified in Resend.
+EMAIL_FROM = "Sekunda <sekunda@mandachinese.com>"
 # The web build is served from GitHub Pages by .github/workflows/web.yml.
 # Its ORIGIN is the pages host only — no path, no trailing slash — so a
 # project site at .../sekunda-web/ is still just the github.io origin.
