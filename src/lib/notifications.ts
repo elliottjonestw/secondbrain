@@ -12,6 +12,7 @@ import {
 } from "@tauri-apps/plugin-notification";
 import i18next from "i18next";
 import { listReminders, listTodos } from "../db";
+import { isTauri } from "./platform";
 
 const CHECK_INTERVAL_MS = 60_000;
 // Ids we've already notified this session, so we don't nag every minute.
@@ -74,6 +75,10 @@ let timer: number | null = null;
 
 /** Start the background poller. Safe to call once at app startup. */
 export function startReminderPoller(): void {
+  // Native notifications are a Tauri plugin. On the web build its IPC command
+  // doesn't exist, so `isPermissionGranted()` would throw on every tick — an
+  // unhandled rejection each minute, for a feature browsers can't offer anyway.
+  if (!isTauri()) return;
   if (timer !== null) return;
   void checkDue();
   timer = window.setInterval(() => void checkDue(), CHECK_INTERVAL_MS);
