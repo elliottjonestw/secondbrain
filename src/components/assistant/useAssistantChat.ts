@@ -66,7 +66,7 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
   const startingRef = useRef(false);     // startRecording() is in flight
   const stopPendingRef = useRef(false);  // released before recording began
   // AbortController for the in-flight assistant turn, so the user can stop a
-  // runaway model (or a hung Ollama load) instead of waiting on MAX_TOOL_ROUNDS.
+  // runaway model instead of waiting on MAX_TOOL_ROUNDS.
   const abortRef = useRef<AbortController | null>(null);
   // Set while a finished reply is being held back waiting for speech to start.
   // Calling it prints the reply immediately; see deliver().
@@ -249,8 +249,7 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
     if (recRef.current || startingRef.current || loading) return;
     setError(null);
     if (!isRecordingSupported()) { setError(t("assistant.micUnavailable")); return; }
-    // Voice input transcribes via OpenAI (Ollama can't), so it needs an OpenAI
-    // key even when the text assistant is answering through Ollama.
+    // Voice input transcribes via OpenAI, so it needs an OpenAI key.
     if (!hasOpenAiKey()) { setError(t("assistant.voiceNeedsKey")); return; }
     stopSpeaking();
     revealRef.current?.();

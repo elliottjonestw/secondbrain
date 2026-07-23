@@ -8,9 +8,6 @@
 
 import { getCachedSession } from "./authStore";
 
-/** Where the assistant's *text* model runs. Voice/STT is always OpenAI. */
-export type AssistantProvider = "openai" | "ollama";
-
 /** Which text-to-speech engine speaks assistant replies. */
 export type TtsEngine = "openai" | "system";
 
@@ -24,14 +21,8 @@ export function clampSpeechRate(rate: number): number {
 }
 
 export interface AppSettings {
-  /** Which backend answers the text assistant. */
-  assistantProvider: AssistantProvider;
   openaiApiKey: string;
   openaiModel: string;
-  /** Base URL of a local Ollama server (OpenAI-compatible endpoint). */
-  ollamaBaseUrl: string;
-  /** Ollama model tag, e.g. "llama3.1". Must be a tools-capable model. */
-  ollamaModel: string;
   /** Speech-to-text model used for voice input. */
   sttModel: string;
   /**
@@ -212,15 +203,9 @@ function scopedKey(base: string): string {
   return key;
 }
 
-/** Default Ollama address. Only the port is realistically customised. */
-export const DEFAULT_OLLAMA_URL = "http://localhost:11434";
-
 const DEFAULTS: AppSettings = {
-  assistantProvider: "openai",
   openaiApiKey: "",
   openaiModel: "gpt-4o-mini",
-  ollamaBaseUrl: DEFAULT_OLLAMA_URL,
-  ollamaModel: "",
   sttModel: "whisper-1",
   // Natural voices by default — they're the reason this setting exists. Safe as
   // a default even though they're billed: a spoken reply only happens after
@@ -264,20 +249,17 @@ export function saveSettings(patch: Partial<AppSettings>): AppSettings {
 }
 
 /**
- * Is an OpenAI key present? This gates the OpenAI text assistant AND *all* voice
- * transcription — Ollama can't transcribe, so voice input needs an OpenAI key
- * regardless of which provider answers the text assistant.
+ * Is an OpenAI key present? This gates the text assistant AND all voice
+ * transcription — both run on OpenAI.
  */
 export function hasOpenAiKey(): boolean {
   return getSettings().openaiApiKey.trim().length > 0;
 }
 
-/** Is the text assistant usable with the currently selected provider? */
+/** Is the text assistant usable? The assistant runs on OpenAI, so a key is all
+ *  it needs. */
 export function isAssistantConfigured(): boolean {
-  const s = getSettings();
-  return s.assistantProvider === "ollama"
-    ? s.ollamaBaseUrl.trim().length > 0 && s.ollamaModel.trim().length > 0
-    : s.openaiApiKey.trim().length > 0;
+  return hasOpenAiKey();
 }
 
 // ---------------------------------------------------------------------------

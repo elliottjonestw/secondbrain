@@ -39,7 +39,7 @@ import {
   updateEvent as updateCalendarEvent, deleteEvent as deleteCalendarEvent,
   type EventDraft,
 } from "./calendars";
-import { getSettings, DEFAULT_OLLAMA_URL, type AppSettings } from "./settings";
+import { getSettings, type AppSettings } from "./settings";
 // Same live-fetch path the Today card uses, cache included — an assistant
 // question right after that card rendered costs no second request.
 import { getDayWeather, isForecastable, englishCondition } from "./weather";
@@ -1792,50 +1792,15 @@ const SYSTEM_PROMPT =
   "- After making changes, confirm what you did in one short sentence (\"Added lunch with Sam tomorrow at one.\") " +
   "and show the item.";
 
-/**
- * The resolved chat backend for one request.
- *
- * OpenAI uses `/v1/chat/completions`. Ollama has an OpenAI-compatible shim at the
- * same path, but we deliberately use its **native `/api/chat`** instead: the shim
- * gives no way to set the context window, and our system-prompt-plus-tool-schema
- * is ~7k tokens — well over Ollama's 4k default — so the tool definitions get
- * silently truncated and the model answers as a generic chatbot with no tools.
- * Native `/api/chat` takes `options.num_ctx`, which is the whole fix. `callChat`
- * translates our OpenAI-shaped messages to/from native format at the boundary so
- * the agentic loop upstream never has to know the difference.
- */
+/** The resolved chat backend for one request. Always OpenAI's `/v1/chat/completions`. */
 interface ChatEndpoint {
-  provider: AppSettings["assistantProvider"];
   url: string;
-  base?: string; // Ollama server root, for user-facing error text
   headers: Record<string, string>;
   model: string;
 }
 
-// Big enough to hold the ~7k-token system prompt + tool schema with room for a
-// few rounds of (paginated) tool results. On overflow Ollama keeps the system
-// prompt and drops the oldest turns, so this degrades gracefully rather than
-// losing the tools. Larger costs proportionally more memory on the user's box.
-const OLLAMA_NUM_CTX = 8192;
-
-/** Trim a base URL and drop trailing slashes so we can append a path cleanly. */
-function normalizeBaseUrl(url: string, fallback: string): string {
-  return (url.trim().replace(/\/+$/, "") || fallback);
-}
-
 function resolveChatEndpoint(s: AppSettings): ChatEndpoint {
-  if (s.assistantProvider === "ollama") {
-    const base = normalizeBaseUrl(s.ollamaBaseUrl, DEFAULT_OLLAMA_URL);
-    return {
-      provider: "ollama",
-      url: `${base}/api/chat`,
-      base,
-      headers: { "Content-Type": "application/json" },
-      model: s.ollamaModel.trim(),
-    };
-  }
   return {
-    provider: "openai",
     url: "https://api.openai.com/v1/chat/completions",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.openaiApiKey.trim()}` },
     model: s.openaiModel.trim() || "gpt-4o-mini",
@@ -1859,8 +1824,6 @@ async function callChat(
   // a pure tool call, where sampling variety is the problem rather than the point.
   opts: { tools?: unknown; temperature?: number; signal?: AbortSignal } = {},
 ) {
-  if (ep.provider === "ollama") return callOllama(ep, messages, opts);
-
   const tools = toolsFor(opts.tools);
   const res = await fetch(ep.url, {
     method: "POST",
@@ -1882,110 +1845,6 @@ async function callChat(
     throw new Error(i18next.t("errors.assistant", { status: res.status, detail }));
   }
   return res.json();
-}
-
-// --- Ollama native /api/chat --------------------------------------------------
-// Native format differs from OpenAI in three ways we care about: tool-call
-// arguments are objects (not JSON strings), tool calls carry no id, and tool
-// results are matched by `tool_name`/order rather than `tool_call_id`. We
-// translate at the edges and hand the loop back an OpenAI-shaped response.
-
-function safeParseArgs(s: string): unknown {
-  try { return JSON.parse(s || "{}"); } catch { return {}; }
-}
-
-/** OpenAI-shaped message → Ollama native message. */
-function toNativeMessage(m: OAIMessage): Record<string, unknown> {
-  if (m.role === "assistant" && m.tool_calls?.length) {
-    return {
-      role: "assistant",
-      content: m.content ?? "",
-      tool_calls: m.tool_calls.map((tc) => ({
-        function: { name: tc.function.name, arguments: safeParseArgs(tc.function.arguments) },
-      })),
-    };
-  }
-  if (m.role === "tool") {
-    // `tool_name` lets recent Ollama pair the result with its call; older
-    // versions ignore it and match by order, which we preserve anyway.
-    return { role: "tool", content: m.content ?? "", tool_name: m.name ?? "" };
-  }
-  return { role: m.role, content: m.content ?? "" };
-}
-
-/** Ollama native assistant message → OpenAI-shaped `choices[0].message`. */
-function fromNativeMessage(msg: any): OAIMessage {
-  const calls = Array.isArray(msg?.tool_calls) ? msg.tool_calls : [];
-  const tool_calls: ToolCall[] = calls.map((tc: any, i: number) => ({
-    id: `call_${Date.now()}_${i}`,
-    type: "function",
-    function: {
-      name: tc?.function?.name ?? "",
-      // Back to a JSON string so the rest of the loop parses it uniformly.
-      arguments: JSON.stringify(tc?.function?.arguments ?? {}),
-    },
-  }));
-  return {
-    role: "assistant",
-    content: msg?.content ?? null,
-    ...(tool_calls.length ? { tool_calls } : {}),
-  };
-}
-
-async function callOllama(
-  ep: ChatEndpoint,
-  messages: OAIMessage[],
-  opts: { tools?: unknown; temperature?: number; signal?: AbortSignal },
-) {
-  let res: Response;
-  const tools = toolsFor(opts.tools);
-  try {
-    res = await fetch(ep.url, {
-      method: "POST",
-      headers: ep.headers,
-      body: JSON.stringify({
-        model: ep.model,
-        messages: messages.map(toNativeMessage),
-        ...(tools ? { tools } : {}),
-        stream: false,
-        options: { num_ctx: OLLAMA_NUM_CTX, temperature: opts.temperature ?? 0.6 },
-      }),
-      signal: opts.signal,
-    });
-  } catch (e) {
-    // An explicit abort surfaces a DOMException named "AbortError" — let it
-    // through untouched so the caller can tell a cancel apart from a dead server.
-    if ((e as Error)?.name === "AbortError") throw e;
-    // Not running / wrong port: the fetch is rejected outright rather than
-    // returning a status, so name the likely cause instead of a raw error.
-    throw new Error(i18next.t("errors.ollamaUnreachable", { url: ep.base ?? ep.url }));
-  }
-  if (!res.ok) {
-    // A model that can't do tools returns a 400 here ("does not support tools"),
-    // which surfaces as a clear message rather than a silent no-op.
-    let detail = "";
-    try { const err = await res.json(); detail = err?.error ?? JSON.stringify(err); }
-    catch { detail = await res.text(); }
-    throw new Error(i18next.t("errors.assistant", { status: res.status, detail }));
-  }
-  const data = await res.json();
-  return { choices: [{ message: fromNativeMessage(data?.message) }] };
-}
-
-/**
- * List the models a local Ollama server has pulled, for the Settings dropdown.
- * Uses Ollama's native `/api/tags`. Throws on any failure so the UI can show a
- * "can't reach Ollama" state and fall back to a free-text model field.
- */
-export async function listOllamaModels(baseUrl: string): Promise<string[]> {
-  const base = normalizeBaseUrl(baseUrl, DEFAULT_OLLAMA_URL);
-  const res = await fetch(`${base}/api/tags`, { method: "GET" });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  const models: string[] = Array.isArray(data?.models)
-    ? data.models.map((m: { name?: string }) => m?.name).filter((n: unknown): n is string => typeof n === "string")
-    : [];
-  return models;
 }
 
 /** Just the show_items schema, for the recovery round below. */
@@ -2093,7 +1952,7 @@ async function shownItemsNote(items: ItemRef[]): Promise<string> {
 export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}): Promise<string> {
   const settings = getSettings();
   const ep = resolveChatEndpoint(settings);
-  if (!ep.model || (ep.provider === "openai" && !settings.openaiApiKey.trim())) {
+  if (!ep.model || !settings.openaiApiKey.trim()) {
     throw new Error(i18next.t("errors.notConfigured"));
   }
 
@@ -2176,7 +2035,6 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
       } else if (returnedItems(result)) {
         sawItems = true;
       }
-      // `name` is unused by OpenAI but lets the Ollama translator set `tool_name`.
       messages.push({ role: "tool", tool_call_id: call.id, name: call.function.name, content: JSON.stringify(result) });
     }
   }
@@ -2317,7 +2175,7 @@ const DAY_SUMMARY_PROMPT =
 export async function summarizeDay(input: DaySummaryInput, signal?: AbortSignal): Promise<string> {
   const settings = getSettings();
   const ep = resolveChatEndpoint(settings);
-  if (!ep.model || (ep.provider === "openai" && !settings.openaiApiKey.trim())) {
+  if (!ep.model || !settings.openaiApiKey.trim()) {
     throw new Error(i18next.t("errors.notConfigured"));
   }
 

@@ -2,20 +2,18 @@ import { ReactNode, useEffect, useRef, useState } from "react";
 import {
   Eye, EyeOff, Check, CalendarDays, ExternalLink, Loader2, AlertCircle,
   Sparkles, Mic, Languages, Database, Download, Upload, LucideIcon,
-  Cloud, Server, RefreshCw, Trash2, Volume2, MapPin, X, ChevronUp, ChevronDown,
+  Trash2, Volume2, MapPin, X, ChevronUp, ChevronDown,
   UserCog, MailCheck, MailWarning,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   getSettings, saveSettings, getCalendarSettings, saveCalendarSettings,
-  DEFAULT_OLLAMA_URL,
   MIN_SPEECH_RATE, MAX_SPEECH_RATE, clampSpeechRate,
   MIN_SUMMARY_MAX_AGE_HOURS, MAX_SUMMARY_MAX_AGE_HOURS, clampSummaryMaxAge,
-  type AppSettings, type AssistantProvider, type CalDavAccount, type TtsEngine,
+  type AppSettings, type CalDavAccount, type TtsEngine,
   type TemperatureUnit, type WeatherLocation, type StockSymbol,
 } from "../lib/settings";
-import { listOllamaModels } from "../lib/ai";
 import {
   LANGUAGES, SYSTEM_LANGUAGE, changeLanguage, matchSystemLanguage, currentLanguage,
 } from "../lib/i18n";
@@ -66,11 +64,8 @@ export default function SettingsView() {
   // added here too, or Save silently ignores it.
   function save() {
     saveSettings({
-      assistantProvider: draft.assistantProvider,
       openaiApiKey: draft.openaiApiKey.trim(),
       openaiModel: draft.openaiModel.trim() || "gpt-4o-mini",
-      ollamaBaseUrl: draft.ollamaBaseUrl.trim() || DEFAULT_OLLAMA_URL,
-      ollamaModel: draft.ollamaModel.trim(),
       sttModel: draft.sttModel.trim() || "whisper-1",
       ttsEngine: draft.ttsEngine,
       ttsModel: draft.ttsModel.trim() || "gpt-4o-mini-tts",
@@ -547,11 +542,6 @@ function WeatherLocationPicker({
 // ---------------------------------------------------------------------------
 // Assistant
 // ---------------------------------------------------------------------------
-const PROVIDERS: { id: AssistantProvider; labelKey: `settings.assistant.provider${"Openai" | "Ollama"}`; icon: LucideIcon }[] = [
-  { id: "openai", labelKey: "settings.assistant.providerOpenai", icon: Cloud },
-  { id: "ollama", labelKey: "settings.assistant.providerOllama", icon: Server },
-];
-
 function AssistantSettings({ draft, patch, onSave, saved }: PaneProps) {
   const { t } = useTranslation();
   return (
@@ -560,33 +550,7 @@ function AssistantSettings({ draft, patch, onSave, saved }: PaneProps) {
         {t("settings.assistant.description")}
       </PaneHeader>
 
-      {/* Provider selector — which backend answers the text assistant. */}
-      <Field label={t("settings.assistant.provider")} hint={t("settings.assistant.providerHint")}>
-        <div className="grid grid-cols-2 gap-2">
-          {PROVIDERS.map((p) => {
-            const Icon = p.icon;
-            const active = draft.assistantProvider === p.id;
-            return (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => patch({ assistantProvider: p.id })}
-                className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-medium transition ${
-                  active
-                    ? "border-blue-400 bg-blue-50 text-blue-700 dark:border-blue-500 dark:bg-blue-950/40 dark:text-blue-300"
-                    : "border-neutral-200 text-neutral-600 hover:bg-neutral-50 dark:border-neutral-600 dark:text-neutral-300 dark:hover:bg-neutral-800"
-                }`}
-              >
-                <Icon size={16} className="shrink-0" /> {t(p.labelKey)}
-              </button>
-            );
-          })}
-        </div>
-      </Field>
-
-      {draft.assistantProvider === "openai"
-        ? <OpenAiFields draft={draft} patch={patch} />
-        : <OllamaFields draft={draft} patch={patch} />}
+      <OpenAiFields draft={draft} patch={patch} />
 
       <SummaryThrottleFields draft={draft} patch={patch} />
 
@@ -669,104 +633,6 @@ function OpenAiFields({ draft, patch }: Pick<PaneProps, "draft" | "patch">) {
           className={`${INPUT_CLASS} font-mono`}
         />
       </Field>
-    </>
-  );
-}
-
-/**
- * Ollama config. The base URL is probed (`/api/tags`) so the model field can be
- * a dropdown of what's actually pulled, with a live "connected / can't reach"
- * status. If the probe fails the field degrades to free text so a working server
- * on an unusual setup is never blocked by the discovery call.
- */
-function OllamaFields({ draft, patch }: Pick<PaneProps, "draft" | "patch">) {
-  const { t } = useTranslation();
-  const [state, setState] = useState<"loading" | "ok" | "error">("loading");
-  const [models, setModels] = useState<string[]>([]);
-  const [nonce, setNonce] = useState(0); // bump to re-probe on demand
-
-  const url = draft.ollamaBaseUrl.trim() || DEFAULT_OLLAMA_URL;
-  useEffect(() => {
-    let live = true;
-    setState("loading");
-    // Debounce so typing a URL doesn't fire a request per keystroke.
-    const timer = setTimeout(() => {
-      listOllamaModels(url)
-        .then((m) => { if (live) { setModels(m); setState("ok"); } })
-        .catch(() => { if (live) { setModels([]); setState("error"); } });
-    }, 400);
-    return () => { live = false; clearTimeout(timer); };
-  }, [url, nonce]);
-
-  // Keep the saved model visible even if it isn't in the fetched list.
-  const options = draft.ollamaModel && !models.includes(draft.ollamaModel)
-    ? [draft.ollamaModel, ...models]
-    : models;
-
-  return (
-    <>
-      <Field label={t("settings.assistant.baseUrl")} hint={t("settings.assistant.baseUrlHint")}>
-        <div className="flex gap-2">
-          <input
-            value={draft.ollamaBaseUrl}
-            onChange={(e) => patch({ ollamaBaseUrl: e.target.value })}
-            placeholder={DEFAULT_OLLAMA_URL}
-            spellCheck={false}
-            autoComplete="off"
-            className={`${INPUT_CLASS} font-mono`}
-          />
-          <button
-            type="button"
-            onClick={() => setNonce((n) => n + 1)}
-            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-neutral-200 px-3 text-sm text-neutral-600 hover:bg-neutral-50 dark:border-neutral-600 dark:text-neutral-300 dark:hover:bg-neutral-800"
-            aria-label={t("settings.assistant.refresh")}
-          >
-            <RefreshCw size={15} className={state === "loading" ? "animate-spin" : ""} />
-          </button>
-        </div>
-      </Field>
-
-      {/* Connection status. */}
-      <div className="mb-5 -mt-2">
-        {state === "loading" && (
-          <span className="flex items-center gap-1.5 text-xs text-neutral-400">
-            <Loader2 size={13} className="animate-spin" /> {t("settings.assistant.probing")}
-          </span>
-        )}
-        {state === "ok" && (
-          <span className="flex items-center gap-1.5 text-xs text-green-600">
-            <Check size={13} /> {t("settings.assistant.connected", { count: models.length })}
-          </span>
-        )}
-        {state === "error" && (
-          <Notice tone="error">{t("settings.assistant.unreachable", { url })}</Notice>
-        )}
-      </div>
-
-      <Field label={t("settings.assistant.model")} hint={t("settings.assistant.ollamaModelHint")}>
-        {state === "ok" && options.length > 0 ? (
-          <select
-            value={draft.ollamaModel}
-            onChange={(e) => patch({ ollamaModel: e.target.value })}
-            className={`${INPUT_CLASS} font-mono`}
-          >
-            <option value="" disabled>{t("settings.assistant.pickModel")}</option>
-            {options.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
-        ) : (
-          <input
-            value={draft.ollamaModel}
-            onChange={(e) => patch({ ollamaModel: e.target.value })}
-            placeholder="llama3.1"
-            spellCheck={false}
-            className={`${INPUT_CLASS} font-mono`}
-          />
-        )}
-      </Field>
-
-      <div className="mb-5">
-        <Notice tone="info">{t("settings.assistant.toolsNote")}</Notice>
-      </div>
     </>
   );
 }

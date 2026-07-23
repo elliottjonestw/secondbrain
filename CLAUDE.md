@@ -201,7 +201,7 @@ worker/
 src-tauri/
   src/lib.rs                 # plugin wiring ONLY — no database, no migrations
   capabilities/default.json  # http scope: the Worker + api.openai.com + *.icloud.com +
-                             #   *.open-meteo.com + localhost/127.0.0.1 (Ollama, dev
+                             #   *.open-meteo.com + localhost/127.0.0.1 (dev
                              #   Worker). NO blanket `http://*` — it was removed in M5;
                              #   a plaintext-HTTP host now needs an explicit entry.
 ```

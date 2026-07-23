@@ -212,11 +212,9 @@ Connect your iCloud account and your Apple calendars work alongside the built-in
 
 ## AI Assistant
 
-An optional assistant that answers questions about your events, to-dos, reminders, notes, and people — and can also **create, update, link, and delete** them for you. Its text model runs on **either OpenAI (your own API key) or a local Ollama server** — your choice, set per-device.
+An optional assistant that answers questions about your events, to-dos, reminders, notes, and people — and can also **create, update, link, and delete** them for you. Its text model runs on **OpenAI, with your own API key** — configuration stays on-device.
 
-**Setup:** open **Settings → Assistant** (sidebar, bottom) and pick a **provider**:
-- **OpenAI** — paste your `sk-…` key → pick a model (default `gpt-4o-mini`) → Save.
-- **Local (Ollama)** — run `ollama serve`, set the server URL (default `http://localhost:11434`), and pick a model from the auto-discovered list. **A tools-capable model is required** (e.g. `llama3.1`, `qwen2.5`) — the assistant is built entirely on tool calling, so a model without function-calling support can't answer. No key, no billing, fully offline. The app talks to Ollama's **native `/api/chat`** (not its OpenAI-compatible shim) so it can raise `num_ctx` to `8192`: the system prompt plus tool schema is ~7k tokens, over Ollama's 4k default, and on the shim those tools get truncated off silently — the model then replies as a generic chatbot with no idea it has tools.
+**Setup:** open **Settings → Assistant** (sidebar, bottom), paste your `sk-…` key, pick a model (default `gpt-4o-mini`), and Save.
 
 Then open **Assistant** and try:
 - *"What's due next week in Work?"* / *"Which notes mention the Q3 report?"* (read)
@@ -296,7 +294,7 @@ Note the one deliberate cost: while the window is open, **hold-Space-to-talk is 
 
 **Choosing a system voice:** macOS ships a *compact* voice for every language and downloads the good ones on demand, so picking the first voice that matches the language gives you the robotic one even when a far better one is installed. Instead the app **ranks the installed voices** — exact language tag first (a `zh-TW` voice beats a higher-tier `zh-CN` one), then quality tier (Premium → Enhanced → Standard → Compact), with macOS's novelty voices ("Zarvox", "Bad News") excluded since they match `en` like any other. The tier is read from the parenthesised suffix on the voice name, the only signal the Web Speech API exposes. **Settings → Voice** lists the ranked voices per language with a **Preview** button, and defaults to "Best available" — a deliberate option rather than a hidden fallback, so it upgrades itself when you install a better voice. To get one: **System Settings › Accessibility › Spoken Content › System Voice › Manage Voices** (free download; Enhanced/Premium sound dramatically better than the default). Siri voices are *not* exposed to the Web Speech API, so they can't be used here.
 
-- Voice **input** sends audio to OpenAI (billed per minute). Spoken **replies** are billed per character when using natural voices, or free and offline on system voices. Transcription is OpenAI-only, so **voice input needs an OpenAI key even when the text assistant runs on Ollama** — the mic says so rather than failing silently.
+- Voice **input** sends audio to OpenAI (billed per minute). Spoken **replies** are billed per character when using natural voices, or free and offline on system voices. Transcription is OpenAI-only, so **voice input needs an OpenAI key** — the mic says so rather than failing silently.
 - **Voice input requires a packaged build** (`npm run tauri build`), not `tauri dev`. macOS WKWebView only exposes `navigator.mediaDevices` when the running app is recognized as mic-capable, which needs the `NSMicrophoneUsageDescription` from the merged `src-tauri/Info.plist` — present only in a bundled `.app`. In the packaged app, the first voice attempt triggers the system mic prompt. In `tauri dev` the mic button shows a "not available in this environment" error.
 - Recording/transcription/TTS all use standard web APIs (`getUserMedia`/`MediaRecorder`/`speechSynthesis`/`Audio`), so this stays portable to the browser/Windows builds.
 
@@ -304,7 +302,7 @@ Note the one deliberate cost: while the window is open, **hold-Space-to-talk is 
 - The assistant can **create, update, and delete**. Deletion is **permanent and irreversible**, so the system prompt tells the model to look up the exact item first and **confirm which item(s) it will delete** unless you've already named a specific one — and never to delete more than you asked for.
 - The system prompt also instructs the model to look up an item's id before updating it, to **ask a clarifying question when a request is ambiguous** rather than guess, and to briefly **confirm what it created, updated, or deleted** afterwards (in one sentence, with the item shown as a card).
 - Changes appear in the other views the next time you open them (each view reloads its data on navigation).
-- Configuration is stored locally. Requests go via the Rust HTTP plugin, scoped to `api.openai.com`, `*.icloud.com`, and `localhost`/`127.0.0.1` (for Ollama) — so an OpenAI key is sent directly to OpenAI and never leaves the device for a local model.
+- Configuration is stored locally. Requests go via the Rust HTTP plugin, scoped to `api.openai.com`, `*.icloud.com`, and `localhost`/`127.0.0.1` (for the local dev Worker) — so an OpenAI key is sent directly to OpenAI and never leaves the device.
 
 Adding further capabilities later is just more entries in the `TOOLS` array and the `executeTool` switch — the agentic loop already handles multi-tool rounds.
 

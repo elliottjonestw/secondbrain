@@ -48,7 +48,7 @@ export default function DictateButton<T>({ onStart, onResult, onError, className
   async function start() {
     if (recRef.current || startingRef.current || transcribing) return;
     if (!isRecordingSupported()) { onError(t("assistant.micUnavailable")); return; }
-    // Transcription runs on OpenAI even when the assistant is pointed at Ollama.
+    // Transcription runs on OpenAI.
     if (!hasOpenAiKey()) { onError(t("assistant.voiceNeedsKey")); return; }
     startingRef.current = true;
     stopPendingRef.current = false;
