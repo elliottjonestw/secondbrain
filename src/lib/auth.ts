@@ -57,6 +57,10 @@ export async function register(
       kdf_params: DEFAULT_KDF_PARAMS,
       derived_key: derivedKey,
       ...(spaceName ? { space_name: spaceName } : {}),
+      // So the welcome items land on the user's local creation day, not a UTC
+      // one. Works on web and desktop (both run in a webview); only non-browser
+      // API callers omit it and get the UTC fallback.
+      tz_offset: new Date().getTimezoneOffset(),
       // Web only — on desktop the widget never renders, so this is undefined
       // and the Worker skips the check for the tauri:// origin.
       ...(turnstileToken ? { turnstile_token: turnstileToken } : {}),

@@ -127,6 +127,13 @@ export const registerSchema = z.object({
   derived_key: derivedKeySchema,
   /** Optional label for the space created alongside the account. */
   space_name: z.string().trim().min(1).max(100).optional(),
+  /**
+   * The client's `Date.getTimezoneOffset()` (minutes, positive west of UTC).
+   * Lets the server date the welcome items to the user's *local* creation day
+   * rather than a UTC one — the same westward-shift the app guards against
+   * everywhere else. Absent for non-browser callers, which fall back to UTC.
+   */
+  tz_offset: z.number().int().min(-840).max(840).optional(),
   turnstile_token: turnstileTokenSchema,
 });
 

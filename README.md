@@ -308,6 +308,14 @@ Note the one deliberate cost: while the window is open, **hold-Space-to-talk is 
 
 Adding further capabilities later is just more entries in the `TOOLS` array and the `executeTool` switch — the agentic loop already handles multi-tool rounds.
 
+## What a new account starts with
+
+Registering creates the space, the two default to-do lists (**Personal**, **Work**) and four pieces of welcome content, all in **one atomic D1 batch** — a half-populated account is not a state that can exist. The seed is a "Connect Apple Calendar" to-do (filed under Personal, with a one-line pointer to Settings → Calendars), a "Tell everyone about Sekunda" reminder, a pinned "How Sekunda works" note that introduces the sections and the assistant, and an all-day "Organize my life" calendar event. Everything is dated to the day the account was created, so the new user's first Today page has something on it rather than being empty. All four are ordinary rows — delete them like anything else.
+
+"The day the account was created" means the user's **local** day, not a UTC one. The Worker has no timezone, so `register` carries an optional `tz_offset` (the client's `Date.getTimezoneOffset()`); without it — a non-browser API caller — the seed falls back to UTC. This is the same westward date-shift the rest of the app guards against: UTC midnight is the *previous* day for everyone west of Greenwich, which would have put the welcome items on a day the user never saw. Timed items are seeded at local noon so they read as today without arriving already overdue, and the all-day event stores local midnight as a UTC instant, exactly as `EventForm` does. See `worker/src/db/onboarding.ts`; the statements are appended to `createUserWithSpace`'s batch rather than issued separately.
+
+Known limitation: the seed text is **English only**. It is written server-side at registration, and registration doesn't carry a UI language — so a user who registers with the app in Chinese still gets English welcome items. Translating it means sending the language with `register` and keeping the copy in the Worker.
+
 ## Demo data (easter egg)
 
 Hold **Shift + 8 + 9** together anywhere in the app to open a "Load demo data?" prompt. Confirming **permanently deletes all current data** and seeds a realistic, cross-linked sample dataset (events, recurring events, to-dos with subtasks, reminders, notes, people with birthdays/custom fields, tags, and links — including people attached to events and tasks) — handy for exploring the app. Your API key is **not** affected (it lives in `localStorage`). See `src/lib/demo.ts`.

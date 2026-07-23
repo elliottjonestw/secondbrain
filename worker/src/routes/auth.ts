@@ -49,6 +49,7 @@ import {
   listMemberships,
   type UserRow,
 } from "../db/users";
+import { seedWelcomeStatements } from "../db/onboarding";
 import {
   applyNewPassword,
   consumeEmailVerification,
@@ -185,6 +186,9 @@ auth.post("/auth/register", async (c) => {
     email_verified_at: null,
   };
 
+  // The Personal list's id is captured so the welcome to-do can be filed under
+  // it in the same batch.
+  const personalListId = crypto.randomUUID();
   await createUserWithSpace(
     c.env.DB,
     {
@@ -200,9 +204,15 @@ auth.post("/auth/register", async (c) => {
       now: user.created_at,
     },
     [
-      { id: crypto.randomUUID(), name: "Personal", color: "#3b82f6" },
+      { id: personalListId, name: "Personal", color: "#3b82f6" },
       { id: crypto.randomUUID(), name: "Work", color: "#ef4444" },
     ],
+    seedWelcomeStatements(c.env.DB, {
+      spaceId,
+      listId: personalListId,
+      now: user.created_at,
+      tzOffsetMinutes: body.tz_offset ?? 0,
+    }),
   );
 
   // Confirmation mail is fire-and-forget, after the response is decided.
