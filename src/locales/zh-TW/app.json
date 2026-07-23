@@ -621,6 +621,10 @@
     "resetSignedOutEverywhere": "所有裝置皆已登出。請使用新密碼重新登入。",
     "verifying": "正在確認你的電子郵件地址…",
     "verifyDone": "電子郵件地址已確認。",
-    "verifyOnRegisterNote": "我們會寄送確認連結到這個地址。忘記密碼時需要靠它重設，請使用你收得到信的地址。"
+    "verifyOnRegisterNote": "我們會寄送確認連結到這個地址。你必須先點擊連結才能登入，請使用你收得到信的地址。",
+    "verifyPendingTitle": "確認你的電子郵件",
+    "verifyPendingBody": "我們已將確認連結寄到 {{email}}。請點擊連結後再登入。地址確認前將無法登入。",
+    "resendVerification": "重新寄送確認信",
+    "verificationResent": "已寄出 — 請查看收件匣（以及垃圾郵件匣）。"
   }
 }

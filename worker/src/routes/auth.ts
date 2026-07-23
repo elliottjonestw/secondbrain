@@ -9,10 +9,12 @@ import {
   normalizeKey,
   refreshSchema,
   registerSchema,
+  resendVerificationSchema,
   resetPasswordSchema,
   verifyEmailSchema,
   type KdfChallenge,
   type KdfParams,
+  type RegisterResult,
   type Session,
   type TokenPair,
 } from "@secondbrain/shared";
@@ -195,12 +197,16 @@ auth.post("/auth/register", async (c) => {
   );
 
   // Confirmation mail is fire-and-forget, after the response is decided.
-  // Registration must not fail because Resend is down or unconfigured — the
-  // account is already usable, verification is a prompt in Settings, and there
-  // is a "resend" button for exactly this case.
+  // Registration must not fail because Resend had a blip: the account exists,
+  // and if the mail never arrives the user hits "resend" from the sign-in
+  // screen (the public resend endpoint below). Failing registration on a
+  // transient mail error would strand an account that was successfully created.
   c.executionCtx.waitUntil(sendVerification(c.env, user).catch(() => {}));
 
-  return c.json<TokenPair>(await issueTokens(c.env, user, null), 201);
+  // No tokens. A confirmed address is required to sign in (see /auth/login), so
+  // logging the user in here would be a hole straight through that gate. The
+  // client shows "check your inbox" and routes to sign-in.
+  return c.json<RegisterResult>({ email: user.email, verification_required: true }, 201);
 });
 
 /** Mint a verification token and mail it. Throws; every caller decides whether
@@ -241,7 +247,23 @@ auth.post("/auth/login", async (c) => {
     throw unauthorized("That email or password is incorrect.");
   }
 
+  // The password was right, so the failed-attempt count is cleared before any
+  // further decision — an unconfirmed address is not a bad credential and must
+  // not count toward a lockout.
   await clearBucket(c.env.DB, emailBucket(emailNorm));
+
+  // The gate. A correct password is not enough; the address must be confirmed.
+  // This is reachable only by someone who already knows the password (i.e. the
+  // account's owner), so it reveals verification state to nobody else and is
+  // not an enumeration oracle. The distinct code is what lets the client offer
+  // a resend instead of showing "wrong password".
+  if (!user.email_verified_at) {
+    throw new ApiError(
+      "email_unverified",
+      "Confirm your email address before signing in — check your inbox for the link.",
+    );
+  }
+
   return c.json<TokenPair>(
     await issueTokens(c.env, user, body.device_label ?? null),
   );
@@ -399,8 +421,49 @@ auth.post("/auth/email/verify", async (c) => {
   return c.body(null, 204);
 });
 
+/**
+ * Ask for another confirmation link WITHOUT signing in.
+ *
+ * This is the escape hatch for the login gate: a user who never confirmed
+ * can't sign in, so the resend they need can't sit behind auth. It is
+ * therefore oracle-safe in exactly the way `/auth/password/forgot` is — one
+ * response for a confirmed address, an unconfirmed one, and one with no
+ * account — and rate-limited on the same mail budget. An already-confirmed
+ * address is a silent no-op: no mail, same response.
+ */
+const VERIFY_SENT = {
+  message: "If that address needs confirming, a new link is on its way.",
+} as const;
+
+auth.post("/auth/email/verify/resend", async (c) => {
+  const { email } = resendVerificationSchema.parse(await c.req.json());
+  const emailNorm = normalizeEmail(email);
+
+  const limitMessage = "Too many requests. Wait a minute and try again.";
+  await enforceRateLimit(c.env.EMAIL_LIMIT, `verify-email:${emailNorm}`, limitMessage);
+  await enforceRateLimit(c.env.EMAIL_LIMIT, `verify-ip:${clientIp(c.req.raw)}`, limitMessage);
+
+  const user = await findUserByEmail(c.env.DB, emailNorm);
+  if (user && !user.email_verified_at) {
+    try {
+      await sendVerification(c.env, user);
+    } catch (err) {
+      // Same discipline as forgot: log without the address, since a mail
+      // failure here must not become an existence signal or a logged PII line.
+      console.error("verification resend mail failed", {
+        requestId: c.get("requestId"),
+        configured: !(err instanceof EmailNotConfigured),
+      });
+    }
+  }
+
+  return c.json(VERIFY_SENT);
+});
+
 /** Send another link to the signed-in account's own address. Authenticated,
- *  so this cannot be used to mail anyone who has not asked for it. */
+ *  so this cannot be used to mail anyone who has not asked for it. Retained for
+ *  completeness; with the login gate in place a signed-in user is already
+ *  confirmed, so this is effectively a no-op in the current UI. */
 auth.post("/auth/email/verify/send", requireAuth(), async (c) => {
   const user = await findUserById(c.env.DB, c.get("userId"));
   if (!user) throw unauthorized("Account no longer exists.");

@@ -623,6 +623,10 @@
     "resetSignedOutEverywhere": "Every device has been signed out. Sign in again with your new password.",
     "verifying": "Confirming your email address…",
     "verifyDone": "Email address confirmed.",
-    "verifyOnRegisterNote": "We'll email a link to confirm this address. It's how a forgotten password gets reset, so use one you can reach."
+    "verifyOnRegisterNote": "We'll email a link to confirm this address. You'll need to click it before you can sign in, so use one you can reach.",
+    "verifyPendingTitle": "Confirm your email",
+    "verifyPendingBody": "We've sent a confirmation link to {{email}}. Click it, then sign in. You can't sign in until your address is confirmed.",
+    "resendVerification": "Resend confirmation email",
+    "verificationResent": "Sent — check your inbox (and your spam folder)."
   }
 }

@@ -178,6 +178,17 @@ export const verifyEmailSchema = z.object({
 });
 
 /**
+ * Ask for another confirmation link, WITHOUT a session.
+ *
+ * Needed because verification is now a precondition for signing in: a user who
+ * hasn't confirmed can't log in, so the resend can't sit behind auth. It
+ * therefore has to be oracle-safe exactly like `/auth/password/forgot` —
+ * identical response for a confirmed address, an unconfirmed one, and one with
+ * no account at all.
+ */
+export const resendVerificationSchema = z.object({ email: emailSchema });
+
+/**
  * Delete the caller's account. Re-authentication, not just a valid session:
  * an access token can be fifteen minutes old and sitting on an unlocked
  * laptop, and this is the one irreversible operation in the API.
@@ -193,7 +204,21 @@ export type KdfChallengeRequest = z.infer<typeof kdfChallengeSchema>;
 export type ForgotPasswordRequest = z.infer<typeof forgotPasswordSchema>;
 export type ResetPasswordRequest = z.infer<typeof resetPasswordSchema>;
 export type VerifyEmailRequest = z.infer<typeof verifyEmailSchema>;
+export type ResendVerificationRequest = z.infer<typeof resendVerificationSchema>;
 export type DeleteAccountRequest = z.infer<typeof deleteAccountSchema>;
+
+/**
+ * What registration returns now.
+ *
+ * NOT a `TokenPair`: since a confirmed address is required to sign in,
+ * registration no longer logs anyone in — doing so would be a hole straight
+ * through the gate. The client shows a "check your inbox" state and sends the
+ * user to sign in once they've clicked the link.
+ */
+export interface RegisterResult {
+  email: string;
+  verification_required: true;
+}
 
 /** What register / login / refresh all return. */
 export interface TokenPair {

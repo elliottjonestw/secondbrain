@@ -1,9 +1,9 @@
 import { useState, type FormEvent } from "react";
-import { Brain, Loader2 } from "lucide-react";
+import { Brain, Loader2, MailCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Session } from "@secondbrain/shared";
 import { Button } from "../components/ui";
-import { login, register, requestPasswordReset } from "../lib/auth";
+import { login, register, requestPasswordReset, resendVerification } from "../lib/auth";
 import { ApiError, OfflineError } from "../lib/api";
 
 /** Mirrors the server's floor. Enforced here only — the server never receives
@@ -25,6 +25,11 @@ export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => v
   // identically so this form can't be used to test an email list, and showing
   // anything more specific here would hand back the answer it withheld.
   const [resetSent, setResetSent] = useState(false);
+  // The address awaiting confirmation, set after registering or when a login is
+  // refused for an unconfirmed address. While set, the form is replaced by a
+  // "check your inbox" panel — a confirmed email is required to sign in, so
+  // there is nothing else useful to do until the link is clicked.
+  const [pendingVerify, setPendingVerify] = useState<string | null>(null);
 
   const isRegister = mode === "register";
   const isForgot = mode === "forgot";
@@ -35,6 +40,7 @@ export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => v
     setPassword("");
     setConfirm("");
     setResetSent(false);
+    setPendingVerify(null);
   }
 
   async function submit(e: FormEvent) {
@@ -71,18 +77,31 @@ export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => v
     try {
       // Both paths run argon2id in here, which takes real time on purpose —
       // hence the pending state rather than an optimistic transition.
-      const session = isRegister
-        ? await register(email, password)
-        : await login(email, password, deviceLabel());
-      onSignedIn(session);
+      if (isRegister) {
+        // Registration no longer signs in: a confirmed email is required, so
+        // it lands on the "check your inbox" panel instead.
+        await register(email, password);
+        setPendingVerify(email);
+        setBusy(false);
+        return;
+      }
+      onSignedIn(await login(email, password, deviceLabel()));
     } catch (err) {
-      if (err instanceof OfflineError) setError(t("auth.offline"));
+      // A correct password for an unconfirmed address isn't an error to show in
+      // red — it's the same "check your inbox" state, reached from sign-in.
+      if (err instanceof ApiError && err.code === "email_unverified") {
+        setPendingVerify(email);
+      } else if (err instanceof OfflineError) setError(t("auth.offline"));
       else if (err instanceof ApiError) setError(err.message);
       else setError(t("auth.genericError"));
       setBusy(false);
     }
-    // No setBusy(false) on success: the gate swaps this view out, and clearing
-    // it first flashes an enabled button on a screen that is going away.
+    // No setBusy(false) on the login success path: the gate swaps this view out,
+    // and clearing it first flashes an enabled button on a screen that's going.
+  }
+
+  if (pendingVerify) {
+    return <VerifyPending email={pendingVerify} onBack={() => switchMode("login")} />;
   }
 
   return (
@@ -217,6 +236,77 @@ export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => v
             </button>
           </p>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Shown after registering, or when sign-in is refused for an unconfirmed
+ * address. A confirmed email is required to get in, so the only actions are
+ * "resend the link" and "back to sign in" (to try again once it's clicked).
+ */
+function VerifyPending({ email, onBack }: { email: string; onBack: () => void }) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function resend() {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await resendVerification(email);
+      setSent(true);
+    } catch (err) {
+      if (err instanceof OfflineError) setError(t("auth.offline"));
+      else if (err instanceof ApiError) setError(err.message);
+      else setError(t("auth.genericError"));
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="flex h-full items-center justify-center bg-neutral-50 p-6 dark:bg-neutral-900">
+      <div className="w-full max-w-sm">
+        <div className="mb-8 flex flex-col items-center gap-2 text-center">
+          <MailCheck size={36} className="text-blue-600" />
+          <h1 className="text-xl font-bold">{t("auth.verifyPendingTitle")}</h1>
+          <p className="text-sm leading-relaxed text-neutral-500">
+            {t("auth.verifyPendingBody", { email })}
+          </p>
+        </div>
+
+        {sent ? (
+          <p className="rounded-lg bg-neutral-100 px-3 py-2 text-center text-sm text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+            {t("auth.verificationResent")}
+          </p>
+        ) : (
+          <Button variant="primary" disabled={busy} className="w-full !py-2" onClick={() => void resend()}>
+            <span className="flex items-center justify-center gap-2">
+              {busy && <Loader2 size={15} className="animate-spin" />}
+              {busy ? t("auth.working") : t("auth.resendVerification")}
+            </span>
+          </Button>
+        )}
+
+        {error && (
+          <p role="alert" className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/30 dark:text-red-300">
+            {error}
+          </p>
+        )}
+
+        <p className="mt-5 text-center text-sm">
+          <button
+            type="button"
+            onClick={onBack}
+            disabled={busy}
+            className="font-medium text-blue-600 hover:underline disabled:opacity-50"
+          >
+            {t("auth.backToSignIn")}
+          </button>
+        </p>
       </div>
     </div>
   );

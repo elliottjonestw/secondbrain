@@ -1,6 +1,7 @@
 import {
   normalizeEmail,
   type KdfChallenge,
+  type RegisterResult,
   type Session,
   type TokenPair,
 } from "@secondbrain/shared";
@@ -30,15 +31,23 @@ function adopt(tokens: TokenPair): Session {
   return tokens.session;
 }
 
+/**
+ * Create an account. Does NOT sign in.
+ *
+ * A confirmed email is required to log in, so registration deliberately returns
+ * no session — the caller shows a "check your inbox" state and routes to
+ * sign-in once the link is clicked. Returning tokens here would be a hole
+ * straight through that gate.
+ */
 export async function register(
   email: string,
   password: string,
   spaceName?: string,
-): Promise<Session> {
+): Promise<RegisterResult> {
   const kdfSalt = newKdfSalt();
   const derivedKey = await deriveKey(password, kdfSalt, DEFAULT_KDF_PARAMS);
 
-  const tokens = await apiRequest<TokenPair>("/v1/auth/register", {
+  return apiRequest<RegisterResult>("/v1/auth/register", {
     method: "POST",
     anonymous: true,
     body: {
@@ -49,8 +58,22 @@ export async function register(
       ...(spaceName ? { space_name: spaceName } : {}),
     },
   });
+}
 
-  return adopt(tokens);
+/**
+ * Ask for another confirmation link without signing in.
+ *
+ * Used from the sign-in screen when a login is refused for an unconfirmed
+ * address, and after registration. Resolves the same way for every address —
+ * the server answers identically whether or not one exists or is already
+ * confirmed — so the UI must only ever say "check your inbox".
+ */
+export async function resendVerification(email: string): Promise<void> {
+  await apiRequest<{ message: string }>("/v1/auth/email/verify/resend", {
+    method: "POST",
+    anonymous: true,
+    body: { email: email.trim() },
+  });
 }
 
 export async function login(
@@ -133,11 +156,6 @@ export async function verifyEmail(token: string): Promise<void> {
     anonymous: true,
     body: { token },
   });
-}
-
-/** Send another confirmation link to the signed-in account's own address. */
-export async function resendVerification(): Promise<void> {
-  await apiRequest<void>("/v1/auth/email/verify/send", { method: "POST" });
 }
 
 /**

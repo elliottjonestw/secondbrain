@@ -14,6 +14,7 @@ export const ERROR_CODES = [
   "conflict",          // uniqueness violation (duplicate list/tag name)
   "precondition",      // ETag / If-Match mismatch — a genuine concurrent edit
   "rate_limited",
+  "email_unverified",  // correct password, but the address isn't confirmed yet
   "internal",
 ] as const;
 
@@ -43,5 +44,9 @@ export const HTTP_STATUS: Record<ErrorCode, number> = {
   conflict: 409,
   precondition: 412,
   rate_limited: 429,
+  // 403, not 401: the credentials were correct. The client branches on the
+  // code, not the status, to show "confirm your email" with a resend button
+  // rather than the ordinary "wrong password".
+  email_unverified: 403,
   internal: 500,
 };

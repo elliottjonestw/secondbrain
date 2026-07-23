@@ -1238,9 +1238,10 @@ function AccountSettings() {
   async function doResend() {
     setError("");
     setStatus("");
+    if (!session) return;
     setBusy("verify");
     try {
-      await resendVerification();
+      await resendVerification(session.user.email);
       setStatus(t("settings.account.verificationSent"));
     } catch (e) {
       setError(messageFor(e, t("auth.offline")));

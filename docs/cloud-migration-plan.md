@@ -419,10 +419,28 @@ and cannot extend it. Closing that window means a session lookup per request or
 a revocation list in KV — not judged worth it, but a known bound rather than an
 oversight.
 
-Email confirmation ships alongside and is deliberately **not** a login
-precondition: it arrived after accounts existed, so enforcing it would have
-locked out every earlier user, and the property it buys (the address can
-receive mail) is only needed at reset time, which tests the mailbox directly.
+Email confirmation ships alongside. It was **initially** not a login
+precondition — it arrived after accounts existed, so enforcing it would have
+locked out every earlier user. Once every live account was confirmed, that
+constraint lifted and confirmation became **required to sign in** (a later,
+deliberate change):
+
+- Registration no longer issues tokens. It creates the account, mails a link,
+  and returns `{ verification_required: true }`; the client shows "check your
+  inbox" and routes to sign-in. Auto-login here would be a hole straight
+  through the gate.
+- Login checks `email_verified_at` only *after* the password verifies, and
+  refuses an unconfirmed account with a distinct `email_unverified` code. That
+  path is reachable only by someone who already knows the password, so it
+  reveals confirmation state to nobody else — it is not an enumeration oracle.
+- The resend endpoint had to become **public** (`/auth/email/verify/resend`),
+  because a user who can't sign in can't reach an authenticated one. It is
+  oracle-safe and rate-limited exactly like `/auth/password/forgot`.
+
+The coupling this introduces, worth stating: **the gate and the mailer are now
+one system.** With no `RESEND_API_KEY` set, confirmation mail never sends and
+no new account can ever sign in. On an environment with real users that is a
+hard dependency, not a degraded-but-working state.
 
 ### 5.7 Client-side gate
 
