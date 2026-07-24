@@ -83,7 +83,7 @@ export default function SettingsView() {
   function save() {
     setOpenAiKey(apiKey);
     saveSettings({
-      openaiModel: draft.openaiModel.trim() || "gpt-4o-mini",
+      openaiModel: draft.openaiModel.trim() || "gpt-5-nano",
       sttModel: draft.sttModel.trim() || "whisper-1",
       ttsEngine: draft.ttsEngine,
       ttsModel: draft.ttsModel.trim() || "gpt-4o-mini-tts",

@@ -292,7 +292,7 @@ export function scopedKey(base: string): string {
 }
 
 const DEFAULTS: AppSettings = {
-  openaiModel: "gpt-4o-mini",
+  openaiModel: "gpt-5-nano",
   sttModel: "whisper-1",
   // Natural voices by default — they're the reason this setting exists. Safe as
   // a default even though they're billed: a spoken reply only happens after

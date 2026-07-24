@@ -1903,7 +1903,7 @@ function resolveChatEndpoint(s: AppSettings): ChatEndpoint {
   return {
     url: "https://api.openai.com/v1/chat/completions",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${getOpenAiKey()}` },
-    model: s.openaiModel.trim() || "gpt-4o-mini",
+    model: s.openaiModel.trim() || "gpt-5-nano",
   };
 }
 
@@ -1923,6 +1923,11 @@ function toolsFor(tools: unknown): unknown[] | null {
  * and a hard 400 on every turn is what the model dropdown would otherwise ship.
  * The cost is that the card-recovery round can't cool to 0 on those models; it
  * still narrows the toolset, which is the load-bearing half.
+ *
+ * Note this is now the *default* path, since the default model is gpt-5-nano:
+ * the 0.6 below is what a gpt-4* model gets, not what most turns run at. If
+ * replies start reading stiff, that's the reason — fix it in the prompt's
+ * "How to answer" block, which governs tone on every model.
  */
 function supportsTemperature(model: string): boolean {
   return !/^gpt-5/.test(model.trim());
