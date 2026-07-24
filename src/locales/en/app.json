@@ -275,6 +275,19 @@
       "defaultCalendar": "Default calendar",
       "defaultHint": "New events land here when you don't pick a calendar — including events the assistant creates. The built-in {{calendar}} calendar is the only one that works offline."
     },
+    "vault": {
+      "lockedTitle": "Stored encrypted",
+      "locked": "This is encrypted on this device. Enter your account password once to view and edit it.",
+      "unlock": "Unlock",
+      "unlockTitle": "Unlock stored keys",
+      "unlockHint": "Enter your account password to decrypt the keys stored on this device. This is not sent anywhere — it unlocks them locally.",
+      "password": "Password",
+      "unlocking": "Unlocking…",
+      "wrongPassword": "That password didn't work. Try again.",
+      "cancel": "Cancel",
+      "lockedBanner": "A key saved before this security update is still stored unencrypted on this device. It will be cleared when you sign out. Re-enter it here to store it encrypted instead.",
+      "clearedBanner": "Your saved keys were cleared because the account password changed. Re-enter them here."
+    },
     "data": {
       "title": "Data",
       "description": "Back up everything the app holds for you to a single file, or restore from one. Your OpenAI key and iCloud account are excluded — they stay on this device only.",

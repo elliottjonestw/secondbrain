@@ -16,6 +16,52 @@ import { CLOUD_SETTING_KEYS, type CloudSettingKey } from "@secondbrain/shared";
 import { getCachedSession, getCurrentSpaceId } from "./authStore";
 import { apiRequest } from "./api";
 import type { ThemePreference } from "./theme";
+import {
+  decryptSecret,
+  encryptSecret,
+  isLegacySecret,
+  newVaultSalt,
+  onVaultChange,
+  setWriteCheck,
+  unlockedForUid,
+  VAULT_CHECK_KEY,
+  VAULT_SALT_KEY,
+} from "./vault";
+
+// ---------------------------------------------------------------------------
+// Secret-bearing fields and their at-rest encryption.
+//
+// Two AppSettings/CalDavAccount fields are secrets: `openaiApiKey` and
+// `account.appPassword`. They are encrypted with AES-256-GCM before they touch
+// localStorage, using a key derived from the account password (see vault.ts).
+//
+// The hard constraint is that `getSettings()` is synchronous and called from
+// render paths everywhere, while WebCrypto is async. The bridge is a decrypted
+// in-memory cache: `refreshSecretCache()` runs once at unlock and decrypts both
+// secrets into plain module variables, which `getSettings()` then reads. Locked,
+// both read back as "" — and because the assistant/voice/calendar all gate on a
+// non-empty key, they simply disable themselves with no call-site changes.
+//
+// The signed-out (anon) bucket has no password to derive from, so it stays
+// plaintext by design. That path is single-local-user; if you would rather
+// require a sign-in to use these features, the branch is the `!uid` check in
+// `secretRead`/`secretWrite` below.
+// ---------------------------------------------------------------------------
+
+/** Decrypted plaintext, held only while the vault is unlocked. Cleared on lock
+ *  and never persisted — the ciphertext on disk is the durable copy. */
+let openaiApiKeyPlain = "";
+let appPasswordPlain = "";
+
+/** Track legacy plaintext separately so the UI can warn about it without
+ *  confusing "locked" with "needs migration". Set by refreshSecretCache. */
+let openaiApiKeyIsLegacy = false;
+let appPasswordIsLegacy = false;
+
+/** The most recent plaintext queued for async encryption. Used to drop stale
+ *  encrypt resolves so rapid saves can't clobber a newer value on disk. */
+let pendingOpenAiKeyPlain = "";
+let pendingAppPasswordPlain = "";
 
 /** Which text-to-speech engine speaks assistant replies. */
 export type TtsEngine = "openai" | "system";
@@ -221,11 +267,13 @@ export interface WeatherLocation {
  * screen shows the default language rather than the last user's: a preference
  * is not worth leaking which account was last used on a shared machine.
  *
- * **This is isolation, not secrecy.** Everything here is still plaintext in
- * localStorage, readable from devtools by anyone at the keyboard and by any
- * XSS on the origin. The real fix for the two secret-bearing values is the OS
- * keychain (see the note in `authStore.ts`), and on the web build it is not to
- * hold them at all.
+ * The two secret-bearing values (`openaiApiKey`, the iCloud `appPassword`) are
+ * NOT stored as plaintext: they are AES-256-GCM encrypted with a key derived
+ * from the account password, so only ciphertext sits on disk and a server/DB
+ * breach can't read them. See the vault helpers below and `vault.ts`. While the
+ * vault is locked — a fresh launch before the password is entered — both read
+ * back as empty, which is what gates the assistant/voice/calendar off. The
+ * signed-out (`anon`) bucket stays plaintext: it has no password to derive from.
  */
 const KEY = "secondbrain.settings";
 
@@ -293,24 +341,220 @@ const DEFAULTS: AppSettings = {
   summaryMaxAgeHours: 6,
 };
 
-export function getSettings(): AppSettings {
+// ---------------------------------------------------------------------------
+// The stored bucket, with envelopes intact. getSettings()/saveSettings() hide
+// the encryption from every other caller; these internals are where ciphertext
+// is actually handled.
+// ---------------------------------------------------------------------------
+
+/** The object on disk: AppSettings fields plus the private vault metadata. The
+ *  public AppSettings type never includes the `__vault*` keys, so they can't
+ *  leak out through a normal getSettings() call. */
+type StoredBucket = AppSettings & {
+  [VAULT_SALT_KEY]?: string;
+  [VAULT_CHECK_KEY]?: string;
+};
+
+/** Read the raw bucket WITHOUT substituting decrypted secrets. Internal only —
+ *  every public read goes through getSettings(), which swaps the envelope for
+ *  plaintext-from-cache. */
+function readRawBucket(): StoredBucket {
   try {
     const raw = localStorage.getItem(scopedKey(KEY));
     if (!raw) return { ...DEFAULTS };
-    return { ...DEFAULTS, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULTS, ...parsed };
   } catch {
     return { ...DEFAULTS };
   }
 }
 
+/** Write the raw bucket directly. Bypasses saveSettings' cloud push, because the
+ *  vault metadata and ciphertext are never cloud-eligible. */
+function writeRawBucket(bucket: StoredBucket): void {
+  localStorage.setItem(scopedKey(KEY), JSON.stringify(bucket));
+}
+
+/** The salt for the CURRENT account's vault, creating one on first touch. */
+export function ensureVaultSalt(): string {
+  const uid = currentUserId();
+  // Signed-out: no vault. Returns a throwaway so unlockVault's deriveKey has a
+  // salt to consume, but the anon path never actually calls this.
+  if (!uid) return newVaultSalt();
+  const bucket = readRawBucket();
+  if (bucket[VAULT_SALT_KEY]) return bucket[VAULT_SALT_KEY]!;
+  const salt = newVaultSalt();
+  writeRawBucket({ ...bucket, [VAULT_SALT_KEY]: salt });
+  return salt;
+}
+
+/** The current account's vault-check envelope, or null if none written yet. */
+export function readVaultCheck(): string | null {
+  return readRawBucket()[VAULT_CHECK_KEY] ?? null;
+}
+
+/**
+ * Wipe the secret envelopes AND the vault check/salt for the current account.
+ *
+ * Used after a password reset: the salt changes, so the old derivation no
+ * longer applies and the ciphertext is permanently undecryptable. Leaving it
+ * would mean the next unlock (under the new password) can never read it — better
+ * to clear it and let the user re-enter. Also clears the in-memory cache so a
+ * locked state is immediate.
+ */
+export function clearSecretEnvelopes(): void {
+  // Invalidate any in-flight encrypt so a late resolve can't rewrite a value
+  // this function just cleared.
+  pendingOpenAiKeyPlain = "";
+  pendingAppPasswordPlain = "";
+  const bucket = readRawBucket();
+  const { [VAULT_SALT_KEY]: _s, [VAULT_CHECK_KEY]: _c, openaiApiKey: _k, ...rest } = bucket;
+  writeRawBucket({ ...rest, openaiApiKey: "" });
+  // Calendar password lives in its own bucket.
+  const calRaw = localStorage.getItem(scopedKey(CAL_KEY));
+  if (calRaw) {
+    try {
+      const cal = JSON.parse(calRaw) as CalendarSettings;
+      if (cal.account) writeRawCalendarSettings({ ...cal, account: { ...cal.account, appPassword: "" } });
+    } catch {
+      /* leave as-is */
+    }
+  }
+  clearSecretCache();
+}
+
+// vault.ts calls back into here to persist the check probe it writes on first
+// unlock. Registered once at module load to avoid a circular import.
+setWriteCheck(async (envelope: string) => {
+  const bucket = readRawBucket();
+  writeRawBucket({ ...bucket, [VAULT_CHECK_KEY]: envelope });
+});
+
+/**
+ * Repopulate the in-memory plaintext cache from whatever is on disk.
+ *
+ * Called by auth at unlock (the key is fresh) and on any sign-in. Three cases
+ * per secret:
+ *  - empty                  → cache "", not legacy
+ *  - vault envelope         → decrypt to cache (or "" if the vault is locked)
+ *  - legacy plaintext       → cache the plaintext so the feature still works,
+ *                             and flag it so the UI can prompt for re-entry
+ *
+ * Legacy plaintext is deliberately NOT re-encrypted here: the plan was to
+ * surface it, not silently migrate it, so the user knows an old key is still on
+ * the device and chooses to re-enter it.
+ */
+export async function refreshSecretCache(): Promise<void> {
+  const bucket = readRawBucket();
+  const rawKey = bucket.openaiApiKey ?? "";
+  const rawPass = readRawCalendarAccount()?.appPassword ?? "";
+
+  // OpenAI key
+  if (rawKey === "") {
+    openaiApiKeyPlain = "";
+    openaiApiKeyIsLegacy = false;
+  } else if (isLegacySecret(rawKey)) {
+    openaiApiKeyPlain = rawKey;
+    openaiApiKeyIsLegacy = true;
+  } else {
+    openaiApiKeyPlain = (await decryptSecret(rawKey)) ?? "";
+    openaiApiKeyIsLegacy = false;
+  }
+
+  // iCloud app password
+  if (rawPass === "") {
+    appPasswordPlain = "";
+    appPasswordIsLegacy = false;
+  } else if (isLegacySecret(rawPass)) {
+    appPasswordPlain = rawPass;
+    appPasswordIsLegacy = true;
+  } else {
+    appPasswordPlain = (await decryptSecret(rawPass)) ?? "";
+    appPasswordIsLegacy = false;
+  }
+}
+
+/** True if either secret on disk is still plaintext from before the vault. Drives
+ *  the Settings "re-enter your key" banner. */
+export function hasLegacyPlaintextSecret(): boolean {
+  return openaiApiKeyIsLegacy || appPasswordIsLegacy;
+}
+
+/** The decrypted OpenAI key, or "" when locked. The synchronous read the
+ *  assistant/voice code needs. */
+export function getOpenAiKey(): string {
+  return openaiApiKeyPlain.trim();
+}
+
+/** Clear the in-memory cache (not the ciphertext). Called on lock/logout. Also
+ *  invalidates pending encrypts so a late resolve can't write a value back to
+ *  disk after the key that encrypted it is gone. */
+function clearSecretCache(): void {
+  pendingOpenAiKeyPlain = "";
+  pendingAppPasswordPlain = "";
+  openaiApiKeyPlain = "";
+  appPasswordPlain = "";
+  openaiApiKeyIsLegacy = false;
+  appPasswordIsLegacy = false;
+}
+
+// Locking the vault wipes the cache. Subscribe once at load.
+onVaultChange(() => {
+  // The listener also fires on unlock; refreshSecretCache handles that path
+  // explicitly, so only react to losing the key here.
+  if (!unlockedForUid()) clearSecretCache();
+});
+
+export function getSettings(): AppSettings {
+  const bucket = readRawBucket();
+  // Strip the private vault keys so they never escape this module.
+  const { [VAULT_SALT_KEY]: _salt, [VAULT_CHECK_KEY]: _check, ...publicFields } = bucket;
+  // Substitute the decrypted (or empty-when-locked) secret for the envelope.
+  return { ...publicFields, openaiApiKey: openaiApiKeyPlain };
+}
+
 export function saveSettings(patch: Partial<AppSettings>): AppSettings {
-  const next = { ...getSettings(), ...patch };
-  localStorage.setItem(scopedKey(KEY), JSON.stringify(next));
+  const bucket = readRawBucket();
+  let next: StoredBucket = { ...bucket, ...patch };
+
+  // A secret in the patch arrives as plaintext from the UI. Encrypt it to an
+  // envelope before it touches disk — but only while unlocked. Locked, the UI
+  // can't offer the field, so this branch is unreachable in practice; the guard
+  // is here so a stray call degrades safely (value kept in cache only).
+  if ("openaiApiKey" in patch) {
+    const plain = patch.openaiApiKey ?? "";
+    openaiApiKeyPlain = plain;
+    openaiApiKeyIsLegacy = false;
+    if (unlockedForUid()) {
+      // Synchronous save can't await encryptSecret. Re-encrypt asynchronously:
+      // the cache holds the plaintext immediately so getSettings() is correct,
+      // and the ciphertext lands on disk a tick later. Until then the field is
+      // absent from the raw bucket, which reads back as "" — acceptable because
+      // the in-memory cache is the source of truth while unlocked.
+      //
+      // Track the latest plaintext so that if several saves fire before an
+      // encrypt resolves (rapid typing), only the most recent one writes — a
+      // stale resolve that would clobber a newer value is detected and dropped.
+      pendingOpenAiKeyPlain = plain;
+      void encryptSecret(plain).then((envelope) => {
+        if (pendingOpenAiKeyPlain !== plain) return; // a newer save superseded this
+        const fresh = readRawBucket();
+        writeRawBucket({ ...fresh, openaiApiKey: envelope });
+      });
+      const { openaiApiKey: _drop, ...rest } = patch;
+      next = { ...bucket, ...rest };
+    } else {
+      // Locked or anon: store as-is (plaintext for anon, which is by design).
+      next = { ...bucket, ...patch };
+    }
+  }
+
+  writeRawBucket(next);
   // Anything on the cloud allowlist also goes to the server, in the background.
   // Local storage is written first and unconditionally, so a failed or offline
-  // push costs the user nothing they can see.
+  // push costs the user nothing they can see. Secrets are never cloud-eligible.
   pushCloudSettings(pickCloud(patch));
-  return next;
+  return getSettings();
 }
 
 // ---------------------------------------------------------------------------
@@ -521,10 +765,11 @@ function notifyCloudSettingsApplied(): void {
 
 /**
  * Is an OpenAI key present? This gates the text assistant AND all voice
- * transcription — both run on OpenAI.
+ * transcription — both run on OpenAI. Reads the decrypted cache, so a locked
+ * vault (fresh launch, pre-password) correctly disables both.
  */
 export function hasOpenAiKey(): boolean {
-  return getSettings().openaiApiKey.trim().length > 0;
+  return getOpenAiKey().length > 0;
 }
 
 /** Is the text assistant usable? The assistant runs on OpenAI, so a key is all
@@ -538,10 +783,10 @@ export function isAssistantConfigured(): boolean {
 //
 // Which calendars exist, which are visible, and which is the default is
 // *configuration*, not calendar data — and remote events are never stored in
-// SQLite — so all of it lives here in localStorage rather than in the DB. Same
-// trade-off as the OpenAI key: the app-specific password is stored in plain
-// text on this device. Kept under its own key so the shape can grow without
-// disturbing AppSettings.
+// SQLite — so all of it lives here in localStorage rather than in the DB. The
+// app-specific password is a secret and is vault-encrypted like the OpenAI key:
+// ciphertext on disk, plaintext only in the in-memory cache while unlocked.
+// Kept under its own key so the shape can grow without disturbing AppSettings.
 // ---------------------------------------------------------------------------
 
 /** A calendar collection discovered on a CalDAV server. */
@@ -578,24 +823,86 @@ const CAL_DEFAULTS: CalendarSettings = {
   defaultCalendarId: "local",
 };
 
+/** Read the raw calendar account WITHOUT substituting the decrypted password.
+ *  Internal — refreshSecretCache uses it to find what's on disk. */
+function readRawCalendarAccount(): CalDavAccount | null {
+  try {
+    const raw = localStorage.getItem(scopedKey(CAL_KEY));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CalendarSettings;
+    return parsed.account ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function getCalendarSettings(): CalendarSettings {
   try {
     const raw = localStorage.getItem(scopedKey(CAL_KEY));
     if (!raw) return { ...CAL_DEFAULTS };
-    return { ...CAL_DEFAULTS, ...JSON.parse(raw) };
+    const parsed = { ...CAL_DEFAULTS, ...JSON.parse(raw) } as CalendarSettings;
+    // Swap the on-disk envelope for the decrypted (or empty-when-locked) value.
+    if (parsed.account) {
+      parsed.account = { ...parsed.account, appPassword: appPasswordPlain };
+    }
+    return parsed;
   } catch {
     return { ...CAL_DEFAULTS };
   }
 }
 
 export function saveCalendarSettings(patch: Partial<CalendarSettings>): CalendarSettings {
-  const next = { ...getCalendarSettings(), ...patch };
-  localStorage.setItem(scopedKey(CAL_KEY), JSON.stringify(next));
+  const current = getCalendarSettings();
+  let next: CalendarSettings = { ...current, ...patch };
+
+  // A patched account arrives with a plaintext password from the UI. Encrypt it
+  // to an envelope on disk when unlocked; mirror saveSettings' async-write
+  // pattern. The cache is the immediate source of truth.
+  if (patch.account && unlockedForUid()) {
+    const plain = patch.account.appPassword ?? "";
+    appPasswordPlain = plain;
+    appPasswordIsLegacy = false;
+    // Write the account with the password blanked NOW: the plaintext must never
+    // touch disk. The envelope lands a tick later; until then the in-memory
+    // cache (read by getCalendarSettings) carries the real value.
+    const { appPassword: _pw, ...accountWithoutPw } = patch.account;
+    next = { ...current, account: { ...accountWithoutPw, appPassword: "" } };
+    localStorage.setItem(scopedKey(CAL_KEY), JSON.stringify(next));
+    // Track the latest plaintext so a stale encrypt resolve can't clobber a
+    // newer value (rapid reconnect/retype).
+    pendingAppPasswordPlain = plain;
+    void encryptSecret(plain).then((envelope) => {
+      if (pendingAppPasswordPlain !== plain) return; // superseded by a newer save
+      const fresh = readRawCalendarSettings();
+      if (fresh.account) {
+        writeRawCalendarSettings({ ...fresh, account: { ...fresh.account, appPassword: envelope } });
+      }
+    });
+  } else {
+    // Locked or anon: store as-is.
+    localStorage.setItem(scopedKey(CAL_KEY), JSON.stringify(next));
+  }
   return next;
 }
 
+/** Read the raw calendar settings (with envelopes intact) without substituting
+ *  the decrypted password. Internal — used by the async encrypt path. */
+function readRawCalendarSettings(): CalendarSettings {
+  try {
+    const raw = localStorage.getItem(scopedKey(CAL_KEY));
+    if (!raw) return { ...CAL_DEFAULTS };
+    return { ...CAL_DEFAULTS, ...JSON.parse(raw) } as CalendarSettings;
+  } catch {
+    return { ...CAL_DEFAULTS };
+  }
+}
+
+function writeRawCalendarSettings(settings: CalendarSettings): void {
+  localStorage.setItem(scopedKey(CAL_KEY), JSON.stringify(settings));
+}
+
 /** Replace the stored calendar list for the connected account (e.g. after a
- * visibility toggle or a re-discovery). No-op when nothing is connected. */
+ *  visibility toggle or a re-discovery). No-op when nothing is connected. */
 export function saveAccountCalendars(calendars: CalDavCalendar[]): CalendarSettings {
   const s = getCalendarSettings();
   if (!s.account) return s;

@@ -8,12 +8,14 @@ const host = process.env.TAURI_DEV_HOST;
  * The built app's Content-Security-Policy, injected into `dist/index.html`.
  *
  * It exists because of where the web build runs. `github.io` is a public origin
- * shared with every other project site, and the app keeps the OpenAI key, the
- * iCloud app-specific password and the refresh token in `localStorage` there —
- * so any script execution on that origin is a total compromise of the account
- * and of the user's Apple credentials. GitHub Pages cannot set response
- * headers, which leaves a `<meta http-equiv>` as the only way to say any of
- * this.
+ * shared with every other project site, and the app keeps the refresh token (and,
+ * while unlocked, the OpenAI key and iCloud app password) reachable from
+ * `localStorage` there — so any script execution on that origin is a total
+ * compromise of the account and of the user's Apple credentials. The secrets are
+ * now AES-encrypted at rest (see `src/lib/vault.ts`), but that only buys time
+ * against an attacker who has already run code; the CSP is what stops them
+ * running it. GitHub Pages cannot set response headers, which leaves a
+ * `<meta http-equiv>` as the only way to say any of this.
  *
  * Injected at BUILD time rather than written into index.html, for two reasons:
  * the dev server needs `eval` and an HMR websocket that a shipped build must

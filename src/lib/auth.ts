@@ -16,6 +16,8 @@ import {
   setCachedSession,
   setRefreshToken,
 } from "./authStore";
+import { isVaultUnlocked, restoreSessionKey, unlockVault } from "./vault";
+import { ensureVaultSalt, readVaultCheck, refreshSecretCache, clearSecretEnvelopes } from "./settings";
 
 /**
  * Account operations, in terms the UI can use.
@@ -29,6 +31,69 @@ function adopt(tokens: TokenPair): Session {
   setRefreshToken(tokens.refresh_token);
   setCachedSession(tokens.session);
   return tokens.session;
+}
+
+/**
+ * Derive the vault key for an account from its password and populate the
+ * decrypted secret cache.
+ *
+ * `ensureVaultSalt`/`readVaultCheck` come from settings.ts because the salt and
+ * check probe live in the per-account settings bucket — vault.ts owns the crypto
+ * but not that storage layout. On success, refreshSecretCache() pulls the now-
+ * decryptable OpenAI key and iCloud password into memory so getSettings() sees
+ * them without awaiting anything.
+ *
+ * Special case: a password reset (done offline from an email link) mints a new
+ * server-side salt, so the LOCAL vault's salt is now stale and the check probe
+ * won't verify even with the correct password. But we only get here AFTER a
+ * successful `/v1/auth/login`, which means the password is definitely right — so
+ * a check-probe failure here can only mean "this device's vault predates a
+ * reset." In that one case we clear the undecryptable envelopes and seed a fresh
+ * vault under the new password, rather than leaving the user locked out.
+ *
+ * IMPORTANT: this reset-recovery is ONLY safe because the password has already
+ * been verified by the server. The manual `unlock()` path (below) must NOT use
+ * it: there, a failed check probe genuinely means "wrong password typed," and
+ * running recovery would wipe real secrets on a typo.
+ */
+async function unlockVaultAfterLogin(uid: string, password: string): Promise<boolean> {
+  const hadCheck = readVaultCheck() !== null;
+  const ok = await unlockVault(password, uid, ensureVaultSalt, readVaultCheck());
+  if (ok) {
+    await refreshSecretCache();
+    return true;
+  }
+  if (hadCheck) {
+    // Stale vault from before a reset (the only way to reach here with a valid
+    // login). Wipe and re-initialize fresh.
+    clearSecretEnvelopes();
+    const fresh = await unlockVault(password, uid, ensureVaultSalt, null);
+    if (fresh) await refreshSecretCache();
+    return fresh;
+  }
+  return false;
+}
+
+/**
+ * Unlock the vault from the Settings "enter password" prompt.
+ *
+ * Needed for the cold-launch path: `restoreSession` signs the user back in via
+ * the refresh token with no password in hand, so the AES key isn't re-derived
+ * and the secrets stay locked until the user proves the password once. Returns
+ * false on a wrong password (the GCM check probe fails to verify) so the UI can
+ * show the error without surfacing a crypto detail.
+ *
+ * Does NOT do reset-recovery: the password here has not been verified by the
+ * server, so a failed probe is "wrong password," not "stale vault." Treating a
+ * typo as a reset would wipe the user's real secrets — see unlockVaultAfterLogin
+ * for why that recovery belongs only on the post-login path.
+ */
+export async function unlock(password: string): Promise<boolean> {
+  const uid = getCachedSession()?.user?.id;
+  if (!uid) return false;
+  const ok = await unlockVault(password, uid, ensureVaultSalt, readVaultCheck());
+  if (ok) await refreshSecretCache();
+  return ok;
 }
 
 /**
@@ -112,7 +177,12 @@ export async function login(
     },
   });
 
-  return adopt(tokens);
+  const session = adopt(tokens);
+  // Derive the vault key from the same password we just authenticated with —
+  // this is the one moment the plaintext is in hand, so the secrets decrypt
+  // immediately and the user never sees a locked state right after sign-in.
+  await unlockVaultAfterLogin(session.user.id, password);
+  return session;
 }
 
 /**
@@ -233,6 +303,13 @@ export async function restoreSession(): Promise<Session | null> {
   try {
     const session = await apiRequest<Session>("/v1/auth/me");
     setCachedSession(session);
+    // Cold launch can't derive the vault key (no password), but if this is a
+    // same-tab reload the key may still be in sessionStorage. Rebuild it and, if
+    // it survived, decrypt the secrets so the session comes back fully usable
+    // without a password prompt. A browser restart wipes sessionStorage, so the
+    // truly-cold path stays locked until the user re-enters the password once.
+    await restoreSessionKey();
+    if (isVaultUnlocked()) await refreshSecretCache();
     return session;
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
@@ -241,6 +318,8 @@ export async function restoreSession(): Promise<Session | null> {
     }
     // Offline, or the server is down. Trust the cache rather than throwing the
     // user back to a login screen they cannot complete without a network.
+    await restoreSessionKey();
+    if (isVaultUnlocked()) await refreshSecretCache();
     return getCachedSession();
   }
 }

@@ -1,4 +1,5 @@
 import type { Session } from "@secondbrain/shared";
+import { lockVault } from "./vault";
 
 /**
  * Where the session lives on this device.
@@ -74,10 +75,16 @@ export function getCurrentSpaceId(): string | null {
   return getCachedSession()?.spaces[0]?.space_id ?? null;
 }
 
-/** Wipe every trace of the session on this device. */
+/** Wipe every trace of the session on this device.
+ *
+ *  This is the single chokepoint for session invalidation (logout, deleted
+ *  account, rejected refresh token, recovery flows), so it also locks the vault:
+ *  dropping the AES key and the decrypted secret cache. The ciphertext on disk
+ *  is untouched and will decrypt again on the next successful sign-in. */
 export function clearAuth(): void {
   accessToken = null;
   accessExpiresAt = 0;
   localStorage.removeItem(REFRESH_KEY);
   localStorage.removeItem(SESSION_KEY);
+  lockVault();
 }
