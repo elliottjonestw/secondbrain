@@ -288,6 +288,7 @@
       "account": "iCloud account",
       "connected": "Connected",
       "appleId": "Apple ID",
+      "appleIdHint": "Use your @icloud.com address here, even if you sign in to Apple with a different one — iCloud Mail won't accept a Gmail or Outlook Apple ID, though Calendar will.",
       "appPassword": "App-specific password",
       "passwordHint": "Your regular Apple password won't work with two-factor authentication. Create an app-specific password under Sign-In and Security, then paste it here.",
       "reuseCalendarPassword": "Use the same password as Calendars",

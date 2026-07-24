@@ -1521,6 +1521,13 @@ function MailSettingsPane() {
               autoComplete="off"
               className={INPUT_CLASS}
             />
+            {/* The one rule that differs from the calendar pane, so it is said
+                where it is needed: CalDAV authenticates any address on the
+                Apple ID, IMAP wants the @icloud.com one. Identical credentials
+                otherwise, which is exactly what makes the failure confusing. */}
+            <p className="mt-1.5 text-xs leading-relaxed text-neutral-400">
+              {t("settings.mail.appleIdHint")}
+            </p>
           </div>
           <div>
             <label className="mb-1.5 block text-sm font-medium">{t("settings.mail.appPassword")}</label>

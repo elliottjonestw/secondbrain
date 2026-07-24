@@ -640,6 +640,28 @@ async fn run_op(conn: &mut Conn, op: &MailOp) -> Result<OpResult, String> {
     }
 }
 
+/// What to say when LOGIN fails.
+///
+/// The server's own text is KEPT. An earlier version collapsed every failure
+/// here into "check your app-specific password", which was wrong twice over: it
+/// mislabelled transport and framing errors as a bad password, and it threw away
+/// the one line that says what actually happened
+/// (`[AUTHENTICATIONFAILED]`, `[UNAVAILABLE]`, `[ALERT] …`). Apple's refusal
+/// text describes the attempt, never the credential, so it is safe to show.
+///
+/// The username hint is here because it is the difference that catches people:
+/// CalDAV accepts any address on the Apple ID, and iCloud Mail does not — an
+/// account whose Apple ID is a Gmail or Outlook address must sign in to IMAP
+/// with its @icloud.com alias. Same credentials, same server, different rule.
+fn login_error(detail: &str) -> String {
+    format!(
+        "Apple rejected the sign-in: {}. Two things to check: the password must be an app-specific \
+         password, not your Apple ID password; and the username must be your @icloud.com address — \
+         iCloud Mail does not accept a non-Apple Apple ID here even though Calendar does.",
+        detail.trim()
+    )
+}
+
 async fn connect_and_run(op: MailOp) -> Result<OpResult, String> {
     let creds = op.credentials();
     // The allowlist. Everything else in this file assumes it has already run.
@@ -667,7 +689,7 @@ async fn connect_and_run(op: MailOp) -> Result<OpResult, String> {
         return Err("The mail server refused the connection.".to_string());
     }
 
-    if conn
+    if let Err(detail) = conn
         .command(&[
             Arg::Text("LOGIN ".into()),
             astring(&creds.user),
@@ -675,14 +697,8 @@ async fn connect_and_run(op: MailOp) -> Result<OpResult, String> {
             astring(&creds.pass),
         ])
         .await
-        .is_err()
     {
-        // Rewritten rather than passed through: the server's wording is about a
-        // protocol, and the user's actual problem is always the same one.
-        return Err(
-            "Sign-in was rejected. Check your Apple ID and make sure the password is an app-specific password."
-                .to_string(),
-        );
+        return Err(login_error(&detail));
     }
 
     let result = run_op(&mut conn, &op).await;

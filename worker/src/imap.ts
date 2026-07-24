@@ -436,13 +436,14 @@ export async function runImapOp(op: MailOp): Promise<MailOpResult> {
         try {
           await conn.command(["LOGIN ", astring(op.user), " ", astring(op.pass)]);
         } catch (e) {
-          // Rewritten rather than passed through: the server's own wording is
-          // about a protocol, and the user's actual problem is always the same
-          // one — an Apple ID password where an app-specific one is required.
+          // The server's own text is KEPT — see `login_error` in
+          // src-tauri/src/mail.rs for why swallowing it was a mistake. Apple's
+          // refusal describes the attempt, never the credential.
           throw new ImapError(
-            e instanceof ImapError && /\[ALERT\]|WEBLOGIN/i.test(e.message)
-              ? "Apple rejected the sign-in. Make sure the password is an app-specific password, not your Apple ID password."
-              : "Sign-in was rejected. Check your Apple ID and make sure the password is an app-specific password.",
+            `Apple rejected the sign-in: ${e instanceof Error ? e.message : "no reason given"}. ` +
+            "Two things to check: the password must be an app-specific password, not your Apple ID " +
+            "password; and the username must be your @icloud.com address — iCloud Mail does not accept " +
+            "a non-Apple Apple ID here even though Calendar does.",
             "auth",
           );
         }

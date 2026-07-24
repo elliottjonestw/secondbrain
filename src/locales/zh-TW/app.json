@@ -286,6 +286,7 @@
       "account": "iCloud 帳戶",
       "connected": "已連接",
       "appleId": "Apple ID",
+      "appleIdHint": "請在此使用你的 @icloud.com 電子郵件地址，即使你的 Apple ID 是其他地址 —— iCloud 郵件不接受 Gmail 或 Outlook 的 Apple ID，但行事曆可以。",
       "appPassword": "App 專用密碼",
       "passwordHint": "若已啟用雙重認證，一般的 Apple 密碼將無法使用。請在「登入與安全性」中建立 App 專用密碼，再貼到這裡。",
       "reuseCalendarPassword": "使用與行事曆相同的密碼",
