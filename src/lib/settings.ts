@@ -37,26 +37,35 @@ export function clampSpeechRate(rate: number): number {
 }
 
 /**
- * The models offered for the assistant, cheapest first.
+ * The models offered for the assistant, cheapest first (verified against the
+ * OpenAI catalog and pricing pages, July 2026).
  *
  * Membership is not "every model OpenAI sells" — it's every model that can run
- * *this* assistant, which means chat-completions with function calling, since
- * `ai.ts` is a tool-calling loop and a model without tools would answer every
- * question by making the answer up. Prices aren't shown: they move, and a stale
- * number in the UI is worse than none.
+ * *this* assistant, which means Chat Completions **with function calling**,
+ * since `ai.ts` is a tool-calling loop and a model without tools would answer
+ * every question by making the answer up. That same requirement is why the list
+ * is all gpt-5-lineage: the models that can search the web *natively* on Chat
+ * Completions (the `-search` models behind the `web_search` tool) are exactly
+ * the ones that CANNOT do function calling, so they can never be the assistant's
+ * own model — web search reaches every model here through the delegated tool
+ * instead (see `WEB_SEARCH_MODEL` in `ai.ts`). Prices aren't shown: they move,
+ * and a stale number in the UI is worse than none. One entry per price point —
+ * two models at an identical price is just noise in a dropdown.
  *
- * The gpt-5 family only accepts the default `temperature`, so `callChat` omits
- * the field for those — see `supportsTemperature`.
+ * Every model here begins with "gpt-5", and that whole lineage accepts only the
+ * default `temperature`, so `callChat` omits the field for all of them — see
+ * `supportsTemperature`. The 0.6 default there now only applies to a gpt-4 id
+ * typed in by hand.
  */
 export const OPENAI_MODELS = [
-  "gpt-5-nano",
-  "gpt-4.1-nano",
-  "gpt-4o-mini",
-  "gpt-5-mini",
-  "gpt-4.1-mini",
-  "gpt-5",
-  "gpt-4.1",
-  "gpt-4o",
+  "gpt-5-nano",     // $0.05 / $0.40
+  "gpt-5.4-nano",   // $0.20 / $1.25
+  "gpt-5-mini",     // $0.25 / $2.00
+  "gpt-5.4-mini",   // $0.75 / $4.50
+  "gpt-5.6-luna",   // $1.00 / $6.00
+  "gpt-5",          // $1.25 / $10.00
+  "gpt-5.6-terra",  // $2.50 / $15.00
+  "gpt-5.6-sol",    // $5.00 / $30.00
 ] as const;
 
 export interface AppSettings {
