@@ -20,6 +20,10 @@ import type { AppEnv } from "../env";
  *    response can't be embedded and clickjacked.
  *  - `Referrer-Policy: no-referrer` stops our own URLs — which contain space
  *    and item ids — reaching anywhere the user navigates next.
+ *  - `Strict-Transport-Security` pins HTTPS for six months. Workers are always
+ *    served over TLS, so this is defense-in-depth: on a first visit (or behind a
+ *    transparent proxy that strips the scheme) it stops an active MITM
+ *    downgrading the login `derived_key` — a password-equivalent — on the wire.
  *
  * They are set AFTER `next()` so they land on error responses too. The one
  * thing to be careful of is CORS: this must never overwrite what the cors
@@ -37,5 +41,6 @@ export function securityHeaders(): MiddlewareHandler<AppEnv> {
     c.header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
     c.header("Cross-Origin-Resource-Policy", "cross-origin");
     c.header("Permissions-Policy", "geolocation=(), camera=(), microphone=()");
+    c.header("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
   };
 }
