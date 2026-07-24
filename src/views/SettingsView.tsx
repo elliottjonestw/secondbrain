@@ -4,7 +4,6 @@ import {
   Sparkles, Mic, Languages, Database, Download, Upload, LucideIcon,
   Trash2, Volume2, MapPin, X, ChevronUp, ChevronDown,
   UserCog, MailCheck, MailWarning, LayoutGrid, Rss,
-  Lock, KeyRound,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -35,12 +34,10 @@ import { invalidateCache, listCalendars, setCalendarVisible, LOCAL_CALENDAR_NAME
 import { LOCAL_CALENDAR_ID } from "../types";
 import { exportBackup, importBackup } from "../lib/backup";
 import { clearAllData, newId } from "../db";
-import { deleteAccount, resendVerification, unlock } from "../lib/auth";
+import { deleteAccount, resendVerification } from "../lib/auth";
 import { getCachedSession } from "../lib/authStore";
 import { ApiError, OfflineError } from "../lib/api";
 import { Button } from "../components/ui";
-import { isVaultUnlocked, onVaultChange } from "../lib/vault";
-import { hasLegacyPlaintextSecret } from "../lib/settings";
 
 const APPLE_PASSWORD_URL = "https://account.apple.com/account/manage";
 
@@ -66,17 +63,6 @@ export default function SettingsView() {
   const [draft, setDraft] = useState<AppSettings>(initial);
   const [saved, setSaved] = useState(false);
   const patch = (p: Partial<AppSettings>) => setDraft((d) => ({ ...d, ...p }));
-
-  // The OpenAI key in the draft seeds from getSettings() at mount, which reads
-  // "" while the vault is locked. When the user unlocks, pull the now-decrypted
-  // key into the draft so the field populates without re-mounting.
-  const vaultTick = useVaultTick();
-  useEffect(() => {
-    if (isVaultUnlocked()) {
-      setDraft((d) => ({ ...d, openaiApiKey: getSettings().openaiApiKey || d.openaiApiKey }));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vaultTick]);
 
   // Field by field, not `saveSettings(draft)`: the draft is a whole AppSettings,
   // so spreading it would let this button write back the General pane's values
@@ -233,128 +219,6 @@ function Notice({ tone, children }: { tone: "error" | "info"; children: ReactNod
       <span>{children}</span>
     </p>
   );
-}
-
-// ---------------------------------------------------------------------------
-// The secrets vault, surfaced in Settings.
-//
-// Two AppSettings/CalDavAccount fields are encrypted at rest (see lib/vault.ts).
-// When the vault is locked — a fresh launch before the password is entered —
-// their plaintext isn't available, so the field can't be shown or edited. This
-// renders a "locked" placeholder with an Unlock affordance instead of an empty
-// input that would look like the key is gone. Unlocked, the real field renders.
-//
-// The signed-out (anon) path has no vault, so those users skip this entirely
-// and edit plaintext as before — gated by the same `signedIn` check below.
-// ---------------------------------------------------------------------------
-
-/** Re-render on lock/unlock. The value is the tick counter; callers read
- *  `isVaultUnlocked()` directly. Lives once so every secret field shares one
- *  subscription rather than each opening a listener. */
-function useVaultTick(): number {
-  const [tick, setTick] = useState(0);
-  useEffect(() => onVaultChange(() => setTick((t) => t + 1)), []);
-  return tick;
-}
-
-/** True when a real, signed-in account is active. The anon bucket stores
- *  plaintext by design, so its fields never need a locked state. */
-function useSignedIn(): boolean {
-  return !!getCachedSession()?.user?.id;
-}
-
-/** A self-contained modal that calls `unlock(password)` from lib/auth. On
- *  success the vault change fires, listeners re-render, and the field flips to
- *  its editable state without the dialog needing to know about it. */
-function UnlockDialog({ onClose }: { onClose: () => void }) {
-  const { t } = useTranslation();
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(false);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError(false);
-    const ok = await unlock(password);
-    setBusy(false);
-    if (ok) onClose();
-    else setError(true);
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={submit}
-        className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl dark:bg-neutral-800"
-      >
-        <div className="mb-4 flex items-center gap-2">
-          <KeyRound size={18} className="text-blue-500" />
-          <h3 className="text-base font-semibold">{t("settings.vault.unlockTitle")}</h3>
-        </div>
-        <p className="mb-4 text-sm leading-relaxed text-neutral-500 dark:text-neutral-400">
-          {t("settings.vault.unlockHint")}
-        </p>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => { setPassword(e.target.value); setError(false); }}
-          placeholder={t("settings.vault.password")}
-          autoFocus
-          autoComplete="current-password"
-          className={`${INPUT_CLASS} mb-1`}
-        />
-        {error && <p className="mb-3 text-sm text-red-500">{t("settings.vault.wrongPassword")}</p>}
-        <div className="mt-4 flex justify-end gap-2">
-          <Button variant="ghost" type="button" onClick={onClose}>{t("settings.vault.cancel")}</Button>
-          <Button variant="primary" type="submit" disabled={busy || !password}>
-            {busy ? <Loader2 size={16} className="animate-spin" /> : t("settings.vault.unlock")}
-          </Button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-/**
- * Wraps a secret field. While signed in and locked, shows a placeholder that
- * opens the unlock dialog. Otherwise (unlocked, or signed-out) renders the
- * children (the real, editable input). The `legacy` banner is separate.
- */
-function SecretField({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
-  const { t } = useTranslation();
-  useVaultTick(); // re-render on lock/unlock
-  const signedIn = useSignedIn();
-  const [showUnlock, setShowUnlock] = useState(false);
-  const locked = signedIn && !isVaultUnlocked();
-
-  return (
-    <Field label={label} hint={hint}>
-      {locked ? (
-        <div className="flex items-center gap-2">
-          <div className="flex flex-1 items-center gap-2 rounded-lg border border-dashed border-neutral-300 px-3 py-2 text-sm text-neutral-400 dark:border-neutral-600">
-            <Lock size={14} className="shrink-0" />
-            <span>{t("settings.vault.locked")}</span>
-          </div>
-          <Button variant="ghost" type="button" onClick={() => setShowUnlock(true)}>
-            <KeyRound size={14} className="shrink-0" /> {t("settings.vault.unlock")}
-          </Button>
-          {showUnlock && <UnlockDialog onClose={() => setShowUnlock(false)} />}
-        </div>
-      ) : (
-        children
-      )}
-    </Field>
-  );
-}
-
-/** The one-time "old plaintext key is still on this device" banner. Shown in
- *  any pane with a secret field while a legacy value is detected. */
-function LegacySecretBanner() {
-  const { t } = useTranslation();
-  if (!hasLegacyPlaintextSecret()) return null;
-  return <Notice tone="info">{t("settings.vault.lockedBanner")}</Notice>;
 }
 
 interface PaneProps {
@@ -933,8 +797,6 @@ function AssistantSettings({ draft, patch, onSave, saved }: PaneProps) {
         {t("settings.assistant.description")}
       </PaneHeader>
 
-      <LegacySecretBanner />
-
       <OpenAiFields draft={draft} patch={patch} />
 
       <SummaryThrottleFields draft={draft} patch={patch} />
@@ -998,13 +860,13 @@ function OpenAiFields({ draft, patch }: Pick<PaneProps, "draft" | "patch">) {
   const { t } = useTranslation();
   return (
     <>
-      <SecretField label={t("settings.assistant.apiKey")} hint={t("settings.assistant.apiKeyHint")}>
+      <Field label={t("settings.assistant.apiKey")} hint={t("settings.assistant.apiKeyHint")}>
         <SecretInput
           value={draft.openaiApiKey}
           onChange={(v) => patch({ openaiApiKey: v })}
           placeholder="sk-…"
         />
-      </SecretField>
+      </Field>
 
       <Field
         label={t("settings.assistant.model")}
@@ -1284,19 +1146,6 @@ function CalendarSettingsPane() {
   const [, setVersion] = useState(0);
   const refresh = () => setVersion((v) => v + 1);
 
-  // When the vault unlocks, the app password decrypts — pull it into the field.
-  // (Username is non-secret and was already correct.) Without this the field
-  // stays empty after unlock because the useState seed ran while locked.
-  const vaultTick = useVaultTick();
-  useEffect(() => {
-    if (isVaultUnlocked()) {
-      const acct = getCalendarSettings().account;
-      if (acct?.appPassword) setPassword(acct.appPassword);
-    }
-    // vaultTick is the trigger; deps intentionally limited.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vaultTick]);
-
   const settings = getCalendarSettings();
   const connected = !!settings.account;
   const calendars = listCalendars();
@@ -1341,8 +1190,6 @@ function CalendarSettingsPane() {
         {t("settings.calendars.description")}
       </PaneHeader>
 
-      <LegacySecretBanner />
-
       {/* --- Account --------------------------------------------------- */}
       <section className="mb-8 rounded-xl border border-neutral-200 p-5 dark:border-neutral-700">
         <div className="mb-4 flex items-center justify-between gap-3">
@@ -1369,13 +1216,12 @@ function CalendarSettingsPane() {
             />
           </div>
           <div>
-            <SecretField label={t("settings.calendars.appPassword")}>
-              <SecretInput
-                value={password}
-                onChange={setPassword}
-                placeholder="xxxx-xxxx-xxxx-xxxx"
-              />
-            </SecretField>
+            <label className="mb-1.5 block text-sm font-medium">{t("settings.calendars.appPassword")}</label>
+            <SecretInput
+              value={password}
+              onChange={setPassword}
+              placeholder="xxxx-xxxx-xxxx-xxxx"
+            />
           </div>
         </div>
 

@@ -69,17 +69,6 @@ jobs:
 
       - run: npm ci
 
-      # Supply-chain visibility, not a gate. `npm audit` reports known vulns in
-      # the dependency tree to the workflow log. It is deliberately NOT allowed
-      # to fail the build: most advisories are in transitive dev-only packages
-      # that never reach the browser bundle, and a hard gate would block every
-      # deploy on a vuln that often can't be fixed without upstream action. The
-      # point is to see them, then act deliberately. Promote to `|| false` ->
-      # remove the `continue-on-error` if you want it to block.
-      - name: Audit dependencies (informational)
-        continue-on-error: true
-        run: npm audit --omit=dev
-
       # The build gate. `npm run build` is `tsc && vite build`, so a type error
       # fails here rather than publishing a broken bundle — the same
       # check-before-deploy shape worker.yml uses.
