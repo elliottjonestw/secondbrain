@@ -133,18 +133,65 @@ function rowWithLocalTimes<T extends Record<string, any>>(row: T): T {
 
 const WRITE_TABLES = { event: "events", reminder: "reminders", todo: "todos", note: "notes", person: "people" } as const;
 
+/**
+ * The item kinds a delete tool can target. `list` is included even though it is
+ * not an `ItemType` (it cannot be tagged, linked, or shown as a card) because
+ * `delete_list` is still a destructive tool and goes through the same gate.
+ */
+export type DeleteType = ItemType | "list";
+
+/**
+ * A request for the user to approve a destructive delete.
+ *
+ * Carries only identity and a human label — never the item's fields — so the
+ * confirmation card can describe what will be deleted without the assistant
+ * needing to trust model-supplied text. The label is derived from the row the
+ * executor just looked up, not from the tool arguments.
+ */
+export interface ConfirmDeleteRequest {
+  type: DeleteType;
+  id: string;
+  /** Human descriptor: title / summary / full_name / list name. */
+  label: string;
+  /** Optional secondary line, e.g. the calendar name for a connected event. */
+  sub?: string;
+}
+
+/**
+ * Per-turn context threaded into `executeTool`. Today only the delete executors
+ * read it (for the confirmation gate + abort safety); every other tool ignores
+ * it. Kept as one object so adding a future cross-cutting concern doesn't mean
+ * another positional parameter on every executor.
+ */
+export interface ToolContext {
+  signal?: AbortSignal;
+  /**
+   * Ask the user to approve a destructive delete. Resolves true to approve,
+   * false if the user declined. If unset (a headless/non-UI caller) the gate
+   * fails open — preserves today's behaviour rather than deadlocking a caller
+   * that has no UI to confirm against.
+   */
+  onConfirmDelete?: (req: ConfirmDeleteRequest) => Promise<boolean>;
+}
+
 async function getRowById(table: string, id: unknown): Promise<any | null> {
   if (typeof id !== "string" || !id) return null;
   // Every domain is remote now (M2–M4): a local SELECT would hit an empty table
   // and make existence checks (tag/link/update/delete) report "not found" for
   // items that exist. Events go through calendars.ts, which also covers the
   // connected CalDAV calendars, not just the built-in one.
+  //
+  // `lists` has no GET-by-id endpoint, so its existence is resolved from the
+  // fetched list set — same source `listLists()` already uses everywhere else.
+  // Without this case `delete_list` could never find its target (it always
+  // errored "No list found"), and the confirmation gate would never reach it.
   switch (table) {
     case "todos": return (await getTodo(id)) ?? null;
     case "reminders": return (await getReminder(id)) ?? null;
     case "people": return (await getPerson(id)) ?? null;
     case "notes": return (await getNote(id)) ?? null;
     case "events": return (await findEventById(id)) ?? null;
+    case "lists": return (await listLists()).find((l) => l.id === id) ?? null;
     default: return null;
   }
 }
@@ -687,12 +734,14 @@ const TOOLS = [
     },
   },
 
-  // ---- Delete tools. Destructive & irreversible — confirm before using. ----
+  // ---- Delete tools. Destructive & irreversible. Each shows the user a
+  // ---- confirmation card carrying the real item; the delete only runs if they
+  // ---- click Delete. The model cannot bypass this — it is enforced in code.
   {
     type: "function",
     function: {
       name: "delete_todo",
-      description: "Permanently delete a to-do (and its subtasks) by id. Irreversible — look up the item and confirm it's the right one with the user before deleting.",
+      description: "Permanently delete a to-do (and its subtasks) by id. The user must approve a confirmation card before it runs; you don't need to ask separately. Look up the item first so the card shows the right one.",
       parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
     },
   },
@@ -700,7 +749,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "delete_event",
-      description: "Permanently delete a calendar event by id, in any calendar. Deletes the whole event/series. Irreversible — confirm with the user first.",
+      description: "Permanently delete a calendar event by id, in any calendar. Deletes the whole event/series. The user must approve a confirmation card before it runs; you don't need to ask separately.",
       parameters: {
         type: "object",
         properties: {
@@ -715,7 +764,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "delete_reminder",
-      description: "Permanently delete a reminder by id. Irreversible — confirm with the user first.",
+      description: "Permanently delete a reminder by id. The user must approve a confirmation card before it runs; you don't need to ask separately.",
       parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
     },
   },
@@ -723,7 +772,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "delete_note",
-      description: "Permanently delete a note by id. Irreversible — confirm with the user first.",
+      description: "Permanently delete a note by id. The user must approve a confirmation card before it runs; you don't need to ask separately.",
       parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
     },
   },
@@ -731,7 +780,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "delete_person",
-      description: "Permanently delete a contact (person) by id. Also removes their tags and links. Irreversible — confirm with the user first.",
+      description: "Permanently delete a contact (person) by id. Also removes their tags and links. The user must approve a confirmation card before it runs; you don't need to ask separately.",
       parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
     },
   },
@@ -739,7 +788,7 @@ const TOOLS = [
     type: "function",
     function: {
       name: "delete_list",
-      description: "Delete a to-do list by id; its tasks are moved to another list (not deleted). Cannot delete the only remaining list. Confirm with the user first.",
+      description: "Delete a to-do list by id; its tasks are moved to another list (not deleted). Cannot delete the only remaining list. The user must approve a confirmation card before it runs; you don't need to ask separately.",
       parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
     },
   },
@@ -1581,53 +1630,98 @@ async function toolUnlinkItems(args: Record<string, unknown>) {
 }
 
 // ---- Delete executors (destructive; reuse the same db helpers as the UI) ----
-async function toolDeleteTodo(args: Record<string, unknown>) {
+//
+// Every delete is gated by `confirmBeforeDelete`: the executor resolves the row
+// FIRST (so the confirmation card shows a real label, not whatever the model
+// claimed), then awaits the user's decision before touching data. The agentic
+// loop pauses naturally on that await — there is no separate pause mechanism.
+//
+// A user who declines produces `{ denied: true }`, a shape distinct from both
+// `{ ok }` and `{ error }`: it tells the model "the user said no" rather than
+// "the item wasn't found", so the model stops instead of re-searching.
+const DENIED = {
+  denied: true as const,
+  message:
+    "The user declined this deletion in the confirmation card. Do not retry it; " +
+    "acknowledge that they cancelled and ask how they'd like to proceed.",
+};
+
+async function toolDeleteTodo(args: Record<string, unknown>, ctx: ToolContext) {
   const t = await getRowById("todos", args.id);
   if (!t) return { error: `No todo found with id ${args.id}.` };
+  if (!(await confirmBeforeDelete(ctx, "todo", t.id, t.title ?? ""))) return DENIED;
   await deleteTodo(t.id);
   return { ok: true, deleted: { type: "todo", id: t.id, title: t.title } };
 }
-async function toolDeleteEvent(args: Record<string, unknown>) {
+async function toolDeleteEvent(args: Record<string, unknown>, ctx: ToolContext) {
   const ev = await resolveEvent(args);
   if (!ev) return { error: `No event found with id ${args.id}.` };
+  const calName = getCalendar(ev.calendarId)?.name;
+  if (!(await confirmBeforeDelete(ctx, "event", ev.id, ev.summary, calName))) return DENIED;
   try {
     await deleteCalendarEvent(ev);
     return {
       ok: true,
       deleted: {
         type: "event", id: ev.id, summary: ev.summary,
-        calendar: getCalendar(ev.calendarId)?.name,
+        calendar: calName,
       },
     };
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) };
   }
 }
-async function toolDeleteReminder(args: Record<string, unknown>) {
+async function toolDeleteReminder(args: Record<string, unknown>, ctx: ToolContext) {
   const r = await getRowById("reminders", args.id);
   if (!r) return { error: `No reminder found with id ${args.id}.` };
+  if (!(await confirmBeforeDelete(ctx, "reminder", r.id, r.title))) return DENIED;
   await deleteReminder(r.id);
   return { ok: true, deleted: { type: "reminder", id: r.id, title: r.title } };
 }
-async function toolDeleteNote(args: Record<string, unknown>) {
+async function toolDeleteNote(args: Record<string, unknown>, ctx: ToolContext) {
   const n = await getRowById("notes", args.id);
   if (!n) return { error: `No note found with id ${args.id}.` };
+  if (!(await confirmBeforeDelete(ctx, "note", n.id, n.title ?? "(untitled)"))) return DENIED;
   await deleteNote(n.id);
   return { ok: true, deleted: { type: "note", id: n.id, title: n.title } };
 }
-async function toolDeletePerson(args: Record<string, unknown>) {
+async function toolDeletePerson(args: Record<string, unknown>, ctx: ToolContext) {
   const p = await getRowById("people", args.id);
   if (!p) return { error: `No person found with id ${args.id}.` };
+  if (!(await confirmBeforeDelete(ctx, "person", p.id, p.full_name))) return DENIED;
   await deletePerson(p.id);
   return { ok: true, deleted: { type: "person", id: p.id, full_name: p.full_name } };
 }
-async function toolDeleteList(args: Record<string, unknown>) {
+async function toolDeleteList(args: Record<string, unknown>, ctx: ToolContext) {
   const l = await getRowById("lists", args.id);
   if (!l) return { error: `No list found with id ${args.id}.` };
   const lists = await listLists();
   if (lists.length <= 1) return { error: "Can't delete the only remaining list." };
+  if (!(await confirmBeforeDelete(ctx, "list", l.id, l.name))) return DENIED;
   await deleteList(l.id);
   return { ok: true, deleted: { type: "list", id: l.id, name: l.name }, note: "Its tasks were moved to another list." };
+}
+
+/**
+ * Ask the user to approve a destructive delete.
+ *
+ * Returns true unless a confirmation UI is wired AND the user declined. With no
+ * `onConfirmDelete` (a headless caller) it fails open to today's behaviour —
+ * the server-side space-scoped authorisation remains the final backstop either
+ * way. An already-aborted turn throws `AbortError` rather than resolving, so the
+ * loop's existing abort handling ends the turn instead of acting on a stale
+ * approval after the user hit Stop.
+ */
+async function confirmBeforeDelete(
+  ctx: ToolContext,
+  type: DeleteType,
+  id: string,
+  label: string,
+  sub?: string,
+): Promise<boolean> {
+  if (ctx.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  if (!ctx.onConfirmDelete) return true;
+  return ctx.onConfirmDelete({ type, id, label, sub });
 }
 
 async function executeTool(
@@ -1635,6 +1729,9 @@ async function executeTool(
   args: Record<string, unknown>,
   // Only show_items uses this: it's how the chosen items reach the UI.
   emitItems?: (items: ItemRef[]) => void,
+  // Per-turn context. Only the delete executors read it today (for the
+  // confirmation gate); every other tool ignores it.
+  ctx: ToolContext = {},
 ): Promise<unknown> {
   switch (name) {
     // read
@@ -1664,13 +1761,13 @@ async function executeTool(
     case "add_tag": return toolAddTag(args);
     case "link_items": return toolLinkItems(args);
     case "unlink_items": return toolUnlinkItems(args);
-    // delete
-    case "delete_todo": return toolDeleteTodo(args);
-    case "delete_event": return toolDeleteEvent(args);
-    case "delete_reminder": return toolDeleteReminder(args);
-    case "delete_note": return toolDeleteNote(args);
-    case "delete_person": return toolDeletePerson(args);
-    case "delete_list": return toolDeleteList(args);
+    // delete — each goes through confirmBeforeDelete(ctx, …) before touching data
+    case "delete_todo": return toolDeleteTodo(args, ctx);
+    case "delete_event": return toolDeleteEvent(args, ctx);
+    case "delete_reminder": return toolDeleteReminder(args, ctx);
+    case "delete_note": return toolDeleteNote(args, ctx);
+    case "delete_person": return toolDeletePerson(args, ctx);
+    case "delete_list": return toolDeleteList(args, ctx);
     default: return { error: `Unknown tool: ${name}` };
   }
 }
@@ -1783,10 +1880,12 @@ const SYSTEM_PROMPT =
   "- Before creating or updating, make sure the request is clear. If key details are ambiguous (which item, what " +
   "date/time, which list), ask a brief clarifying question instead of guessing. For clearly-specified requests, just " +
   "do it.\n" +
-  "- DELETION IS PERMANENT AND CANNOT BE UNDONE. Before deleting, identify the exact item(s) and confirm with the " +
-  "user which one(s) you will delete, unless they have already unambiguously identified the specific item to delete. " +
-  "Never delete more than the user asked for; when a request is broad or could match multiple items, list what you " +
-  "found and ask before deleting.\n" +
+  "- DELETION IS PERMANENT AND CANNOT BE UNDONE. Every delete tool shows the user a confirmation card with the exact " +
+  "item, and ONLY runs if they click Delete — this is enforced for you, so you do not need to ask for separate " +
+  "verbal confirmation before calling a delete tool. Just identify the right item and call the tool; the card is " +
+  "the confirmation. Never delete more than the user asked for: when a request is broad or could match multiple " +
+  "items, list what you found and delete them one at a time. If a delete returns { \"denied\": true }, the user " +
+  "declined the card — stop, acknowledge that they cancelled, and do NOT retry the same delete.\n" +
   "- Interpret relative dates/times (\"tomorrow at 3pm\", \"next Friday\") against the current date, and pass concrete " +
   "ISO 8601 values to the tools.\n" +
   "- After making changes, confirm what you did in one short sentence (\"Added lunch with Sam tomorrow at one.\") " +
@@ -1929,6 +2028,18 @@ export interface AskOptions {
    * once per round. Treat each value as an addition to the running total.
    */
   onUsage?: (totalTokens: number) => void;
+  /**
+   * Gate every `delete_*` tool on explicit user approval. When set, the agentic
+   * loop awaits this before each delete and only proceeds on `true`. This is the
+   * defence against indirect prompt injection driving destructive calls: no
+   * text in the model's context can authorise a delete — only the user can.
+   *
+   * The Promise MUST resolve for the turn to continue. A caller that aborts the
+   * turn (Stop, unmount) is responsible for resolving it (typically `false`) so
+   * the loop doesn't hang; `confirmBeforeDelete` also throws `AbortError` when
+   * `signal` is already aborted, which the loop's existing handling catches.
+   */
+  onConfirmDelete?: (req: ConfirmDeleteRequest) => Promise<boolean>;
 }
 
 /**
@@ -2011,6 +2122,11 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
   let showedItems = false; // show_items ran and accepted at least one item
   let sawItems = false;    // some tool surfaced an item worth showing
 
+  // Per-turn context for the tool executors. Today only the delete tools read
+  // it: `onConfirmDelete` is the gate that pauses the loop until the user
+  // approves, and `signal` lets a pending confirm throw AbortError on Stop.
+  const toolCtx: ToolContext = { signal: opts.signal, onConfirmDelete: opts.onConfirmDelete };
+
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     // A user cancel between rounds aborts cleanly rather than starting another
     // network call that will be thrown away.
@@ -2039,7 +2155,7 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
       try { args = JSON.parse(call.function.arguments || "{}"); } catch { /* leave empty */ }
       opts.onStatus?.(statusFor(call.function.name, args));
       let result: unknown;
-      try { result = await executeTool(call.function.name, args, opts.onItems); }
+      try { result = await executeTool(call.function.name, args, opts.onItems, toolCtx); }
       catch (e) { result = { error: e instanceof Error ? e.message : String(e) }; }
       // A show_items that rejected every id doesn't count — leave recovery open.
       if (call.function.name === "show_items") {

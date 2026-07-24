@@ -17,7 +17,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { askAssistant, ChatMessage } from "../../lib/ai";
+import { askAssistant, ChatMessage, type ConfirmDeleteRequest } from "../../lib/ai";
 import { hasOpenAiKey } from "../../lib/settings";
 import {
   startRecording, transcribe, speak, stopSpeaking, isSpeechSupported, isRecordingSupported, Recording,
@@ -82,6 +82,19 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
   // revealRef, which DOES show the reply — Stop should never cost the text.)
   const discardRef = useRef<(() => void) | null>(null);
 
+  // The pending delete-confirmation card. While set, the agentic loop is paused
+  // inside a delete tool awaiting the user's decision. The Promise resolver is
+  // held in a ref so resolveConfirm (a button click) and the abort paths (Stop,
+  // unmount) can both settle the same pending Promise — the loop must never
+  // hang on a confirm that nothing resolves.
+  const [pendingConfirm, setPendingConfirm] = useState<ConfirmDeleteRequest | null>(null);
+  const confirmResolverRef = useRef<((approved: boolean) => void) | null>(null);
+  function resolveConfirm(approved: boolean) {
+    confirmResolverRef.current?.(approved);
+    confirmResolverRef.current = null;
+    setPendingConfirm(null);
+  }
+
   const voiceOutput = isSpeechSupported();
 
   // Stop any speech and release the mic when the app tears down (this lives in
@@ -96,6 +109,12 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
     // going away, so showing the reply into state nothing will render is wasted
     // work, and on a popup that reopens later it would pop in unexpectedly.
     discardRef.current?.();
+    // Settle a pending delete-confirmation before aborting: confirmBeforeDelete
+    // throws AbortError on an already-aborted signal, but resolving here too
+    // guarantees the Promise never outlives the component regardless of timing.
+    confirmResolverRef.current?.(false);
+    confirmResolverRef.current = null;
+    setPendingConfirm(null);
     abortRef.current?.abort();
     recRef.current?.cancel();
     recRef.current = null;
@@ -186,6 +205,20 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
             shown.push(it);
           }
         },
+        // The delete gate. Returns a Promise that hangs until the user clicks
+        // Delete/Cancel on the confirmation card — which is exactly the pause
+        // the agentic loop needs. Abort safety: stopAssistant() and the unmount
+        // cleanup both abort the controller, and confirmBeforeDelete in ai.ts
+        // throws AbortError when the signal is already aborted, so this Promise
+        // is settled one way or another on every path.
+        onConfirmDelete: (req) =>
+          new Promise<boolean>((resolve) => {
+            // A previous confirm somehow left its resolver dangling — settle it
+            // first so the new one is the only one pending.
+            confirmResolverRef.current?.(false);
+            confirmResolverRef.current = resolve;
+            setPendingConfirm(req);
+          }),
       });
       const showReply = () =>
         setMessages([...next, {
@@ -237,11 +270,23 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
     } finally {
       abortRef.current = null;
       setLoading(false);
+      // Defensive: a confirm card should never outlive the turn it gated. If
+      // one is still showing here (e.g. an error path bypassed the resolver),
+      // dismiss it so it can't linger over the next turn.
+      if (confirmResolverRef.current) {
+        confirmResolverRef.current = null;
+        setPendingConfirm(null);
+      }
     }
   }
 
   /** Cancel an in-flight assistant turn (Stop button). No-op if nothing running. */
   function stopAssistant() {
+    // If a delete confirmation is on screen, decline it as part of the stop —
+    // the turn is being cancelled, so the pending delete must not run.
+    confirmResolverRef.current?.(false);
+    confirmResolverRef.current = null;
+    setPendingConfirm(null);
     abortRef.current?.abort();
   }
 
@@ -364,6 +409,10 @@ export function useAssistantChat({ messages, setMessages, spaceEnabled = true }:
     input, setInput,
     loading, status, recording, speaking, heldBySpace, error, setError, busy,
     voiceOutput, tokenCount,
+    // The pending delete-confirmation (null when none). MessageList renders this
+    // as a card at the foot of the transcript; resolveConfirm dismisses it and
+    // unblocks the delete tool that's awaiting it.
+    pendingConfirm, resolveConfirm,
     deliver, submitTyped, stopAssistant, toggleMic, stopVoice, cancelInput, clear,
   };
 }

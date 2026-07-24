@@ -11,11 +11,14 @@ import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
 import { Button } from "../ui";
 import { ItemRefCard, VIEW_FOR, targetFor } from "../ItemCard";
+import ConfirmDeleteCard from "./ConfirmDeleteCard";
+import type { ConfirmDeleteRequest } from "../../lib/ai";
 import type { GoTo } from "../../types";
 import type { UiMessage } from "./useAssistantChat";
 
 export default function MessageList({
   messages, goTo, loading, status, error, onStop, empty, compact = false,
+  pendingConfirm, onResolveConfirm,
 }: {
   messages: UiMessage[];
   goTo: GoTo;
@@ -27,6 +30,10 @@ export default function MessageList({
   empty?: ReactNode;
   /** Tighter padding and no centred column, for the popup. */
   compact?: boolean;
+  /** A delete the assistant is waiting for the user to approve, or null. */
+  pendingConfirm?: ConfirmDeleteRequest | null;
+  /** Delivers the user's decision on the pending delete confirmation. */
+  onResolveConfirm?: (approved: boolean) => void;
 }) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -101,10 +108,22 @@ export default function MessageList({
         {loading && (
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm text-neutral-400 shadow-sm ring-1 ring-neutral-200 dark:bg-neutral-800 dark:ring-neutral-700">
-              <Sparkles size={14} className="animate-pulse text-blue-400" /> {status}
+              <Sparkles size={14} className="animate-pulse text-blue-400" />{" "}
+              {/* While a delete confirmation is on screen, the per-tool status
+                  ("Deleting a note…") would be a lie — nothing is being deleted
+                  yet. The accurate state is "waiting for you to confirm". */}
+              {pendingConfirm ? t("status.confirmDelete") : status}
             </div>
             <Button variant="ghost" onClick={onStop}>{t("common.cancel")}</Button>
           </div>
+        )}
+
+        {/* A pending delete confirmation. Rendered only while a delete tool is
+            awaiting the user's decision, and dismissed the moment they resolve
+            it — so it is not part of any persisted message. Pinned to the foot
+            of the transcript (after the status row) so it is the live prompt. */}
+        {pendingConfirm && onResolveConfirm && (
+          <ConfirmDeleteCard req={pendingConfirm} onResolve={onResolveConfirm} />
         )}
 
         {error && (

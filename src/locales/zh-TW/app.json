@@ -563,7 +563,22 @@
     "closeChat": "關閉對話",
     "openInAssistant": "在助理頁面開啟",
     "popupEmpty": "不用離開這一頁，就能詢問你的一天。",
-    "popupCrashed": "對話視窗發生問題。請關閉後重新開啟，或前往助理頁面。"
+    "popupCrashed": "對話視窗發生問題。請關閉後重新開啟，或前往助理頁面。",
+    "confirmDelete": {
+      "title": "確定要刪除這個{{type}}嗎？",
+      "untitled": "（無標題）",
+      "cancel": "取消",
+      "cancelled": "已取消",
+      "deleting": "刪除中…",
+      "type": {
+        "todo": "待辦事項",
+        "event": "行程",
+        "reminder": "提醒",
+        "note": "筆記",
+        "person": "聯絡人",
+        "list": "清單"
+      }
+    }
   },
   "notifications": {
     "todoDue": "待辦事項到期"
@@ -612,7 +627,8 @@
     "deleteList": "刪除清單中…",
     "working": "處理中…",
     "thinking": "思考中…",
-    "speaking": "朗讀中…"
+    "speaking": "朗讀中…",
+    "confirmDelete": "等待你確認刪除…"
   },
   "auth": {
     "signIn": "登入",

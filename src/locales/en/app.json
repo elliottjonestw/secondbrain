@@ -565,7 +565,22 @@
     "closeChat": "Close chat",
     "openInAssistant": "Open in Assistant",
     "popupEmpty": "Ask about your day without leaving this page.",
-    "popupCrashed": "The chat window ran into a problem. Close and reopen it, or open the Assistant page."
+    "popupCrashed": "The chat window ran into a problem. Close and reopen it, or open the Assistant page.",
+    "confirmDelete": {
+      "title": "Delete this {{type}}?",
+      "untitled": "(untitled)",
+      "cancel": "Cancel",
+      "cancelled": "Cancelled",
+      "deleting": "Deleting…",
+      "type": {
+        "todo": "to-do",
+        "event": "event",
+        "reminder": "reminder",
+        "note": "note",
+        "person": "contact",
+        "list": "list"
+      }
+    }
   },
   "notifications": {
     "todoDue": "Todo due"
@@ -614,7 +629,8 @@
     "deleteList": "Deleting a list…",
     "working": "Working…",
     "thinking": "Thinking…",
-    "speaking": "Speaking…"
+    "speaking": "Speaking…",
+    "confirmDelete": "Waiting for you to confirm the deletion…"
   },
   "auth": {
     "signIn": "Sign in",

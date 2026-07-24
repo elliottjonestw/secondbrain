@@ -149,6 +149,8 @@ export default function AssistantPopup({
           status={chat.status}
           error={chat.error}
           onStop={chat.stopAssistant}
+          pendingConfirm={chat.pendingConfirm}
+          onResolveConfirm={chat.resolveConfirm}
           compact
           empty={<p className="px-2 py-6 text-center text-sm text-neutral-400">{t("assistant.popupEmpty")}</p>}
         />

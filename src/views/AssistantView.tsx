@@ -83,6 +83,8 @@ export default function AssistantView({
         status={chat.status}
         error={chat.error}
         onStop={chat.stopAssistant}
+        pendingConfirm={chat.pendingConfirm}
+        onResolveConfirm={chat.resolveConfirm}
         empty={
           <div className="pt-8 text-center">
             <p className="mb-4 text-sm text-neutral-400">
