@@ -91,6 +91,7 @@ export default function SettingsView() {
       speechRate: clampSpeechRate(draft.speechRate),
       preferredVoices: draft.preferredVoices,
       summaryThrottle: draft.summaryThrottle,
+      webSearch: draft.webSearch,
       summaryMaxAgeHours: clampSummaryMaxAge(draft.summaryMaxAgeHours),
     });
     setSaved(true);
@@ -936,6 +937,21 @@ function OpenAiFields({
             <option key={m} value={m}>{m}</option>
           ))}
         </select>
+      </Field>
+
+      <Field
+        label={t("settings.assistant.webSearch")}
+        hint={t("settings.assistant.webSearchHint")}
+      >
+        <label className="flex cursor-pointer items-center gap-3 text-sm">
+          <input
+            type="checkbox"
+            checked={draft.webSearch}
+            onChange={(e) => patch({ webSearch: e.target.checked })}
+            className="h-4 w-4 accent-blue-600"
+          />
+          <span>{t("settings.assistant.webSearchLabel")}</span>
+        </label>
       </Field>
     </>
   );

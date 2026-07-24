@@ -143,6 +143,14 @@ export interface AppSettings {
   summaryThrottle: boolean;
   /** How long a written briefing stays good for, in hours. */
   summaryMaxAgeHours: number;
+  /**
+   * Let the assistant search the web when a question needs facts that aren't in
+   * the user's data. Off by default, and the switch is a *token* control as much
+   * as a privacy one: off, the tool schema isn't sent at all, so a user who
+   * doesn't want this pays nothing for its existence. On, it still costs nothing
+   * until the model actually calls it — see `WEB_SEARCH_TOOL` in `ai.ts`.
+   */
+  webSearch: boolean;
 }
 
 export const MIN_SUMMARY_MAX_AGE_HOURS = 1;
@@ -323,6 +331,7 @@ const DEFAULTS: AppSettings = {
   todayLayout: [],
   summaryThrottle: true,
   summaryMaxAgeHours: 6,
+  webSearch: false,
 };
 
 export function getSettings(): AppSettings {

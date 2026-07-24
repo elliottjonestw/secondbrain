@@ -76,6 +76,27 @@ const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
 const MAX_TOOL_ROUNDS = 8; // safety cap on the agentic loop
 
+/**
+ * Web search is billed per call, not per token, so the cap that matters is on
+ * calls rather than rounds. Two is enough for "check, then check the thing the
+ * first result raised" and short of a model that browses.
+ */
+const MAX_WEB_SEARCHES = 2;
+
+/**
+ * The model that answers a `web_search` tool call.
+ *
+ * It is deliberately NOT the model the user picked. Search models on Chat
+ * Completions *always* search and **cannot do function calling**, so one can
+ * never be the assistant's own model — the tool loop would stop working. Hence
+ * the two-call shape: the user's model decides a search is needed, this one
+ * performs it, and its prose comes back as an ordinary tool result.
+ *
+ * (`gpt-4o-search-preview` and `gpt-4o-mini-search-preview` were the previous
+ * generation and shut down 2026-07-23. Don't reintroduce them.)
+ */
+const WEB_SEARCH_MODEL = "gpt-5-search-api";
+
 function clampLimit(n: unknown): number {
   const v = typeof n === "number" && n > 0 ? Math.floor(n) : DEFAULT_LIMIT;
   return Math.min(v, MAX_LIMIT);
@@ -166,6 +187,21 @@ export interface ConfirmDeleteRequest {
  */
 export interface ToolContext {
   signal?: AbortSignal;
+  /**
+   * Web searches left in this turn, decremented by `toolWebSearch`. A counter
+   * rather than a prompt rule because the prompt can't be relied on for this —
+   * same reason `recoverItemCards` exists. Each call is billed per search, so a
+   * model that decides to "check a few sources" turns one question into several
+   * charges; past the cap the tool returns an error the model can still answer
+   * around. Absent means the feature is off for this turn.
+   */
+  webSearchesLeft?: { n: number };
+  /**
+   * Same reporter `callChat` uses, so a turn's token tally includes the tokens
+   * a tool spent on its own model call. Without it a web search would be free
+   * as far as the conversation's counter is concerned.
+   */
+  onUsage?: (totalTokens: number) => void;
   /**
    * Ask the user to approve a destructive delete. Resolves true to approve,
    * false if the user declined. If unset (a headless/non-UI caller) the gate
@@ -795,6 +831,47 @@ const TOOLS = [
   },
 ] as const;
 
+/**
+ * Appended to `TOOLS` only when Settings → Assistant has web search on, which is
+ * why it lives apart from them. Off, the schema is never sent, so the feature
+ * costs a user who doesn't want it exactly nothing — not even the ~90 tokens of
+ * its own description on every turn.
+ *
+ * The description carries the "when NOT to" rules as well as the "when to". The
+ * default failure here isn't the model refusing to search, it's the model
+ * searching for things it already knows or things that are in the user's own
+ * data, and each of those is a billed call.
+ */
+const WEB_SEARCH_TOOL = [
+  {
+    type: "function",
+    function: {
+      name: "web_search",
+      description:
+        "Search the public web and get back a short written answer with source links. This is SLOW and COSTS " +
+        "MONEY PER CALL, so it is a last resort, not a habit. Use it ONLY when the answer is a current, " +
+        "real-world fact you cannot know and the user's own data cannot contain: today's news, a live price or " +
+        "score, whether a business is open now, a recent release or event. Do NOT use it for anything about the " +
+        "user's own events, to-dos, reminders, notes or people — search those with the other tools. Do NOT use " +
+        "it for the weather (get_weather), for stable general knowledge you already know, for arithmetic or " +
+        "dates, or to double-check yourself. If you can answer without it, do. Ask ONE well-formed question per " +
+        "call and prefer a single call.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description:
+              "The question to research, as a complete natural-language question ('what time does the Tate " +
+              "Modern close on Sundays') — not bare keywords, and not the user's whole message.",
+          },
+        },
+        required: ["query"],
+      },
+    },
+  },
+] as const;
+
 // ---------------------------------------------------------------------------
 // Tool executors (read-only)
 // ---------------------------------------------------------------------------
@@ -1228,6 +1305,88 @@ async function toolGetWeather(args: Record<string, unknown>) {
           precipitation_chance: round(h.precipitation),
         }))
       : undefined,
+  };
+}
+
+/**
+ * Answer one `web_search` call by asking a search model, and hand the prose plus
+ * its citations back as the tool result.
+ *
+ * Two calls rather than one because the shapes are incompatible: a Chat
+ * Completions search model always searches and has no function calling, so it
+ * can't host the tool loop, and the loop's model can't search. Keeping them
+ * separate also keeps the conversation small — what re-enters the main context
+ * is this digest, not pages of retrieved text, which is the difference between
+ * one search costing a few hundred tokens and costing several thousand on every
+ * subsequent round of the turn.
+ *
+ * Failures return `{ error }` like every other tool rather than throwing: a dead
+ * search must leave the model able to say it couldn't look it up, not kill the
+ * turn.
+ */
+async function toolWebSearch(args: Record<string, unknown>, ctx: ToolContext) {
+  const query = typeof args.query === "string" ? args.query.trim() : "";
+  if (!query) return { error: "query is required." };
+  if (!ctx.webSearchesLeft) {
+    return { error: "Web search is switched off in Settings. Answer without it, or tell the user where to turn it on." };
+  }
+  if (ctx.webSearchesLeft.n <= 0) {
+    return { error: `No searches left this turn (limit ${MAX_WEB_SEARCHES}). Answer with what you already have.` };
+  }
+  ctx.webSearchesLeft.n -= 1;
+
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${getOpenAiKey()}` },
+    body: JSON.stringify({
+      model: WEB_SEARCH_MODEL,
+      // "low" is the cheapest context size and the right one here: the caller
+      // wants a fact to fold into a spoken sentence, not a briefing. The
+      // per-call fee is fixed; this bounds the tokens on top of it.
+      web_search_options: { search_context_size: "low" },
+      messages: [
+        {
+          role: "system",
+          content:
+            "Answer the question from current web sources in at most three short sentences of plain prose. " +
+            "State the fact and when it was current. No lists, no headings, no preamble. If the sources " +
+            "disagree or you cannot find it, say so plainly rather than guessing.",
+        },
+        { role: "user", content: query },
+      ],
+    }),
+    signal: ctx.signal,
+  });
+  if (!res.ok) {
+    let detail = "";
+    try { const err = await res.json(); detail = err?.error?.message ?? ""; } catch { /* body may not be JSON */ }
+    return { error: `Web search failed (${res.status}).${detail ? ` ${detail}` : ""}` };
+  }
+
+  const data = await res.json();
+  const msg = data?.choices?.[0]?.message;
+  const answer = typeof msg?.content === "string" ? msg.content.trim() : "";
+  if (!answer) return { error: "Web search returned nothing." };
+  if (typeof data?.usage?.total_tokens === "number") ctx.onUsage?.(data.usage.total_tokens);
+
+  // `url_citation` annotations are what the search model returns instead of
+  // inline links. Deduplicated by URL — the same source is usually cited for
+  // several spans of the same answer.
+  const seen = new Set<string>();
+  const sources: { title: string; url: string }[] = [];
+  for (const a of (msg?.annotations ?? []) as any[]) {
+    const c = a?.url_citation;
+    if (!c?.url || seen.has(c.url)) continue;
+    seen.add(c.url);
+    sources.push({ title: String(c.title ?? ""), url: String(c.url) });
+    if (sources.length >= 5) break;
+  }
+
+  return {
+    answer,
+    sources,
+    searched_at: format(new Date(), "yyyy-MM-dd'T'HH:mm:ssXXX"),
+    searches_left: ctx.webSearchesLeft.n,
   };
 }
 
@@ -1745,6 +1904,7 @@ async function executeTool(
     case "search_people": return toolSearchPeople(args);
     case "get_item": return toolGetItem(args);
     case "get_weather": return toolGetWeather(args);
+    case "web_search": return toolWebSearch(args, ctx);
     // presentation
     case "show_items": return toolShowItems(args, emitItems);
     // write
@@ -1785,6 +1945,9 @@ function statusFor(name: string, args: Record<string, unknown>): string {
     case "search_people": return args.query ? i18next.t("status.searchPeopleFor", { query: String(args.query) }) : i18next.t("status.searchPeople");
     case "get_item": return i18next.t("status.getItem");
     case "get_weather": return i18next.t("status.weather");
+    case "web_search": return args.query
+      ? i18next.t("status.webSearchFor", { query: String(args.query) })
+      : i18next.t("status.webSearch");
     case "show_items": return i18next.t("status.showItems");
     case "create_todo": return i18next.t("status.createTodo");
     case "update_todo": return i18next.t("status.updateTodo");
@@ -1891,6 +2054,27 @@ const SYSTEM_PROMPT =
   "ISO 8601 values to the tools.\n" +
   "- After making changes, confirm what you did in one short sentence (\"Added lunch with Sam tomorrow at one.\") " +
   "and show the item.";
+
+/**
+ * Appended to the system prompt only when web search is on, alongside the tool
+ * schema — a rule about a tool the model hasn't been given is just tokens.
+ *
+ * It repeats the "don't" list from the schema on purpose. The schema is read
+ * when the model is choosing a tool; this is read while it's deciding whether it
+ * needs one at all, and the expensive mistake happens at that earlier point.
+ */
+const WEB_SEARCH_PROMPT =
+  "\n\nWeb search:\n" +
+  "- You have web_search, but treat it as a last resort: it is slow and each call costs the user money.\n" +
+  "- Search ONLY for current real-world facts that cannot be in the user's data and that you cannot reliably " +
+  "know: today's news, live prices or scores, opening hours, recent releases or results.\n" +
+  "- Never search for the user's own events, to-dos, reminders, notes or people; never for the weather " +
+  "(get_weather covers it); never for stable general knowledge, arithmetic or dates; never merely to " +
+  "double-check something you already know.\n" +
+  `- At most ${MAX_WEB_SEARCHES} searches per turn. Prefer one.\n` +
+  "- When you do search, say in passing where it came from (\"according to the BBC…\") so the user knows the " +
+  "answer came off the web. Don't paste URLs into a spoken reply, and don't list the sources.\n" +
+  "- If the search fails or the cap is reached, say you couldn't look it up — never fill the gap with a guess.";
 
 /** The resolved chat backend for one request. Always OpenAI's `/v1/chat/completions`. */
 interface ChatEndpoint {
@@ -2119,7 +2303,15 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
   // Only role/content go to the model — never the UiMessage `items`. But an
   // assistant turn that showed cards gets a system note after it recording
   // which items those were, so the next user message can refer to them.
-  const messages: OAIMessage[] = [{ role: "system", content: dateContext + SYSTEM_PROMPT }];
+  // Both the schema and its prompt rules are opt-in together: off, this turn
+  // carries neither, so the feature costs nothing to leave switched off.
+  const webSearch = settings.webSearch;
+  const turnTools = webSearch ? [...TOOLS, ...WEB_SEARCH_TOOL] : TOOLS;
+
+  const messages: OAIMessage[] = [{
+    role: "system",
+    content: dateContext + SYSTEM_PROMPT + (webSearch ? WEB_SEARCH_PROMPT : ""),
+  }];
   for (const m of history) {
     messages.push({ role: m.role, content: m.content });
     if (m.role === "assistant" && m.items && m.items.length > 0) {
@@ -2142,13 +2334,20 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
   // Per-turn context for the tool executors. Today only the delete tools read
   // it: `onConfirmDelete` is the gate that pauses the loop until the user
   // approves, and `signal` lets a pending confirm throw AbortError on Stop.
-  const toolCtx: ToolContext = { signal: opts.signal, onConfirmDelete: opts.onConfirmDelete };
+  const toolCtx: ToolContext = {
+    signal: opts.signal,
+    onConfirmDelete: opts.onConfirmDelete,
+    onUsage: opts.onUsage,
+    // Absent when the feature is off, which is what makes a model that invents
+    // the tool name anyway get a clean "it's switched off" rather than a search.
+    webSearchesLeft: webSearch ? { n: MAX_WEB_SEARCHES } : undefined,
+  };
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     // A user cancel between rounds aborts cleanly rather than starting another
     // network call that will be thrown away.
     if (opts.signal?.aborted) throw new DOMException("Aborted", "AbortError");
-    const data = await callChat(ep, messages, { signal: opts.signal, onUsage: opts.onUsage });
+    const data = await callChat(ep, messages, { tools: turnTools, signal: opts.signal, onUsage: opts.onUsage });
     const msg = data?.choices?.[0]?.message as OAIMessage | undefined;
     if (!msg) throw new Error(i18next.t("errors.emptyResponse"));
 
