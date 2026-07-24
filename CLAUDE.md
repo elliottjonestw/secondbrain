@@ -92,6 +92,7 @@ npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
 - **`window.prompt()` is a silent no-op in WKWebView.** `confirm`/`alert` work.
 - **Mic needs `NSMicrophoneUsageDescription`** in `Info.plist` — packaged builds only.
 - **New plugin = 3 steps:** crate in `Cargo.toml`, `.plugin()` in `lib.rs`, permission in `capabilities/default.json`.
+- **Everything in `src-tauri/capabilities/` ships — there is no dev/prod split in that directory.** `tauri-build` embeds the whole dir into the binary, so a URL added there for local convenience is a URL a packaged app can reach forever. That is why loopback lives in `src-tauri/dev-capabilities/localhost.json` instead, added by `lib.rs` via `app.add_capability(include_str!(…))` inside `#[cfg(debug_assertions)]`. It works because `Manager::add_capability` is available by default (tauri's `dynamic-acl` feature) and because command scopes from separate capabilities **union** rather than override, so the dev file only has to name what it adds. Two things not to change: the gate must stay `debug_assertions` and never become a cargo feature (a feature can be named on a release build), and the file must stay out of `capabilities/`, where its own presence would defeat it. Consequence to expect: an E2E build is a *release* build, so it has no loopback either — `VITE_API_URL=http://localhost:8787 npm run test:e2e:build` fails at the scope check, not the network.
 
 **Today page**
 - **A widget is one file exporting one `TodayWidget`** (`components/today/`), registered in `registry.ts` and nowhere else; it fetches its own data and renders its own card.
@@ -213,10 +214,13 @@ worker/
   wrangler.toml              # D1 + KV bindings per environment
 src-tauri/
   src/lib.rs                 # plugin wiring ONLY — no database, no migrations
-  capabilities/default.json  # http scope: the Worker + api.openai.com + *.icloud.com +
-                             #   *.open-meteo.com + localhost/127.0.0.1 (dev
-                             #   Worker). NO blanket `http://*` — it was removed in M5;
-                             #   a plaintext-HTTP host now needs an explicit entry.
+  capabilities/default.json  # http scope THAT SHIPS: the Worker + api.openai.com +
+                             #   *.icloud.com + *.open-meteo.com + Yahoo. NO blanket
+                             #   `http://*` — removed in M5; a plaintext-HTTP host
+                             #   needs an explicit entry. NO loopback — see below.
+  dev-capabilities/localhost.json  # loopback, dev Worker only. Deliberately NOT in
+                             #   capabilities/ (that dir is embedded wholesale);
+                             #   lib.rs adds it under #[cfg(debug_assertions)].
 ```
 
 ## Conventions & don'ts

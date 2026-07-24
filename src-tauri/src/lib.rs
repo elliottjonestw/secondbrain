@@ -16,6 +16,34 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init());
 
+    // The local dev Worker (`npm run worker:dev`, http://localhost:8787), which
+    // lib/api.ts falls back to whenever VITE_API_URL is unset — i.e. in every
+    // `tauri dev` run and no shipped build, since .env.production names the
+    // remote Worker and Vite inlines it.
+    //
+    // It is a SEPARATE capability, added at runtime, rather than two more URLs
+    // in capabilities/default.json, because that file ships. `plugin-http` runs
+    // in Rust, outside the webview's CSP, so the capability scope is the only
+    // thing bounding it: with loopback in the shipped scope, any script that
+    // reaches the IPC bridge — an XSS, a compromised dependency — gets an HTTP
+    // client aimed at every service on the user's machine. Nothing in a
+    // packaged app needs that, so it is now structurally absent from one.
+    //
+    // The gate is `debug_assertions` rather than a cargo feature on purpose:
+    // a feature can be named on a release build, this cannot. The cost is that
+    // an E2E build (release, `--features wdio`) also has no loopback access, so
+    // `VITE_API_URL=http://localhost:8787 npm run test:e2e:build` would fail at
+    // the scope check rather than the network — E2E runs against the deployed
+    // Worker named in .env.production, which is what it already did.
+    #[cfg(debug_assertions)]
+    {
+        use tauri::Manager;
+        builder = builder.setup(|app| {
+            app.add_capability(include_str!("../dev-capabilities/localhost.json"))?;
+            Ok(())
+        });
+    }
+
     // E2E only, and only when the `wdio` feature is named on the build command.
     // These expose an automation surface; they must never be in a shipped app.
     #[cfg(feature = "wdio")]
