@@ -3,12 +3,13 @@ import {
   Eye, EyeOff, Check, CalendarDays, ExternalLink, Loader2, AlertCircle,
   Sparkles, Mic, Languages, Database, Download, Upload, LucideIcon,
   Trash2, Volume2, MapPin, X, ChevronUp, ChevronDown,
-  UserCog, MailCheck, MailWarning, LayoutGrid, Rss,
+  UserCog, MailCheck, MailWarning, LayoutGrid, Rss, Inbox,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   getSettings, saveSettings, getCalendarSettings, saveCalendarSettings,
+  getMailSettings, saveMailSettings,
   MIN_SPEECH_RATE, MAX_SPEECH_RATE, clampSpeechRate,
   MIN_SUMMARY_MAX_AGE_HOURS, MAX_SUMMARY_MAX_AGE_HOURS, clampSummaryMaxAge,
   MIN_RSS_ITEMS, MAX_RSS_ITEMS, MAX_FEEDS, clampRssItemCount, OPENAI_MODELS,
@@ -34,7 +35,10 @@ import { invalidateCache, listCalendars, setCalendarVisible, LOCAL_CALENDAR_NAME
 import { LOCAL_CALENDAR_ID } from "../types";
 import {
   getOpenAiKey, setOpenAiKey, getCalDavPassword, setCalDavPassword,
+  getMailPassword, setMailPassword,
 } from "../lib/secrets";
+import { icloudAccount, listFolders } from "../lib/mail";
+import { isTauri } from "../lib/platform";
 import { exportBackup, importBackup } from "../lib/backup";
 import { clearAllData, newId } from "../db";
 import { deleteAccount, resendVerification } from "../lib/auth";
@@ -49,7 +53,7 @@ import { Button } from "../components/ui";
 const APPLE_PASSWORD_URL = "https://account.apple.com/account/manage";
 const OPENAI_KEYS_URL = "https://platform.openai.com/api-keys";
 
-type Section = "general" | "account" | "widgets" | "assistant" | "voice" | "calendars" | "data";
+type Section = "general" | "account" | "widgets" | "assistant" | "voice" | "calendars" | "mail" | "data";
 
 const SECTIONS: { id: Section; labelKey: `settings.sections.${Section}`; icon: LucideIcon }[] = [
   { id: "general", labelKey: "settings.sections.general", icon: Languages },
@@ -58,6 +62,7 @@ const SECTIONS: { id: Section; labelKey: `settings.sections.${Section}`; icon: L
   { id: "assistant", labelKey: "settings.sections.assistant", icon: Sparkles },
   { id: "voice", labelKey: "settings.sections.voice", icon: Mic },
   { id: "calendars", labelKey: "settings.sections.calendars", icon: CalendarDays },
+  { id: "mail", labelKey: "settings.sections.mail", icon: Inbox },
   { id: "data", labelKey: "settings.sections.data", icon: Database },
 ];
 
@@ -146,6 +151,7 @@ export default function SettingsView() {
             />
           )}
           {section === "calendars" && <CalendarSettingsPane />}
+          {section === "mail" && <MailSettingsPane />}
           {section === "data" && <DataSettings />}
           {/* The sidebar's footnote, which below `md` follows the pane rather
               than sitting above it and pushing the first setting off screen. */}
@@ -1411,6 +1417,174 @@ function CalendarSettingsPane() {
             <option key={cal.id} value={cal.id}>{cal.name}</option>
           ))}
         </select>
+      </section>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Mail (IMAP / iCloud)
+//
+// Independent of the AppSettings draft, exactly like the calendar pane above:
+// it reads and writes its own bucket (`getMailSettings`) and its own secret, so
+// nothing about a mail account can reach the cloud settings sync or a backup.
+// ---------------------------------------------------------------------------
+function MailSettingsPane() {
+  const { t } = useTranslation();
+  const stored = getMailSettings();
+  const [username, setUsername] = useState(stored.account?.username ?? "");
+  const [password, setPassword] = useState(getMailPassword());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [status, setStatus] = useState("");
+  const [, setVersion] = useState(0);
+  const refresh = () => setVersion((v) => v + 1);
+
+  const settings = getMailSettings();
+  const account = settings.account;
+  const connected = !!account;
+  // Same state the calendar pane names: signing out clears the credential and
+  // leaves the account behind, so without a word here the inbox simply stops
+  // answering while the pane still claims to be connected.
+  const needsPassword = connected && !getMailPassword();
+  // One Apple app-specific password covers Mail and Calendar, so someone who
+  // has already connected calendars should not have to go and generate a
+  // second one — or dig the first out of wherever they saved it.
+  const calendarPassword = getCalDavPassword();
+  const canReuse = !password && !!calendarPassword;
+
+  async function connect() {
+    setBusy(true);
+    setError("");
+    setStatus("");
+    const previous = getMailPassword();
+    try {
+      // Written BEFORE the attempt because `mail/client.ts` reads the password
+      // from storage rather than off the account — and put back on failure, so
+      // a typo can't silently knock out a working connection.
+      setMailPassword(password);
+      const draft = icloudAccount(username);
+      const folders = await listFolders(draft);
+      saveMailSettings({ account: { ...draft, folders, connectedAt: new Date().toISOString() } });
+      setStatus(t("settings.mail.found", { count: folders.length }));
+      refresh();
+    } catch (e) {
+      setMailPassword(previous);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function disconnect() {
+    if (!window.confirm(t("settings.mail.confirmDisconnect"))) return;
+    saveMailSettings({ account: null });
+    setMailPassword("");
+    setPassword("");
+    setStatus("");
+    setError("");
+    refresh();
+  }
+
+  return (
+    <>
+      <PaneHeader title={t("settings.sections.mail")}>
+        {t("settings.mail.description")}
+      </PaneHeader>
+
+      <section className="mb-8 rounded-xl border border-neutral-200 p-5 dark:border-neutral-700">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
+            {t("settings.mail.account")}
+          </h2>
+          {connected && !needsPassword && (
+            <span className="flex shrink-0 items-center gap-1 rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-950/40 dark:text-green-400">
+              <Check size={12} /> {t("settings.mail.connected")}
+            </span>
+          )}
+        </div>
+
+        {needsPassword && (
+          <div className="mb-4">
+            <Notice tone="error">{t("settings.mail.passwordCleared")}</Notice>
+          </div>
+        )}
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">{t("settings.mail.appleId")}</label>
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="you@icloud.com"
+              spellCheck={false}
+              autoComplete="off"
+              className={INPUT_CLASS}
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium">{t("settings.mail.appPassword")}</label>
+            <SecretInput
+              value={password}
+              onChange={setPassword}
+              placeholder="xxxx-xxxx-xxxx-xxxx"
+            />
+            {canReuse && (
+              <button
+                type="button"
+                onClick={() => setPassword(calendarPassword)}
+                className="mt-1.5 text-xs text-blue-500 hover:underline"
+              >
+                {t("settings.mail.reuseCalendarPassword")}
+              </button>
+            )}
+          </div>
+        </div>
+
+        <p className="mt-3 text-xs leading-relaxed text-neutral-400">
+          {t("settings.mail.passwordHint")}{" "}
+          {t("settings.calendars.passwordScopeHint")}{" "}
+          <ExternalLinkButton url={APPLE_PASSWORD_URL} label={t("settings.calendars.appleIdSettings")} />
+        </p>
+
+        <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-neutral-200 pt-4 dark:border-neutral-700">
+          <Button variant="primary" onClick={() => void connect()}>
+            {busy ? (
+              <span className="flex items-center gap-1.5">
+                <Loader2 size={15} className="animate-spin" /> {t("settings.mail.connecting")}
+              </span>
+            ) : connected ? t("settings.mail.reconnect") : t("settings.mail.connect")}
+          </Button>
+          {connected && <Button onClick={disconnect}>{t("settings.mail.disconnect")}</Button>}
+          {status && (
+            <span className="flex items-center gap-1 text-sm text-green-600">
+              <Check size={16} /> {status}
+            </span>
+          )}
+        </div>
+
+        {error && <div className="mt-3"><Notice tone="error">{error}</Notice></div>}
+      </section>
+
+      <section className="mb-8 rounded-xl border border-neutral-200 p-5 dark:border-neutral-700">
+        <h2 className="mb-1 text-sm font-semibold uppercase tracking-wide text-neutral-500">
+          {t("settings.mail.access")}
+        </h2>
+        <p className="mb-4 text-xs leading-relaxed text-neutral-400">
+          {t("settings.mail.readOnlyHint")}
+        </p>
+        {/* Said in the pane, not only in a comment: on the web the user's mail
+            and their password pass through our Worker, and someone deciding
+            whether to connect an inbox is entitled to know that before they do
+            rather than after. The desktop app talks to Apple directly. */}
+        <Notice tone="info">
+          {isTauri() ? t("settings.mail.directNote") : t("settings.mail.relayNote")}
+        </Notice>
+        {connected && account.folders.length > 0 && (
+          <p className="mt-3 text-xs text-neutral-400">
+            {t("settings.mail.mailboxes", { list: account.folders.map((f) => f.name).join(", ") })}
+          </p>
+        )}
       </section>
     </>
   );

@@ -646,3 +646,67 @@ export function hasCalendarAccount(): boolean {
   const s = getCalendarSettings();
   return !!s.account && s.account.calendars.length > 0;
 }
+
+// ---------------------------------------------------------------------------
+// Mail account (IMAP)
+//
+// Same shape and the same reasoning as the calendar bucket above: which server,
+// which account and which mailboxes exist is *configuration*, and mail itself is
+// never stored — the assistant reads it live over IMAP. So it lives here in
+// localStorage under its own key rather than in AppSettings, and therefore
+// never appears in `CLOUD_SETTING_KEYS`: an account name plus a mailbox list is
+// not something to sync to a server that has no business holding it.
+//
+// The app-specific password is NOT here — it is in `secrets.ts`, read by
+// `mail/client.ts` when it builds the op envelope. A `MailAccount` can be
+// passed around and serialized freely without carrying a credential.
+// ---------------------------------------------------------------------------
+
+/** One mailbox as reported by the IMAP LIST response. */
+export interface MailFolder {
+  name: string; // full path, e.g. "INBOX" or "Archive/2025"
+  delimiter: string; // hierarchy separator, usually "/"
+  flags: string[]; // \HasNoChildren, \Sent, \Junk …
+}
+
+export interface MailAccount {
+  provider: "icloud"; // future: "yahoo" | "fastmail" | "generic"
+  username: string; // Apple ID
+  host: string; // "imap.mail.me.com"
+  port: number; // 993
+  folders: MailFolder[]; // discovered via LIST, cached
+  connectedAt?: string;
+}
+
+export interface MailSettings {
+  account: MailAccount | null;
+}
+
+const MAIL_KEY = "secondbrain.mail";
+
+const MAIL_DEFAULTS: MailSettings = { account: null };
+
+export function getMailSettings(): MailSettings {
+  try {
+    const raw = localStorage.getItem(scopedKey(MAIL_KEY));
+    if (!raw) return { ...MAIL_DEFAULTS };
+    return { ...MAIL_DEFAULTS, ...JSON.parse(raw) };
+  } catch {
+    return { ...MAIL_DEFAULTS };
+  }
+}
+
+export function saveMailSettings(patch: Partial<MailSettings>): MailSettings {
+  const next = { ...getMailSettings(), ...patch };
+  localStorage.setItem(scopedKey(MAIL_KEY), JSON.stringify(next));
+  return next;
+}
+
+/**
+ * Is an inbox connected? This gates the assistant's mail tools — off, their
+ * schemas are never sent, so a user who hasn't connected mail pays nothing for
+ * the feature (the same rule web search follows).
+ */
+export function hasMailAccount(): boolean {
+  return !!getMailSettings().account;
+}

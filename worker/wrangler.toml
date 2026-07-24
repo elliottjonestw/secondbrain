@@ -82,6 +82,16 @@ name = "DAV_LIMIT"
 namespace_id = "1001"
 simple = { limit = 120, period = 60 }
 
+# The IMAP relay (web only — desktop opens its own socket from Rust). One op is
+# one TLS handshake plus one round-trip to Apple, so it is heavier per unit than
+# DAV and used far less often: reading mail is a handful of ops when the user
+# asks the assistant a question, not a background sync. The cap is what stops a
+# stolen session grinding an Apple ID into a lockout.
+[[ratelimits]]
+name = "MAIL_LIMIT"
+namespace_id = "1011"
+simple = { limit = 30, period = 60 }
+
 [[ratelimits]]
 name = "QUOTE_LIMIT"
 namespace_id = "1002"
@@ -217,6 +227,12 @@ name = "DAV_LIMIT"
 namespace_id = "1001"
 simple = { limit = 120, period = 60 }
 
+# See the top-level block.
+[[env.staging.ratelimits]]
+name = "MAIL_LIMIT"
+namespace_id = "1011"
+simple = { limit = 30, period = 60 }
+
 [[env.staging.ratelimits]]
 name = "QUOTE_LIMIT"
 namespace_id = "1002"
@@ -307,6 +323,12 @@ id = "5f4698a44ab74ee98889b629a1b4f17b"
 name = "DAV_LIMIT"
 namespace_id = "1001"
 simple = { limit = 120, period = 60 }
+
+# See the top-level block.
+[[env.production.ratelimits]]
+name = "MAIL_LIMIT"
+namespace_id = "1011"
+simple = { limit = 30, period = 60 }
 
 [[env.production.ratelimits]]
 name = "QUOTE_LIMIT"

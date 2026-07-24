@@ -51,6 +51,9 @@ export interface Bindings {
    * into the Worker's own 100k requests/day before it matters here.
    */
   DAV_LIMIT: RateLimiter;
+  /** The IMAP relay — web only, and the one route that carries mail. See
+   *  routes/mail.ts. One unit is one TLS handshake and one op against Apple. */
+  MAIL_LIMIT: RateLimiter;
   QUOTE_LIMIT: RateLimiter;
   /** The RSS relay — the one route that takes a URL. See routes/feed.ts. */
   FEED_LIMIT: RateLimiter;

@@ -6,6 +6,10 @@
 // satisfied more completely than when the rule was written, and it is what
 // unblocks iOS, which `tauri-plugin-sql` never supported.
 
+// The one exception to "plugin wiring only": IMAP needs a TCP socket, which no
+// plugin provides. See src/mail.rs for why it exists and what it must keep.
+mod mail;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[allow(unused_mut)]
@@ -14,7 +18,11 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_http::init());
+        .plugin(tauri_plugin_http::init())
+        // Custom commands are not scoped by `http:default` — that capability
+        // bounds tauri-plugin-http only — so `imap_op` enforces its own host
+        // allowlist in Rust. Nothing to add to capabilities/default.json.
+        .invoke_handler(tauri::generate_handler![mail::imap_op]);
 
     // The local dev Worker (`npm run worker:dev`, http://localhost:8787), which
     // lib/api.ts falls back to whenever VITE_API_URL is unset — i.e. in every

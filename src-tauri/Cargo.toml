@@ -27,6 +27,18 @@ tauri-plugin-http = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# IMAP for the desktop mail path (src/mail.rs). The only networking crates in
+# this app: IMAP is a stateful TCP protocol, so `tauri-plugin-http` cannot carry
+# it and the webview cannot open a socket.
+#
+# `native-tls` rather than rustls because it uses the platform's own trust store
+# — Security.framework on macOS, schannel on Windows — so there is no CA bundle
+# to ship or keep current, and the certificate iCloud presents is validated
+# against exactly the roots the rest of the machine already trusts.
+tokio = { version = "1", features = ["net", "io-util", "time"] }
+native-tls = "0.2"
+tokio-native-tls = "0.3"
+
 # E2E testing only. Opt-in feature rather than `debug_assertions`, because these
 # embed a WebDriver server that listens on a local port — with a debug gate,
 # `npm run tauri dev` would run one during ordinary development. Nothing here is

@@ -1,5 +1,11 @@
-// The two credentials the app holds on the user's behalf: the OpenAI API key
-// and the iCloud app-specific password.
+// The credentials the app holds on the user's behalf: the OpenAI API key, and
+// the iCloud app-specific passwords for calendars (CalDAV) and mail (IMAP).
+//
+// The two Apple ones are stored separately even though ONE app-specific
+// password grants both — and any Apple password grants the whole account, not
+// a service. Separate keys mean disconnecting mail cannot silently break
+// calendars, which sharing a slot would do. The Settings panes offer to copy
+// one across so the user still only pastes it once.
 //
 // They used to be ordinary fields — `AppSettings.openaiApiKey` and
 // `CalDavAccount.appPassword` — which meant every piece of code that touched a
@@ -27,6 +33,7 @@ import { scopedKey } from "./settings";
 /** Per-account, same scoping rule as the settings buckets. */
 const OPENAI_KEY = "secondbrain.secret.openai";
 const CALDAV_KEY = "secondbrain.secret.caldav";
+const MAIL_KEY = "secondbrain.secret.mail";
 
 function read(base: string): string {
   try {
@@ -128,9 +135,25 @@ export function setCalDavPassword(value: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Mail (iCloud IMAP)
+//
+// No legacy adoption: this key never lived inside a settings blob, because
+// `secrets.ts` already existed when mail was added. `MailAccount` is therefore
+// credential-free by construction rather than by migration.
+// ---------------------------------------------------------------------------
+
+export function getMailPassword(): string {
+  return read(MAIL_KEY);
+}
+
+export function setMailPassword(value: string): void {
+  write(MAIL_KEY, value.trim());
+}
+
+// ---------------------------------------------------------------------------
 
 /**
- * Forget both secrets on this device.
+ * Forget every secret on this device.
  *
  * Called from `logout()` and `deleteAccount()` — and in both cases it must run
  * BEFORE `clearAuth()`, because these keys are scoped by the signed-in user id
@@ -156,5 +179,7 @@ export function clearSecrets(): void {
   getCalDavPassword();
   write(OPENAI_KEY, "");
   write(CALDAV_KEY, "");
+  // No adoption read for mail — it has no legacy home to be lifted out of.
+  write(MAIL_KEY, "");
   adopted.clear();
 }

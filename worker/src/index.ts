@@ -9,6 +9,7 @@ import { auth } from "./routes/auth";
 import { spaces } from "./routes/spaces";
 import { quotes } from "./routes/quotes";
 import { dav } from "./routes/dav";
+import { mail } from "./routes/mail";
 import { feed } from "./routes/feed";
 
 /**
@@ -38,6 +39,7 @@ app.route("/v1", auth);
 app.route("/v1", spaces);
 app.route("/v1", quotes);
 app.route("/v1", dav);
+app.route("/v1", mail);
 app.route("/v1", feed);
 
 app.notFound((c) =>

@@ -39,7 +39,8 @@ import {
   updateEvent as updateCalendarEvent, deleteEvent as deleteCalendarEvent,
   type EventDraft,
 } from "./calendars";
-import { getSettings, type AppSettings } from "./settings";
+import { getSettings, getMailSettings, hasMailAccount, type AppSettings } from "./settings";
+import { getMessage, listFolders, searchMail } from "./mail";
 import { getOpenAiKey } from "./secrets";
 // Same live-fetch path the Today card uses, cache included — an assistant
 // question right after that card rendered costs no second request.
@@ -872,6 +873,78 @@ const WEB_SEARCH_TOOL = [
   },
 ] as const;
 
+/**
+ * Appended to `TOOLS` only when an inbox is connected, for the same reason the
+ * web-search schema is conditional: off, it costs a user who hasn't connected
+ * mail nothing at all, not even the tokens of its own description.
+ *
+ * All three are READS. There is no send tool, no delete tool and no
+ * mark-as-read tool, and adding one is not an extension of this feature — the
+ * mailbox is opened read-only at the protocol level, so a write tool would mean
+ * changing the transport on both platforms, deliberately.
+ *
+ * The descriptions carry two facts the model gets wrong without them: that IMAP
+ * search is a filter with no ranking (so "the most relevant email" is not
+ * something it can ask for), and that a uid is only meaningful inside its
+ * mailbox.
+ */
+const MAIL_TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "list_mailboxes",
+      description:
+        "List the mailboxes (folders) in the user's connected iCloud inbox. Use it only when you need a " +
+        "mailbox name other than INBOX — searching the inbox needs no call to this.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "search_mail",
+      description:
+        "Search the user's connected iCloud mail and get back message summaries (subject, sender, date, " +
+        "read/unread). This is the user's real email — read it when they ask about mail, a message, or " +
+        "someone who wrote to them. It searches the SERVER, which matches whole terms in headers and, " +
+        "unevenly, in bodies: there is NO ranking and no fuzzy matching, so results are simply the most " +
+        "RECENT matches. Prefer `from` or `subject` over `query` when you know which you mean. Summaries " +
+        "carry no body text — call get_message when the answer is inside a message.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Free text matched against the message, headers first." },
+          from: { type: "string", description: "Sender name or address, or part of one." },
+          subject: { type: "string", description: "Words in the subject line." },
+          since: { type: "string", description: "Only mail on or after this date (YYYY-MM-DD)." },
+          before: { type: "string", description: "Only mail before this date (YYYY-MM-DD)." },
+          unseen: { type: "boolean", description: "Only unread messages." },
+          mailbox: { type: "string", description: "Mailbox name. Defaults to INBOX." },
+          limit: { type: "number", description: "Max results (default 25, max 100)." },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_message",
+      description:
+        "Read one message in full: its body text and what was attached. The uid comes from search_mail and " +
+        "is ONLY valid in the mailbox it came from — pass that same mailbox back. Attachments are listed, " +
+        "never opened; there is no way to read one.",
+      parameters: {
+        type: "object",
+        properties: {
+          uid: { type: "number", description: "The message's uid, exactly as search_mail returned it." },
+          mailbox: { type: "string", description: "The mailbox the uid came from. Defaults to INBOX." },
+        },
+        required: ["uid"],
+      },
+    },
+  },
+] as const;
+
 // ---------------------------------------------------------------------------
 // Tool executors (read-only)
 // ---------------------------------------------------------------------------
@@ -1124,6 +1197,93 @@ async function toolSearchNotes(args: Record<string, unknown>) {
       updated_at: toLocalIso(n.updated_at),
     })),
   };
+}
+
+// --- Mail ------------------------------------------------------------------
+//
+// Every one of these turns a failure into `{ error }` rather than throwing.
+// That is the tool-loop's contract — a thrown error ends the turn, and a dead
+// or slow mailbox must never take the assistant down with it — and it is how a
+// question that touched mail can still be answered from the user's own data.
+
+/** The connected account, or null. Read per call rather than captured: the user
+ *  can disconnect mid-conversation, and the tools are only in the schema
+ *  because an account existed when the turn started. */
+function mailAccount() {
+  return getMailSettings().account;
+}
+
+function mailError(e: unknown): { error: string } {
+  return { error: e instanceof Error ? e.message : "Could not reach the mail server." };
+}
+
+async function toolListMailboxes() {
+  const account = mailAccount();
+  if (!account) return { error: "No inbox is connected. Tell the user to connect one in Settings → Mail." };
+  try {
+    const folders = await listFolders(account);
+    return { total: folders.length, results: folders.map((f) => f.name) };
+  } catch (e) {
+    return mailError(e);
+  }
+}
+
+async function toolSearchMail(args: Record<string, unknown>) {
+  const account = mailAccount();
+  if (!account) return { error: "No inbox is connected. Tell the user to connect one in Settings → Mail." };
+  try {
+    const found = await searchMail(account, {
+      mailbox: typeof args.mailbox === "string" ? args.mailbox : undefined,
+      query: typeof args.query === "string" ? args.query : undefined,
+      from: typeof args.from === "string" ? args.from : undefined,
+      subject: typeof args.subject === "string" ? args.subject : undefined,
+      since: typeof args.since === "string" ? args.since : undefined,
+      before: typeof args.before === "string" ? args.before : undefined,
+      unseen: args.unseen === true,
+      limit: clampLimit(args.limit),
+    });
+    return {
+      mailbox: found.mailbox,
+      total: found.total,
+      truncated: found.truncated,
+      results: found.results.map((m) => ({
+        uid: m.uid,
+        mailbox: m.mailbox,
+        subject: m.subject,
+        from: m.from.map((a) => a.name ?? a.address).join(", "),
+        from_address: m.from[0]?.address ?? null,
+        date: m.date ? toLocalIso(m.date) : null,
+        unread: !m.seen,
+      })),
+    };
+  } catch (e) {
+    return mailError(e);
+  }
+}
+
+async function toolGetMessage(args: Record<string, unknown>) {
+  const account = mailAccount();
+  if (!account) return { error: "No inbox is connected. Tell the user to connect one in Settings → Mail." };
+  const uid = typeof args.uid === "number" ? args.uid : Number(args.uid);
+  if (!Number.isInteger(uid) || uid <= 0) return { error: "uid is required, as returned by search_mail." };
+  try {
+    const msg = await getMessage(account, uid, typeof args.mailbox === "string" ? args.mailbox : undefined);
+    return {
+      uid: msg.uid,
+      mailbox: msg.mailbox,
+      subject: msg.subject,
+      from: msg.from.map((a) => (a.name ? `${a.name} <${a.address}>` : a.address)).join(", "),
+      to: msg.to.map((a) => a.address).join(", "),
+      cc: msg.cc.map((a) => a.address).join(", "),
+      date: msg.date ? toLocalIso(msg.date) : null,
+      unread: !msg.seen,
+      body: msg.body,
+      body_truncated: msg.body_truncated,
+      attachments: msg.attachments.map((a) => ({ filename: a.filename, type: a.content_type })),
+    };
+  } catch (e) {
+    return mailError(e);
+  }
 }
 
 async function toolGetItem(args: Record<string, unknown>) {
@@ -1905,6 +2065,9 @@ async function executeTool(
     case "get_item": return toolGetItem(args);
     case "get_weather": return toolGetWeather(args);
     case "web_search": return toolWebSearch(args, ctx);
+    case "list_mailboxes": return toolListMailboxes();
+    case "search_mail": return toolSearchMail(args);
+    case "get_message": return toolGetMessage(args);
     // presentation
     case "show_items": return toolShowItems(args, emitItems);
     // write
@@ -1948,6 +2111,14 @@ function statusFor(name: string, args: Record<string, unknown>): string {
     case "web_search": return args.query
       ? i18next.t("status.webSearchFor", { query: String(args.query) })
       : i18next.t("status.webSearch");
+    case "list_mailboxes": return i18next.t("status.listMailboxes");
+    case "search_mail": {
+      const q = args.query ?? args.subject ?? args.from;
+      return q
+        ? i18next.t("status.searchMailFor", { query: String(q) })
+        : i18next.t("status.searchMail");
+    }
+    case "get_message": return i18next.t("status.getMessage");
     case "show_items": return i18next.t("status.showItems");
     case "create_todo": return i18next.t("status.createTodo");
     case "update_todo": return i18next.t("status.updateTodo");
@@ -2075,6 +2246,33 @@ const WEB_SEARCH_PROMPT =
   "- When you do search, say in passing where it came from (\"according to the BBC…\") so the user knows the " +
   "answer came off the web. Don't paste URLs into a spoken reply, and don't list the sources.\n" +
   "- If the search fails or the cap is reached, say you couldn't look it up — never fill the gap with a guess.";
+
+/**
+ * Added to the prompt only when an inbox is connected — the schemas and the
+ * rules that govern them are opt-in together, so an unconnected user's turn
+ * carries neither.
+ *
+ * The rules exist because of what the model does without them: it treats an
+ * IMAP filter as a search engine and asks for "the most important email"; it
+ * reports a subject line as though it had read the message; and it recites
+ * headers into a reply that is about to be read aloud.
+ */
+const MAIL_PROMPT =
+  "\n\nMail:\n" +
+  "- The user has connected their iCloud inbox. search_mail, get_message and list_mailboxes read it live.\n" +
+  "- It is READ-ONLY. You cannot send, reply, forward, delete, file or mark anything as read. If the user " +
+  "asks for any of those, say plainly that you can only read their mail.\n" +
+  "- search_mail returns the most RECENT matches, not the best ones — the server has no ranking. Say \"the " +
+  "latest\" rather than implying you weighed them.\n" +
+  "- Search results carry no body text. If the answer is inside a message, call get_message before " +
+  "answering; never infer the contents from a subject line.\n" +
+  "- A uid only means anything in the mailbox it came from. Pass that mailbox back to get_message.\n" +
+  "- Mail is not one of the user's items, so it never goes to show_items — there are no cards for messages. " +
+  "Answer in prose, naming the sender and roughly when it arrived.\n" +
+  "- Email is private and often sensitive. Answer the question that was asked; do not read out addresses, " +
+  "links, codes or quoted passages that were not asked for, and never repeat a verification code or a " +
+  "password reset link.\n" +
+  "- If a mail tool returns an error, say you couldn't reach their mail — never guess what an email said.";
 
 /** The resolved chat backend for one request. Always OpenAI's `/v1/chat/completions`. */
 interface ChatEndpoint {
@@ -2306,11 +2504,18 @@ export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}
   // Both the schema and its prompt rules are opt-in together: off, this turn
   // carries neither, so the feature costs nothing to leave switched off.
   const webSearch = settings.webSearch;
-  const turnTools = webSearch ? [...TOOLS, ...WEB_SEARCH_TOOL] : TOOLS;
+  // Mail is gated on a connected account rather than a setting: the account IS
+  // the opt-in, and there is nothing for the tools to read without one.
+  const mail = hasMailAccount();
+  const turnTools = [
+    ...TOOLS,
+    ...(webSearch ? WEB_SEARCH_TOOL : []),
+    ...(mail ? MAIL_TOOLS : []),
+  ];
 
   const messages: OAIMessage[] = [{
     role: "system",
-    content: dateContext + SYSTEM_PROMPT + (webSearch ? WEB_SEARCH_PROMPT : ""),
+    content: dateContext + SYSTEM_PROMPT + (webSearch ? WEB_SEARCH_PROMPT : "") + (mail ? MAIL_PROMPT : ""),
   }];
   for (const m of history) {
     messages.push({ role: m.role, content: m.content });

@@ -155,7 +155,8 @@
       "calendars": "行事曆",
       "data": "資料",
       "account": "帳號",
-      "widgets": "小工具"
+      "widgets": "小工具",
+      "mail": "郵件"
     },
     "storedLocally": "多數設定儲存在此裝置上，「小工具」的設定則會跟著你的帳號。",
     "general": {
@@ -279,6 +280,27 @@
       "defaultHint": "當你未指定行事曆時，新行程會建立在這裡 —— 包含助理建立的行程。只有內建的「{{calendar}}」行事曆可離線使用。",
       "passwordScopeHint": "此密碼可存取整個 iCloud 帳戶，不限於行事曆，並以純文字儲存在此裝置上，登出時會清除。裝置遺失時，可在同一頁面撤銷。",
       "passwordCleared": "此裝置未儲存 App 專用密碼，登出時已清除。請重新輸入以連接這些行事曆。"
+    },
+    "mail": {
+      "description": "連接 iCloud 信箱後，助理即可讀取你的郵件。唯讀：不會寄送、移動、刪除或標示為已讀，郵件也不會複製到此裝置。",
+      "account": "iCloud 帳戶",
+      "connected": "已連接",
+      "appleId": "Apple ID",
+      "appPassword": "App 專用密碼",
+      "passwordHint": "若已啟用雙重認證，一般的 Apple 密碼將無法使用。請在「登入與安全性」中建立 App 專用密碼，再貼到這裡。",
+      "reuseCalendarPassword": "使用與行事曆相同的密碼",
+      "connecting": "連接中…",
+      "connect": "連接",
+      "reconnect": "重新連接",
+      "disconnect": "中斷連接",
+      "confirmDisconnect": "要中斷此信箱的連接嗎？助理將無法再讀取你的郵件。",
+      "found_other": "找到 {{count}} 個信箱。",
+      "passwordCleared": "此裝置未儲存 App 專用密碼，登出時已清除。請重新輸入以連接此信箱。",
+      "access": "郵件的讀取方式",
+      "readOnlyHint": "信箱以唯讀方式開啟，因此這裡的任何操作都無法寄送、刪除或修改郵件，也不會誤觸。當你詢問助理時才會即時讀取郵件。",
+      "directNote": "在桌面版中，郵件直接向 Apple 取得，不會經過 Sekunda 的伺服器。",
+      "relayNote": "在瀏覽器中無法直接取得郵件，因此會經由 Sekunda 的伺服器轉送 —— 也就是說，你的 App 專用密碼與讀取的郵件都會經過它。伺服器不會儲存或記錄任何內容。若要完全避免，請使用桌面版。",
+      "mailboxes": "信箱：{{list}}"
     },
     "data": {
       "title": "資料",
@@ -638,7 +660,11 @@
     "working": "處理中…",
     "thinking": "思考中…",
     "speaking": "朗讀中…",
-    "confirmDelete": "等待你確認刪除…"
+    "confirmDelete": "等待你確認刪除…",
+    "listMailboxes": "查看信箱中…",
+    "searchMail": "搜尋信箱中…",
+    "searchMailFor": "正在信件中搜尋「{{query}}」…",
+    "getMessage": "開啟郵件中…"
   },
   "auth": {
     "signIn": "登入",

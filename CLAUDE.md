@@ -45,7 +45,7 @@ npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
 
 ## Architecture (do not violate)
 
-1. **Thin Rust.** `lib.rs` wires plugins and nothing else — no database, no migrations. All logic is TypeScript, so a browser/mobile build stays a packaging change.
+1. **Thin Rust.** `lib.rs` wires plugins and nothing else — no database, no migrations. All logic is TypeScript, so a browser/mobile build stays a packaging change. **One deliberate exception: `src-tauri/src/mail.rs`** (`imap_op`), because IMAP is a stateful TCP socket and no plugin can open one. It is a transport, not logic — it returns raw bytes and decides nothing — and it is the only custom command. A second one needs the same justification.
 2. **`src/db.ts` is the only module that talks to the API for domain data**, and `worker/src/db/` is the only place SQL is written. Views never call `lib/api.ts` directly.
 3. **All event access goes through `src/lib/calendars.ts`**, which merges the built-in calendar with CalDAV ones and routes writes. Views and `ai.ts` must never call `db.ts` event helpers or the CalDAV client directly.
 4. **Keep domain tables separate; connect via `links` + `item_tags`.**
@@ -70,6 +70,16 @@ npm run test:e2e         # wdio run wdio.conf.ts → e2e/*.spec.ts
 - **`searchEvents` is asymmetric on purpose** — local is SQLite so it searches all time; CalDAV has no keyword search at all, so remote can only be a windowed fetch matched client-side. Any caller MUST show the window (`SearchView`'s footer): outside it, results are *missing*, not absent. It returns one hit per **event**, not per occurrence — a daily standup expanded over a year is one thing the user is looking for — dated to the occurrence nearest now, never the series start.
 - **Snap any search window to whole days.** `getRemoteOccurrences` caches on `calendarId|start|end`, so a window built from `new Date()` mints a fresh key on every keystroke and re-hits the network per character. Debounce too — a keystroke can now cost a CalDAV round-trip.
 - **Writes preserve the source zone via `UnifiedEvent.tzid`.** `dtstart` is still an absolute instant; `tzid` is a *write-back hint only*, set in `toUnified` from `startDate.zone.tzid` (null for all-day/floating/UTC/local). `buildCalendarData` emits `DTSTART;TZID=` + the `VTIMEZONE` **only when the zone is registered in `ICAL.TimezoneService`** — reads register every VTIMEZONE they see, so a fetched event can round-trip; anything else falls back to UTC. **We ship no tz database, so events created in-app still write UTC and a new recurring timed series still drifts across DST.** Never "fix" that by dropping the `fromJSDate(d, true)` — `false` emits a floating time, which is worse. `EXDATE` must carry the same value type and zone as `DTSTART` or the skipped occurrence comes back.
+
+**Mail (IMAP)**
+- **Read-only is enforced by the SERVER, not by us:** both executors open mailboxes with `EXAMINE` (never `SELECT`) and fetch with `BODY.PEEK` (never `BODY`, which sets `\Seen`). Keep it that way and a bug here still cannot mark, move or delete a message. There is no send path and no write tool; adding one is a deliberate change, not an extension.
+- **Three implementations of one conversation:** the envelope in `packages/shared/src/mail.ts`, executed by `worker/src/imap.ts` (web) or `src-tauri/src/mail.rs` (desktop). Rust can't import the schema, so it mirrors it by hand — a change to the envelope is a change in three files.
+- **The executors return RAW bytes as binary strings** (one code unit per byte), and `src/lib/mail/mime.ts` is the only decoder. Decoding in the transport would corrupt every non-UTF-8 message irreversibly, and decoding in both would give desktop and web different answers about what an email says.
+- **Two IMAP framing traps, both handled and both invisible until they aren't:** a response line ending `{n}` means n raw bytes follow *and then the line continues* (a line-oriented reader mis-frames every non-ASCII subject); and `BODY[HEADER.FIELDS (…)]` is ONE atom, brackets and inner parens included — tokenizing it as several shifts every key/value pair in a FETCH by one and reads as "the server sent nothing".
+- **A rejected IMAP sign-in must be a 400, never a 401.** `lib/api.ts` treats 401 as an expired access token: it refreshes and *replays*, which would try the same bad password against Apple twice and present a lockout risk as a session problem.
+- **Search criteria are structured, never a command string**, and every value is quoted by the executor. CR/LF is refused at three layers. The client cannot compose IMAP syntax; that is the injection boundary.
+- **IMAP SEARCH has no ranking.** Results are the most *recent* matches. Any surface that implies relevance is lying, which is why the tool description says so to the model.
+- **Never log a request or response** in `worker/src/routes/mail.ts` or `mail.rs` — same rule as `dav.ts`, higher stakes: an inbox carries every other service's reset links.
 
 **Platform**
 - **External APIs go through `lib/httpFetch.ts`, never a direct `import { fetch } from "@tauri-apps/plugin-http"`.** Inside Tauri it resolves to the plugin (the webview's own fetch is blocked by CORS from `tauri://`, and the URL must be scoped in `capabilities/default.json`); in a browser the plugin's IPC command doesn't exist, so a static import compiles, ships, and throws on every call. It is resolved at runtime for that reason. The plugin was also doing duty as a CORS *bypass*, which the web build doesn't get: Open-Meteo and OpenAI send CORS headers so they work; **Yahoo and iCloud send none.** Stocks therefore route through the Worker's `/v1/quotes` proxy on web only (`stocks.ts` picks by `isTauri()` — desktop calls Yahoo directly rather than spending request quota on a problem browsers alone have). Connected calendars relay through the Worker's `/v1/dav` route on web only (`caldav/client.ts` picks by `isTauri()`; desktop still talks to Apple directly). **That relay sees the user's iCloud app-specific password and their calendar contents in plaintext** — TLS terminates at the Worker. It was accepted deliberately to make calendars work on the web; `worker/src/routes/dav.ts` records what keeps it tolerable (nothing stored, nothing logged, session required, iCloud-only, redirects never followed) and what hardening is still owed. **Never add a `console.log` of a request or response in that file** — observability is on, so the password would land in log retention.
@@ -190,6 +200,7 @@ src/
   lib/  i18n · format · calendars · recurrence · ics · ai · voice · weather ·
         images · notifications · settings · api · cache · auth · authStore · kdf · rss
         caldav/  client · discovery · events · ical    # talks to iCloud directly, not the Worker
+        mail/    client · mime · mailbox · types         # read-only IMAP; mime.ts decodes for BOTH platforms
   components/  ui · Avatar · ItemMeta · ItemCard · EventForm · MarkdownToolbar · NoteImage ·
         YouTubeEmbed
         today/   registry · types · CardShell · CardBoundary · useAsync · dayData ·
@@ -205,7 +216,8 @@ worker/
   src/auth/                  # crypto · tokens · throttle (failed logins) · email
   src/middleware/            # cors · auth · securityHeaders
   src/routes/                # one file per area (auth · spaces · health · quotes ·
-                             #   dav · feed — the RSS relay)
+                             #   dav · feed — the RSS relay · mail — the IMAP relay)
+  src/imap.ts                # hand-rolled minimal IMAP over cloudflare:sockets
   src/db/                    # the ONLY place SQL is written; every query takes space_id
                              #   (+ recovery.ts, account.ts — identity, keyed by user)
   migrations/000N_*.sql      # 0001 init (squashed + tenancy) · 0002 auth throttle ·
@@ -213,7 +225,8 @@ worker/
                              #   0005 uuid legacy list ids · 0006 space_settings
   wrangler.toml              # D1 + KV bindings per environment
 src-tauri/
-  src/lib.rs                 # plugin wiring ONLY — no database, no migrations
+  src/lib.rs                 # plugin wiring + the one custom command
+  src/mail.rs                # imap_op — TLS to iCloud IMAP, read-only, host-allowlisted
   capabilities/default.json  # http scope THAT SHIPS: the Worker + api.openai.com +
                              #   *.icloud.com + *.open-meteo.com + Yahoo. NO blanket
                              #   `http://*` — removed in M5; a plaintext-HTTP host
