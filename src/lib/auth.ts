@@ -7,6 +7,7 @@ import {
 } from "@secondbrain/shared";
 import { apiRequest, ApiError } from "./api";
 import { clearCache } from "./cache";
+import { clearSecrets } from "./secrets";
 import { DEFAULT_KDF_PARAMS, deriveKey, newKdfSalt } from "./kdf";
 import {
   clearAuth,
@@ -189,6 +190,8 @@ export async function deleteAccount(email: string, password: string): Promise<vo
     body: { derived_key: derivedKey },
   });
 
+  // Before clearAuth — see the note in logout().
+  clearSecrets();
   // The session is gone server-side; clear this device so nothing tries to use
   // a refresh token that now names a user who doesn't exist.
   clearAuth();
@@ -215,6 +218,15 @@ export async function logout(): Promise<void> {
       // Best effort.
     }
   }
+  // MUST come before clearAuth: the secret keys are scoped by the signed-in
+  // user id, so once the cached session is gone `scopedKey` resolves to the
+  // `anon` bucket and this would wipe nothing while looking like it worked.
+  //
+  // Signing out is the moment to forget a full-scope iCloud credential and a
+  // billable API key — leaving them on the disk of a machine the user is
+  // walking away from was the gap this closes. Coming back means re-entering
+  // them, which is the right price.
+  clearSecrets();
   clearAuth();
   // The response cache persists in IndexedDB across the reload sign-out
   // triggers, so it must be wiped explicitly — otherwise one account's cached

@@ -15,7 +15,7 @@ import { useEffect, useRef, useState } from "react";
 import { Mic, Square, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { startRecording, transcribe, isRecordingSupported, Recording } from "../lib/voice";
-import { hasOpenAiKey } from "../lib/settings";
+import { hasOpenAiKey } from "../lib/secrets";
 
 interface Props<T> {
   /** Called when recording actually begins; returns the anchor for onResult. */

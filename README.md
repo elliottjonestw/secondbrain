@@ -106,6 +106,12 @@ open "src-tauri/target/release/bundle/macos/Sekunda.app"
 > refuse identically for every address (deliberately: a response that varied
 > would be the account-existence oracle the whole flow avoids).
 >
+> **Rate limiting now covers every endpoint, not just the proxy routes.** The
+> auth surface, all ~90 space routes and the public health check have per-minute
+> caps, registration demands a captcha on every platform, and outbound mail and
+> note-image uploads have durable per-day ceilings in D1. See
+> [Rate limiting](#rate-limiting).
+>
 > **The app is no longer standalone.** It now depends on the deployed Worker
 > being reachable — no Worker, no login. That is the trade the cloud migration
 > makes for cross-device sync.
@@ -139,12 +145,19 @@ Worker — nothing is kept on the device but a read cache. Migrations live in
 App **settings** live outside the domain database, so they survive a data wipe
 and never travel in a backup file. They are split by what the setting *is*:
 
-- **Per-device, in the webview's `localStorage`** — your OpenAI key + model,
-  your voice and speech settings, your calendar-account configuration, the UI
+- **Per-device, in the webview's `localStorage`** — your model choice, your
+  voice and speech settings, your calendar-account configuration, the UI
   language, the theme, and your Today card layout. These are answers about a
-  particular machine, and you re-enter them once per machine. The two secrets
-  among them (the OpenAI key and the iCloud app-specific password) are stored
-  in plain text on the device and are **never sent to the server**.
+  particular machine, and you re-enter them once per machine.
+- **The two credentials, on their own** — your OpenAI API key and your iCloud
+  app-specific password. Also `localStorage`, also per-device, also **never sent
+  to the server**, but deliberately kept out of the settings objects entirely
+  (`src/lib/secrets.ts`) so that nothing which handles settings — the cloud
+  sync, the backup writer, the Settings form — is holding a credential it has to
+  remember not to write down. They are still **plain text on the device**, and
+  they are **cleared when you sign out**: coming back means entering them again,
+  which is the point. Each field links to the page that issues *and revokes*
+  that credential, because revocation is the real remedy if a device is lost.
 - **Per-account, in the cloud** — everything on **Settings → Widgets**: your
   weather location and temperature unit, your stock watchlist, your **RSS
   subscriptions**, and how many articles the news card shows. These are answers
@@ -153,8 +166,10 @@ and never travel in a backup file. They are split by what the setting *is*:
 
 The line between the two is an explicit allowlist (`CLOUD_SETTING_KEYS` in
 `packages/shared`), enforced on both sides: the client only ever uploads a key
-on that list, and the Worker rejects a patch containing any key that isn't. That
-is what guarantees no future change can quietly sync a credential. Cloud
+on that list, and the Worker rejects a patch containing any key that isn't. It
+is now the second line of defence rather than the only one — since the two
+credentials aren't part of the settings objects at all, there is nothing there
+for a careless upload to pick up. Cloud
 settings are last-write-wins per key, are kept in `localStorage` as well so the
 app still works offline, and an edit made offline is pushed when you reconnect
 rather than being overwritten by the server's older copy.
@@ -355,6 +370,69 @@ Calendar sync is built (**CalDAV, iCloud** — see above). The schema was design
 - Every syncable row has `created_at`, `updated_at`, and a `sequence` that increments on edit (mirrors iCalendar `SEQUENCE` / vCard `REV`).
 - **Export to `.ics`** (Calendar → bottom bar → Export) proves the schema is standards-compliant — drag the file straight into Apple Calendar. Import reads events back, preserving UIDs. (vCard `.vcf` import/export is future work; the schema already maps to it.)
 
+## Rate limiting
+
+The whole backend runs on free tiers with **no payment method on file**, which
+decides the shape of this: free-plan products fail closed with errors rather
+than billing an overage, so the worst case of abuse is availability, never a
+bill. The exception is anything that spends a quota measured **per day** —
+Resend's ~100 messages, KV's 1,000 writes — because those don't come back until
+tomorrow, and a stranger who exhausts one has denied the service to real users
+for the rest of the day.
+
+Three mechanisms, each doing something the others structurally cannot:
+
+| | Where | Counts | Window | Cost |
+|---|---|---|---|---|
+| **Failed-attempt throttle** | D1 (`auth_throttle`) | failures, then locks | 15 min | ~105 ms, once per sign-in |
+| **Cloudflare binding** | in-colo | successes | **10 or 60 s only** | ~1 ms |
+| **Daily budget** | D1 (`quota`) | successes | calendar day | ~105 ms, rare paths only |
+
+**The binding cannot bound a day.** Its `period` accepts only 10 or 60 seconds,
+so even a strict 5-per-minute cap on registration still permits 7,200 sign-ups
+a day from one address — 72× the entire daily mail allowance. That gap is the
+whole reason the third mechanism exists, and it is why a new limit protecting a
+provider quota needs a daily budget *in addition to* a binding, never instead
+of one: the binding absorbs the flood cheaply, the budget survives a caller
+patient enough to stay under it.
+
+**Per-minute caps** (all per-colo; see the limitations note below). Keyed by
+**user id** wherever an identity exists by the time they run, and by **IP**
+otherwise — which is most of the auth surface. The IP-keyed ones are set
+generously on purpose, for the reason spelled out in `worker/src/auth/throttle.ts`:
+one address can be a household, an office, or a mobile carrier's CGNAT, so a
+strict shared-address limit turns protection into a denial-of-service vector.
+Every number below is far above what any real client does.
+
+- `/auth/kdf`, `/auth/login` — 30/min per IP
+- `/auth/register` — 5/min per IP, plus the shared mail budget
+- `/auth/refresh`, `/auth/logout` — 60/min per IP
+- `/v1/spaces/*` (all ~90 routes) — 600/min per user
+- note-image upload — 10/min per user
+- `/v1/health` — 20/min per IP
+- the proxy routes (`/v1/dav`, `/v1/quotes/*`, `/v1/feed`) and outbound mail keep their existing caps
+
+**Per-day ceilings** (`worker/migrations/0007_quota.sql`, `worker/src/db/quota.ts`):
+
+- **All outbound mail: 80/day**, across every endpoint and recipient. This is
+  the circuit breaker — no combination of addresses, IPs or endpoints can push
+  Resend past its free tier. Enforced inside `sendEmail` rather than per-route,
+  so a future mail path cannot forget it.
+- **Mail per IP: 5/day.**
+- **Note-image uploads: 200/day per user**, against KV's 1,000 free writes —
+  by a wide margin the tightest quota in the stack.
+
+A 429 carries `Retry-After`. The message names the resource but never the
+budget: telling a caller how long to wait is what an honest client needs, while
+telling it how many calls it gets is telling an abusive one how to pace itself.
+On the auth routes every limiter returns the *same* message, because a 429 that
+differed between "the address you asked about" and "the address you came from"
+would be the account-existence oracle the decoy KDF salt exists to deny.
+
+**Registration now requires a captcha on every platform**, desktop included —
+see the Turnstile note under [limitations](#notes--current-limitations) for
+what that changes and how to undo it if desktop sign-up breaks.
+
 ## Project layout
 
 The repo is npm workspaces: the root package is the app, plus two workspaces
@@ -409,11 +487,14 @@ worker/src/
     notifications.ts    # due-item notification poller
     format.ts           # date helpers
     images.ts           # decode/downscale/re-encode (person photos, note images)
-    settings.ts         # app settings: per-device in localStorage (OpenAI key/model,
-                        #   voice, calendar accounts, theme, layout) PLUS the cloud
-                        #   sync for the Widgets ones (weather location + unit,
+    settings.ts         # app settings: per-device in localStorage (model, voice,
+                        #   calendar accounts, theme, layout) PLUS the cloud sync
+                        #   for the Widgets ones (weather location + unit,
                         #   watchlist, RSS feeds + count). The allowlist that keeps
                         #   secrets off the server lives in packages/shared.
+    secrets.ts          # the ONLY module holding credentials: the OpenAI key and
+                        #   the iCloud app password. Own storage keys, per account,
+                        #   cleared on sign-out. Still plaintext — not encryption.
     ai.ts               # AI assistant: read + write tools + agentic loop
     weather.ts          # Open-Meteo forecast, hourly, air quality + place search
                         #   (keyless, never stored)
@@ -487,9 +568,11 @@ See [CLAUDE.md](CLAUDE.md) for architecture principles, conventions, and the got
 - **A custom (non-preset) RRULE is described in English** even in Chinese. `rrule`'s `toText()` substitutes token by token, and Chinese word order differs enough ("every week on Monday" vs 每週一) that the output would read worse than English. The repeat presets themselves are translated, which covers the common cases.
 - **Profile photos accept PNG/JPEG/WebP/GIF, not HEIC** — the webview can't decode HEIC, so a photo dragged straight out of Apple Photos is rejected with an error rather than silently failing; export it as JPEG first. Photos are stored inline on the person row, so they're included in a Settings → Data backup (and inflate the JSON by ~30 KB each) rather than living as separate files.
 - The demo dataset and the assistant's own prose are **English-only**; the assistant replies in whatever language you write to it in.
-- The OpenAI API key **and the iCloud app-specific password** are stored in plaintext in `localStorage`, keyed per signed-in account. On the desktop that's typical for a local app — anyone with the machine profile can read them, and moving them to the OS keychain is future work. **On the web build it is more serious**: `github.io` is a public origin, so any script execution there reads the OpenAI key, the iCloud password *and* the refresh token. The built page ships a `Content-Security-Policy` meta tag (`default-src 'self'`, no inline or remote script, `connect-src` limited to the API and the handful of CORS-sending services) precisely to narrow that, but GitHub Pages cannot send real headers, so `frame-ancestors` is unavailable and the CSP is the only layer. The durable fix is for the web build not to hold those secrets at all.
+- The OpenAI API key **and the iCloud app-specific password** are stored in plaintext in `localStorage`, keyed per signed-in account. They are confined to `src/lib/secrets.ts` — one module, its own storage keys, no credential inside any settings object — and **cleared on sign-out**, so they no longer outlive a session on a shared machine. That shrinks the surface and the lifetime; it does **not** encrypt anything. On the desktop, plaintext-at-rest is typical for a local app: anyone with the machine profile can read them, and moving them to the OS keychain is future work. **On the web build it is more serious**: `github.io` is a public origin, so any script execution there reads both secrets *and* the refresh token. The built page ships a `Content-Security-Policy` meta tag (`default-src 'self'`, no inline or remote script, `connect-src` limited to the API and the handful of CORS-sending services) precisely to narrow that, but GitHub Pages cannot send real headers, so `frame-ancestors` is unavailable and the CSP is the only layer. The durable fix is for the web build not to hold those secrets at all.
+- **Injected script is worse inside the packaged app than on the web, which is counter-intuitive.** The web CSP above also constrains *exfiltration* — no arbitrary `connect-src`, `object-src 'none'`, no `form-action`, images limited to `'self' data: blob:`. Inside Tauri, `plugin-http` runs in Rust and is not subject to CSP at all, and `capabilities/default.json` scopes `api.openai.com` and `*.icloud.com`; so injected script still cannot post the secrets to an attacker's host, but it can *use* them in place — spend the OpenAI balance, read or delete iCloud calendars. Both credentials are therefore linked to their revocation page in Settings, and both are worth scoping at the source: a key kept for this app alone, with a spend limit on it.
 - **The Worker relays iCloud credentials for the web build.** `POST /v1/dav` forwards the app-specific password and calendar contents in plaintext because iCloud sends no CORS headers; TLS terminates at the Worker, so both are visible to it in memory. Nothing is stored or logged, a session is required, only iCloud hosts are reachable, redirects are never followed, and it is rate-limited per user — but it is an accepted exposure, not an eliminated one. The desktop app doesn't use it.
 - **Password reset needs email configured on the server.** Without `RESEND_API_KEY`, requesting a reset link returns the same "if that address has an account…" response it always does and no mail is sent; the operator sees it in `wrangler tail`, the user sees nothing.
 - **Email confirmation is required to sign in.** Registration no longer logs you in — it creates the account, mails a confirmation link, and shows a "check your inbox" screen. A correct password for an unconfirmed address is refused with a distinct `email_unverified` code so the sign-in screen can offer to resend rather than showing "wrong password". Because a locked-out user can't reach an authenticated endpoint, the resend link is a public, oracle-safe, rate-limited endpoint (`/v1/auth/email/verify/resend`) that answers identically for confirmed, unconfirmed and unknown addresses alike. This means **the server must have `RESEND_API_KEY` set or nobody new can get in** — the gate and the mailer are now coupled.
-- **Rate limits on the proxy routes are counted per Cloudflare colo**, not globally, because they use Cloudflare's in-colo rate-limiting binding rather than a database row (a D1 counter would add ~105 ms to every relayed CalDAV call). A caller spread across datacentres therefore gets the budget several times over. That's sound for what these limits defend against — one stolen session relaying from one place — and genuinely distributed abuse hits the Worker's own 100k requests/day first.
-- **A Cloudflare Turnstile captcha guards register and login, web-only, enforced per origin.** Turnstile is a browser widget, so it renders only on the web build; the desktop app serves from a `tauri://` origin the Worker exempts (its native http-plugin requests carry no `Origin` header). The Worker verifies the token server-side (`worker/src/auth/turnstile.ts`) whenever `TURNSTILE_SECRET_KEY` is set and the request comes from a browser origin — the client widget is not the enforcement. Two knobs are coupled: the public site key ships in the web build as `VITE_TURNSTILE_SITE_KEY` and the secret is a Worker secret (`wrangler secret put TURNSTILE_SECRET_KEY`); **set both or neither** — a secret with no site key locks web users out (the widget that mints the token never renders), and neither one leaves desktop or unconfigured environments blocked. Known limitation of "web-only, per-origin": a script hitting the API with no `Origin` header is treated like the desktop app and skips the check — accepted, because it still stops the realistic threat (automated abuse of the visible web form) without dragging the widget into the Tauri webview's referrer/origin minefield.
+- **Per-minute rate limits are counted per Cloudflare colo**, not globally, because they use Cloudflare's in-colo rate-limiting binding rather than a database row (a D1 counter would add ~105 ms to every relayed CalDAV call). A caller spread across datacentres therefore gets the budget several times over. That's sound for what these limits defend against — one stolen session relaying from one place — and genuinely distributed abuse hits the Worker's own 100k requests/day first. **The per-day ceilings are not affected**: those live in D1 and are globally consistent, which is exactly why the things that spend real money have one. See [Rate limiting](#rate-limiting).
+- **A refused daily budget is counted, not just refused.** `consumeDailyQuota` increments before it answers, so an attempt turned away still spends a unit. That over-counts abuse and makes the mail breaker trip slightly early — the conservative direction for a ceiling whose entire job is to not be crossed, and it avoids a read-then-write race. It also means a D1 outage stops outbound mail rather than un-capping it: the mail path fails closed by design.
+- **A Cloudflare Turnstile captcha guards register and login, web-only, enforced per origin.** Turnstile is a browser widget, so it renders only on the web build; the desktop app serves from a `tauri://` origin the Worker exempts (its native http-plugin requests carry no `Origin` header). The Worker verifies the token server-side (`worker/src/auth/turnstile.ts`) whenever `TURNSTILE_SECRET_KEY` is set and the request comes from a browser origin — the client widget is not the enforcement. Two knobs are coupled: the public site key ships in the web build as `VITE_TURNSTILE_SITE_KEY` and the secret is a Worker secret (`wrangler secret put TURNSTILE_SECRET_KEY`); **set both or neither** — a secret with no site key locks web users out (the widget that mints the token never renders), and neither one leaves desktop or unconfigured environments blocked. **Registration is the exception: it now requires a token on every platform, desktop included.** The per-origin exemption was the hole on that endpoint — a script sends no `Origin` at all, so exempting "no origin" exempted precisely the caller the check exists to stop, and registration is the one unauthenticated route a stranger can use to mint accounts and spend the daily mail allowance. Sign-in keeps the web-only rule deliberately: whether Cloudflare will issue a token to a widget hosted at `tauri://localhost` is **unproven** (a site key's allowlist is expressed in domains, and a custom scheme has no obvious spelling in one), so if the bet loses the damage is confined to new desktop sign-ups while existing users can still get in. **If desktop registration breaks, set `TURNSTILE_ALLOW_NATIVE=1`** on the Worker — it restores the per-origin exemption for registration, turning the fix into one `wrangler secret put` rather than a code change and a redeploy. For that to actually work the desktop client renders the widget but does **not** block submit on having a token (the web build still does): otherwise a failed widget would keep sign-up broken until the app was rebuilt and redistributed, no matter what the operator set on the Worker. The Worker stays the only thing that decides. Registration then falls back to its rate limit plus the daily mail budget, which is weaker, so leave it unset unless it's needed.

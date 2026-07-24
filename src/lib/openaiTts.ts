@@ -17,6 +17,7 @@
 import { httpFetch as fetch } from "./httpFetch";
 import i18next from "i18next";
 import { getSettings, clampSpeechRate } from "./settings";
+import { getOpenAiKey } from "./secrets";
 
 const ENDPOINT = "https://api.openai.com/v1/audio/speech";
 
@@ -101,8 +102,8 @@ export async function synthesize(
   rate?: number,
   signal?: AbortSignal,
 ): Promise<Blob> {
-  const { openaiApiKey, ttsModel, speechRate } = getSettings();
-  const key = openaiApiKey.trim();
+  const { ttsModel, speechRate } = getSettings();
+  const key = getOpenAiKey();
   if (!key) throw new Error(i18next.t("errors.noApiKey"));
   const model = ttsModel || "gpt-4o-mini-tts";
   const speed = clampSpeechRate(rate ?? speechRate);

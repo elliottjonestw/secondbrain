@@ -3,7 +3,12 @@ import { Brain, Loader2, MailCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { Session } from "@secondbrain/shared";
 import { Button } from "../components/ui";
-import Turnstile, { TURNSTILE_ENABLED, type TurnstileHandle } from "../components/Turnstile";
+import Turnstile, {
+  TURNSTILE_ENABLED,
+  TURNSTILE_REQUIRED_FOR_REGISTER,
+  type TurnstileHandle,
+} from "../components/Turnstile";
+import { isTauri } from "../lib/platform";
 import { login, register, requestPasswordReset, resendVerification } from "../lib/auth";
 import { ApiError, OfflineError } from "../lib/api";
 
@@ -33,14 +38,20 @@ export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => v
   const [pendingVerify, setPendingVerify] = useState<string | null>(null);
   // The Turnstile token for the current attempt. Single-use, so it's cleared
   // and the widget re-armed after every submit. Null until the challenge
-  // passes; only consulted when TURNSTILE_ENABLED (web build with a site key).
+  // passes; only consulted when `showCaptcha` is true.
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   const turnstileRef = useRef<TurnstileHandle>(null);
 
   const isRegister = mode === "register";
   const isForgot = mode === "forgot";
-  // The captcha guards account creation and sign-in, not the reset request.
-  const showCaptcha = TURNSTILE_ENABLED && !isForgot;
+  // The captcha guards account creation and sign-in, not the reset request —
+  // and it guards them on different platforms. Registration demands it
+  // everywhere, desktop included, because that endpoint is what a script
+  // abuses; sign-in keeps the web-only rule so an unproven widget inside the
+  // Tauri webview can't lock existing users out of the desktop app. See
+  // components/Turnstile.tsx for the full reasoning.
+  const showCaptcha =
+    !isForgot && (isRegister ? TURNSTILE_REQUIRED_FOR_REGISTER : TURNSTILE_ENABLED);
 
   function switchMode(next: Mode) {
     setMode(next);
@@ -88,8 +99,18 @@ export default function AuthView({ onSignedIn }: { onSignedIn: (s: Session) => v
       }
     }
 
-    // The captcha (web build only) must be solved before the round-trip.
-    if (showCaptcha && !captchaToken) {
+    // The captcha must be solved before the round-trip — except on desktop,
+    // where the widget is rendered but NOT required to have produced a token.
+    //
+    // That asymmetry is what makes the server's TURNSTILE_ALLOW_NATIVE escape
+    // hatch actually work. If Cloudflare turns out not to issue tokens at
+    // `tauri://localhost`, blocking here would mean desktop sign-up stays
+    // broken until the app is rebuilt and redistributed, no matter what the
+    // operator sets on the Worker. Letting the request through instead means
+    // the Worker is the only place that decides: it refuses with "captcha
+    // check failed" until the flag is set, and accepts immediately after.
+    // A token IS still sent whenever the widget managed to mint one.
+    if (showCaptcha && !captchaToken && !isTauri()) {
       setError(t("auth.captchaRequired"));
       return;
     }

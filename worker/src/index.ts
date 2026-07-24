@@ -53,6 +53,9 @@ app.notFound((c) =>
  */
 app.onError((err, c) => {
   if (err instanceof ApiError) {
+    // Retry-After is the one piece of a 429 a client is meant to act on, so it
+    // rides on the response rather than only in the prose message.
+    if (err.retryAfter !== undefined) c.header("Retry-After", String(err.retryAfter));
     return c.json(err.toBody(), err.status);
   }
 

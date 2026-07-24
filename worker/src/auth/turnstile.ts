@@ -42,6 +42,35 @@ export function turnstileRequired(env: Bindings, req: Request): boolean {
 }
 
 /**
+ * Whether a REGISTRATION must pass a Turnstile challenge — everywhere.
+ *
+ * Registration is the one unauthenticated endpoint that spends a quota which
+ * strangers can reach: each call mints an account, a space, two lists, the
+ * welcome seed rows, and one Resend message against a ~100-a-day allowance. The
+ * per-origin exemption above is what a script trivially satisfies — a bare
+ * fetch sends no `Origin` at all — so on this endpoint the exemption IS the
+ * hole, and it is closed rather than described.
+ *
+ * The cost of closing it is that the desktop app must now render the widget
+ * from `tauri://localhost`. That is untested against Cloudflare's site-key
+ * domain allowlist, which is expressed in domains and has no obvious spelling
+ * for a custom scheme. `TURNSTILE_ALLOW_NATIVE` is the escape hatch: setting
+ * it to "1" restores the old per-origin behaviour for registration, turning a
+ * desktop breakage into a `wrangler secret put` rather than a code change and
+ * a redeploy. It weakens registration back to rate limits plus the daily mail
+ * budget, which is why it is opt-in and not the default.
+ *
+ * An unset TURNSTILE_SECRET_KEY still disarms the check for the whole
+ * environment, so local development and any deploy without a key are
+ * unaffected.
+ */
+export function turnstileRequiredForRegister(env: Bindings, req: Request): boolean {
+  if (!env.TURNSTILE_SECRET_KEY) return false;
+  if (env.TURNSTILE_ALLOW_NATIVE === "1") return turnstileRequired(env, req);
+  return true;
+}
+
+/**
  * Verify a token against Cloudflare's siteverify endpoint.
  *
  * Returns false — never throws — for a missing token, a network failure, or a

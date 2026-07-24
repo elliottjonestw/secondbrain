@@ -10,12 +10,28 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 export class ApiError extends Error {
   readonly code: ErrorCode;
   readonly fields?: Record<string, string>;
+  /**
+   * Seconds until the caller may retry, rendered as `Retry-After` by the error
+   * boundary in index.ts.
+   *
+   * Only the rate limiters set it. It carries the *window*, never the budget:
+   * telling a caller how long to wait is what an honest client needs to back
+   * off correctly, while telling it how many calls it gets is telling an
+   * abusive one exactly how to pace itself just under the line.
+   */
+  readonly retryAfter?: number;
 
-  constructor(code: ErrorCode, message: string, fields?: Record<string, string>) {
+  constructor(
+    code: ErrorCode,
+    message: string,
+    fields?: Record<string, string>,
+    retryAfter?: number,
+  ) {
     super(message);
     this.name = "ApiError";
     this.code = code;
     this.fields = fields;
+    this.retryAfter = retryAfter;
   }
 
   get status(): ContentfulStatusCode {

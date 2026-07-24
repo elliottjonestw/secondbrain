@@ -61,14 +61,31 @@ import { deleteAccount } from "../db/account";
 import { deleteNoteImageBlobs } from "../db/images";
 import {
   EmailNotConfigured,
+  MailBudgetExhausted,
   sendPasswordResetEmail,
   sendVerificationEmail,
 } from "../auth/email";
 import { enforceRateLimit } from "../rateLimit";
-import { turnstileRequired, verifyTurnstile } from "../auth/turnstile";
+import {
+  turnstileRequired,
+  turnstileRequiredForRegister,
+  verifyTurnstile,
+} from "../auth/turnstile";
 import { requireAuth } from "../middleware/auth";
 
 export const auth = new Hono<AppEnv>();
+
+/**
+ * The message every IP-keyed limiter on this router returns.
+ *
+ * One string for all of them, and deliberately vague. These endpoints are the
+ * ones that must not leak: a 429 whose wording differs between "the address
+ * you asked about" and "the address you came from" tells a caller which bucket
+ * they filled, and on an endpoint like `/auth/kdf` — which answers for every
+ * address precisely so membership can't be tested — that would hand back the
+ * oracle the decoy salt exists to deny.
+ */
+const TOO_MANY = "Too many attempts. Wait a minute and try again.";
 
 /** Secrets are typed optional so M0 could deploy before they existed. From
  *  here on their absence is a deployment fault, not a request fault. */
@@ -120,6 +137,12 @@ auth.post("/auth/kdf", async (c) => {
   const { email } = kdfChallengeSchema.parse(await c.req.json());
   const emailNorm = normalizeEmail(email);
 
+  // Keyed by IP, never by the address asked about: a per-address key here
+  // would make the limiter itself an enumeration oracle, since a caller could
+  // tell a hot bucket from a cold one. This endpoint had no limit of any kind,
+  // and it is a D1 read that anyone can call without an account.
+  await enforceRateLimit(c.env.AUTH_LIMIT, `kdf:${clientIp(c.req.raw)}`, TOO_MANY);
+
   const user = await findUserByEmail(c.env.DB, emailNorm);
   if (user) {
     return c.json<KdfChallenge>({
@@ -146,12 +169,39 @@ auth.post("/auth/register", async (c) => {
   const emailNorm = normalizeEmail(body.email);
   const pepper = requireSecret(c.env, "AUTH_PEPPER");
 
-  await assertNotLocked(c.env.DB, [ipBucket(clientIp(c.req.raw))]);
+  const ip = clientIp(c.req.raw);
 
-  // Bot check, before the expensive verifier hash. Web-only and per-origin —
-  // the desktop app is exempt (see turnstileRequired). Skipped entirely when
+  // Three defences stack on this endpoint, and they are not redundant — each
+  // catches what the others structurally cannot:
+  //
+  //   1. REGISTER_LIMIT, below. Absorbs a burst in-colo for about a
+  //      millisecond, before any D1 read or argon2 work happens. Cannot bound
+  //      anything longer than a minute.
+  //   2. Turnstile, now required regardless of Origin. Costs a bot a real
+  //      challenge per account rather than an HTTP request.
+  //   3. The daily mail budget inside sendEmail. The only one of the three
+  //      that can actually protect a per-day provider quota.
+  //
+  // `assertNotLocked` is NOT one of them, despite appearances: it only reads
+  // locks that `recordFailure` sets, and nothing on a successful registration
+  // ever records a failure. It is retained because a client already locked out
+  // for password guessing should not be able to pivot to making accounts.
+  await enforceRateLimit(c.env.REGISTER_LIMIT, `reg:${ip}`, TOO_MANY);
+  // Registration also draws on the shared per-minute MAIL budget, the same one
+  // /auth/password/forgot and the resend endpoints spend. It is charged here,
+  // before the account exists, rather than next to the waitUntil below: by the
+  // time the mail is queued the user has been created, and refusing then would
+  // 429 a registration that actually succeeded.
+  await enforceRateLimit(c.env.EMAIL_LIMIT, `register-ip:${ip}`, TOO_MANY);
+  await assertNotLocked(c.env.DB, [ipBucket(ip)]);
+
+  // Bot check, before the expensive verifier hash. Required for EVERY origin
+  // here, unlike login — a caller that sends no Origin header is the exact
+  // shape of the abuse this endpoint attracts, so exempting it would exempt
+  // the attacker. See turnstileRequiredForRegister for the desktop caveat and
+  // the TURNSTILE_ALLOW_NATIVE escape hatch. Skipped entirely when
   // TURNSTILE_SECRET_KEY is unset.
-  if (turnstileRequired(c.env, c.req.raw)) {
+  if (turnstileRequiredForRegister(c.env, c.req.raw)) {
     const ok = await verifyTurnstile(c.env.TURNSTILE_SECRET_KEY!, body.turnstile_token, c.req.raw);
     if (!ok) throw badRequest("Captcha check failed. Please try again.");
   }
@@ -220,7 +270,7 @@ auth.post("/auth/register", async (c) => {
   // and if the mail never arrives the user hits "resend" from the sign-in
   // screen (the public resend endpoint below). Failing registration on a
   // transient mail error would strand an account that was successfully created.
-  c.executionCtx.waitUntil(sendVerification(c.env, user).catch(() => {}));
+  c.executionCtx.waitUntil(sendVerification(c.env, user, ip).catch(() => {}));
 
   // No tokens. A confirmed address is required to sign in (see /auth/login), so
   // logging the user in here would be a hole straight through that gate. The
@@ -230,9 +280,9 @@ auth.post("/auth/register", async (c) => {
 
 /** Mint a verification token and mail it. Throws; every caller decides whether
  *  that matters to the response. */
-async function sendVerification(env: Bindings, user: UserRow): Promise<void> {
+async function sendVerification(env: Bindings, user: UserRow, ip: string): Promise<void> {
   const token = await issueEmailVerification(env.DB, user.id, user.email_norm);
-  await sendVerificationEmail(env, user.email, token);
+  await sendVerificationEmail(env, user.email, token, ip);
 }
 
 /**
@@ -246,6 +296,12 @@ auth.post("/auth/login", async (c) => {
   const body = loginSchema.parse(await c.req.json());
   const emailNorm = normalizeEmail(body.email);
   const pepper = requireSecret(c.env, "AUTH_PEPPER");
+
+  // The durable throttle below counts FAILURES, so it never sees a caller who
+  // supplies correct credentials over and over — and that caller still costs a
+  // D1 read, an argon2 verification and a session-row WRITE per request. This
+  // is what bounds that.
+  await enforceRateLimit(c.env.AUTH_LIMIT, `login:${clientIp(c.req.raw)}`, TOO_MANY);
 
   const buckets = [emailBucket(emailNorm), ipBucket(clientIp(c.req.raw))];
   await assertNotLocked(c.env.DB, buckets);
@@ -299,6 +355,13 @@ auth.post("/auth/login", async (c) => {
 /** Rotate a refresh token. See rotateSession for the theft-detection rule. */
 auth.post("/auth/refresh", async (c) => {
   const body = refreshSchema.parse(await c.req.json());
+
+  // Keyed by IP because the token is the only identity available and it has
+  // not been validated yet — keying on an unverified secret would let a caller
+  // pick their own bucket. A client refreshes once per 15 minutes per device,
+  // so the cap is far above any real household.
+  await enforceRateLimit(c.env.SESSION_LIMIT, `refresh:${clientIp(c.req.raw)}`, TOO_MANY);
+
   const { refresh, userId } = await rotateSession(c.env.DB, body.refresh_token);
 
   const user = await findUserById(c.env.DB, userId);
@@ -316,6 +379,11 @@ auth.post("/auth/refresh", async (c) => {
  *  double as a way to test whether a token is valid. */
 auth.post("/auth/logout", async (c) => {
   const body = refreshSchema.parse(await c.req.json());
+
+  // Always 204 means this is a free, unauthenticated D1 write for anyone who
+  // finds it. The cap costs a real sign-out nothing — one per device.
+  await enforceRateLimit(c.env.SESSION_LIMIT, `logout:${clientIp(c.req.raw)}`, TOO_MANY);
+
   await revokeByToken(c.env.DB, body.refresh_token);
   return c.body(null, 204);
 });
@@ -374,13 +442,18 @@ auth.post("/auth/password/forgot", async (c) => {
   // "reset does nothing" survives for months.
   try {
     const token = await issuePasswordReset(c.env.DB, user.id);
-    await sendPasswordResetEmail(c.env, user.email, token);
+    await sendPasswordResetEmail(c.env, user.email, token, clientIp(c.req.raw));
   } catch (err) {
     // Logged without the address: [observability] is on, and an email address
     // in log retention is exactly the data this endpoint refuses to confirm.
+    //
+    // `budget` separates "today's mail allowance is spent" from a provider or
+    // config failure. It is the signal that someone is working the sign-up or
+    // reset forms, and without it that shows up as an ordinary mail error.
     console.error("password reset mail failed", {
       requestId: c.get("requestId"),
       configured: !(err instanceof EmailNotConfigured),
+      budget: err instanceof MailBudgetExhausted,
     });
   }
 
@@ -473,13 +546,14 @@ auth.post("/auth/email/verify/resend", async (c) => {
   const user = await findUserByEmail(c.env.DB, emailNorm);
   if (user && !user.email_verified_at) {
     try {
-      await sendVerification(c.env, user);
+      await sendVerification(c.env, user, clientIp(c.req.raw));
     } catch (err) {
       // Same discipline as forgot: log without the address, since a mail
       // failure here must not become an existence signal or a logged PII line.
       console.error("verification resend mail failed", {
         requestId: c.get("requestId"),
         configured: !(err instanceof EmailNotConfigured),
+        budget: err instanceof MailBudgetExhausted,
       });
     }
   }
@@ -503,10 +577,16 @@ auth.post("/auth/email/verify/send", requireAuth(), async (c) => {
   );
 
   try {
-    await sendVerification(c.env, user);
+    await sendVerification(c.env, user, clientIp(c.req.raw));
   } catch (err) {
     if (err instanceof EmailNotConfigured) {
       throw new ApiError("internal", "Email isn't set up on this server yet.");
+    }
+    // This endpoint is authenticated, so it is not an enumeration oracle and
+    // can afford to say what happened — unlike the public resend above, which
+    // must answer identically for every address.
+    if (err instanceof MailBudgetExhausted) {
+      throw new ApiError("rate_limited", "Too many emails sent today. Try again tomorrow.");
     }
     throw new ApiError("internal", "Couldn't send that email. Try again shortly.");
   }

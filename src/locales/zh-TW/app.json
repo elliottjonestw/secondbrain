@@ -248,7 +248,9 @@
       "summaryThrottle": "今日摘要",
       "summaryThrottleLabel": "已產生的摘要保留一段時間",
       "summaryThrottleHint": "今日頁面的「你的一天」是本程式唯一未經你要求就自動產生的內容。保留期間內，即使當天的資料有變動（勾選待辦、新增行程），也不會重新產生；超過這個時數才會。卡片上的重新整理按鈕則一律重寫。",
-      "summaryHours": "小時"
+      "summaryHours": "小時",
+      "apiKeyScopeHint": "金鑰以純文字儲存在此裝置上，登出時會清除。請使用僅供本 App 使用的金鑰並設定用量上限；裝置遺失時可在此撤銷。",
+      "manageKeys": "OpenAI API 金鑰頁面"
     },
     "calendars": {
       "description": "連接 iCloud 後，你的 Apple 行事曆會與內建行事曆一起顯示。行程會即時從 iCloud 讀取與寫入，不會複製到此裝置，因此 Apple 行事曆需要連線才會出現。",
@@ -271,7 +273,9 @@
       "connectPrompt": "請先在上方連接帳戶，以加入更多行事曆。",
       "noneFound": "此帳戶中找不到 Apple 行程行事曆。",
       "defaultCalendar": "預設行事曆",
-      "defaultHint": "當你未指定行事曆時，新行程會建立在這裡 —— 包含助理建立的行程。只有內建的「{{calendar}}」行事曆可離線使用。"
+      "defaultHint": "當你未指定行事曆時，新行程會建立在這裡 —— 包含助理建立的行程。只有內建的「{{calendar}}」行事曆可離線使用。",
+      "passwordScopeHint": "此密碼可存取整個 iCloud 帳戶，不限於行事曆，並以純文字儲存在此裝置上，登出時會清除。裝置遺失時，可在同一頁面撤銷。",
+      "passwordCleared": "此裝置未儲存 App 專用密碼，登出時已清除。請重新輸入以連接這些行事曆。"
     },
     "data": {
       "title": "資料",

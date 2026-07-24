@@ -19,7 +19,8 @@ import { dueTodosFor, dueRemindersFor, reminderWhen, upcomingBirthdays } from ".
 import type { TodayWidget, TodayWidgetProps } from "./types";
 import { summarizeDay, hasDayContent, type DaySummaryInput } from "../../lib/ai";
 import { englishCondition, isForecastable } from "../../lib/weather";
-import { isAssistantConfigured, summaryMaxAgeMs } from "../../lib/settings";
+import { summaryMaxAgeMs } from "../../lib/settings";
+import { isAssistantConfigured } from "../../lib/secrets";
 import { currentLanguage } from "../../lib/i18n";
 import { isOverdue, ageFromBirthday, toDateInput } from "../../lib/format";
 

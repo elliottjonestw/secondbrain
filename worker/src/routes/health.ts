@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
+import { clientIp } from "../auth/throttle";
+import { enforceRateLimit } from "../rateLimit";
 
 export const health = new Hono<AppEnv>();
 
@@ -12,6 +14,16 @@ export const health = new Hono<AppEnv>();
  * from local to staging, and one that `SELECT 1` reports as healthy.
  */
 health.get("/health", async (c) => {
+  // Public, unauthenticated, and it runs a real query by design — which makes
+  // an uncapped health check a free D1-read generator for anyone who finds the
+  // URL. Keyed by IP since there is no identity here. Any real monitor polls
+  // at most once a minute, so this is invisible to legitimate use.
+  await enforceRateLimit(
+    c.env.HEALTH_LIMIT,
+    `health:${clientIp(c.req.raw)}`,
+    "Too many requests.",
+  );
+
   const started = Date.now();
   try {
     const row = await c.env.DB.prepare(

@@ -104,6 +104,84 @@ name = "EMAIL_LIMIT"
 namespace_id = "1003"
 simple = { limit = 3, period = 60 }
 
+# ---------------------------------------------------------------------------
+# The rest of the API.
+#
+# Everything above guards a route that calls somebody else's server. The blocks
+# below guard OUR OWN free-tier quotas — D1 rows, KV writes, Worker requests —
+# which nothing was bounding at all.
+#
+# Sizing rule, applied to every one of them: a limit no honest client can
+# reach. The numbers come from what the app actually does, not from what feels
+# strict. Where a number is generous that is the intended answer, because the
+# thing being defended against is a loop or a script, and both of those are
+# orders of magnitude above human use, not just above it.
+#
+# All of these are per-colo (see rateLimit.ts) and none of them can express a
+# window longer than 60 seconds. The per-day ceilings live in D1 — migration
+# 0007, src/db/quota.ts — and the two are meant to be read together.
+# ---------------------------------------------------------------------------
+
+# /auth/kdf + /auth/login, keyed by IP. Login is two requests (kdf, then
+# login), so a person signing in costs 2 and a person fumbling their password
+# five times costs 10. Nobody types a password thirty times a minute.
+[[ratelimits]]
+name = "AUTH_LIMIT"
+namespace_id = "1005"
+simple = { limit = 30, period = 60 }
+
+# /auth/register, keyed by IP. Registration is a once-per-lifetime act, so this
+# is the one place a tight number costs nothing — 5 covers a family setting up
+# accounts on one connection and a couple of failed attempts each.
+#
+# It is emphatically NOT sufficient on its own: five a minute is 7,200 a day.
+# The daily mail budget in D1 is what makes registration safe; this only stops
+# the first sixty seconds of a flood from reaching argon2 and D1 at all.
+[[ratelimits]]
+name = "REGISTER_LIMIT"
+namespace_id = "1006"
+simple = { limit = 5, period = 60 }
+
+# /auth/refresh + /auth/logout, keyed by IP. Both write to the sessions table.
+# A client refreshes once every 15 minutes per device; 60 allows a large
+# household of devices to all wake at once, which is the realistic burst.
+[[ratelimits]]
+name = "SESSION_LIMIT"
+namespace_id = "1007"
+simple = { limit = 60, period = 60 }
+
+# Every /v1/spaces/* route, keyed by USER ID rather than IP — identity exists
+# by the time this runs, so two people behind one router get their own budget.
+#
+# 600/minute is ten a second. A cold app load is roughly 15-30 requests (the
+# Today page's widgets each fetch their own data), note writes are debounced to
+# one per 400 ms, and search is debounced too. The gap between that and this
+# number is deliberate: what it catches is a runaway effect loop or a stolen
+# token being used to walk a space, not a fast user.
+[[ratelimits]]
+name = "SPACE_LIMIT"
+namespace_id = "1008"
+simple = { limit = 600, period = 60 }
+
+# Note-image upload, keyed by user id, and by far the tightest cap here
+# because it guards the tightest quota in the stack: one upload is one KV
+# write, and KV's free tier allows 1,000 a day — an order of magnitude below
+# D1's 100k row writes. Ten a minute is more images than anyone pastes into a
+# note; the matching per-day ceiling is in D1.
+[[ratelimits]]
+name = "UPLOAD_LIMIT"
+namespace_id = "1009"
+simple = { limit = 10, period = 60 }
+
+# /v1/health, keyed by IP. Public and unauthenticated, and it deliberately runs
+# a real query rather than SELECT 1 (see routes/health.ts), so an uncapped
+# health check is a free D1-read generator for anyone who finds the URL.
+# Generous enough for any real monitor, which polls at most once a minute.
+[[ratelimits]]
+name = "HEALTH_LIMIT"
+namespace_id = "1010"
+simple = { limit = 20, period = 60 }
+
 [vars]
 ENVIRONMENT = "development"
 # Comma-separated. Tauri's webview origin differs by OS — `tauri://localhost`
@@ -153,6 +231,37 @@ simple = { limit = 60, period = 60 }
 name = "EMAIL_LIMIT"
 namespace_id = "1003"
 simple = { limit = 3, period = 60 }
+
+# See the top-level blocks for what each of these is for and how it was sized.
+[[env.staging.ratelimits]]
+name = "AUTH_LIMIT"
+namespace_id = "1005"
+simple = { limit = 30, period = 60 }
+
+[[env.staging.ratelimits]]
+name = "REGISTER_LIMIT"
+namespace_id = "1006"
+simple = { limit = 5, period = 60 }
+
+[[env.staging.ratelimits]]
+name = "SESSION_LIMIT"
+namespace_id = "1007"
+simple = { limit = 60, period = 60 }
+
+[[env.staging.ratelimits]]
+name = "SPACE_LIMIT"
+namespace_id = "1008"
+simple = { limit = 600, period = 60 }
+
+[[env.staging.ratelimits]]
+name = "UPLOAD_LIMIT"
+namespace_id = "1009"
+simple = { limit = 10, period = 60 }
+
+[[env.staging.ratelimits]]
+name = "HEALTH_LIMIT"
+namespace_id = "1010"
+simple = { limit = 20, period = 60 }
 
 [env.staging.vars]
 ENVIRONMENT = "staging"
@@ -213,6 +322,37 @@ simple = { limit = 60, period = 60 }
 name = "EMAIL_LIMIT"
 namespace_id = "1003"
 simple = { limit = 3, period = 60 }
+
+# See the top-level blocks for what each of these is for and how it was sized.
+[[env.production.ratelimits]]
+name = "AUTH_LIMIT"
+namespace_id = "1005"
+simple = { limit = 30, period = 60 }
+
+[[env.production.ratelimits]]
+name = "REGISTER_LIMIT"
+namespace_id = "1006"
+simple = { limit = 5, period = 60 }
+
+[[env.production.ratelimits]]
+name = "SESSION_LIMIT"
+namespace_id = "1007"
+simple = { limit = 60, period = 60 }
+
+[[env.production.ratelimits]]
+name = "SPACE_LIMIT"
+namespace_id = "1008"
+simple = { limit = 600, period = 60 }
+
+[[env.production.ratelimits]]
+name = "UPLOAD_LIMIT"
+namespace_id = "1009"
+simple = { limit = 10, period = 60 }
+
+[[env.production.ratelimits]]
+name = "HEALTH_LIMIT"
+namespace_id = "1010"
+simple = { limit = 20, period = 60 }
 
 [env.production.vars]
 ENVIRONMENT = "production"

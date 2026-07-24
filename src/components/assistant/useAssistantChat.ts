@@ -18,7 +18,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { askAssistant, ChatMessage, type ConfirmDeleteRequest } from "../../lib/ai";
-import { hasOpenAiKey } from "../../lib/settings";
+import { hasOpenAiKey } from "../../lib/secrets";
 import {
   startRecording, transcribe, speak, stopSpeaking, isSpeechSupported, isRecordingSupported, Recording,
 } from "../../lib/voice";

@@ -27,7 +27,9 @@ import {
   todoUpdateSchema,
 } from "@secondbrain/shared";
 import type { AppEnv } from "../env";
-import { badRequest, notFound } from "../http";
+import { ApiError, badRequest, notFound } from "../http";
+import { enforceRateLimit } from "../rateLimit";
+import { QUOTA_LIMITS, consumeDailyQuota } from "../db/quota";
 import { requireAuth } from "../middleware/auth";
 import { authorize } from "../authorize";
 import { createList, deleteList, listLists, updateList } from "../db/lists";
@@ -105,6 +107,31 @@ export const spaces = new Hono<AppEnv>();
 // Identity on every route below; the space check is per-handler because it
 // needs the action (read vs write).
 spaces.use("/spaces/:spaceId/*", requireAuth());
+
+/**
+ * One cap across every domain route, and one insertion point for all of them.
+ *
+ * This runs AFTER requireAuth, which is what lets it key on the user id rather
+ * than the address: two people behind one router get their own budget, and the
+ * shared-NAT problem that forces the auth limiters to be lenient does not
+ * apply here at all.
+ *
+ * It is middleware rather than a call in each handler for the reason that
+ * matters most about ~90 routes — a per-handler check is a rule someone has to
+ * remember, and this one guards the entire read/write surface of the database.
+ * A new route added below inherits it without doing anything.
+ *
+ * The number is generous on purpose (see wrangler.toml): this is aimed at a
+ * runaway effect loop or a stolen token walking a space, not at a fast user.
+ */
+spaces.use("/spaces/:spaceId/*", async (c, next) => {
+  await enforceRateLimit(
+    c.env.SPACE_LIMIT,
+    `space:${c.get("userId")}`,
+    "Too many requests. Wait a moment and try again.",
+  );
+  await next();
+});
 
 const spaceId = (c: { req: { param: (k: string) => string } }) => c.req.param("spaceId");
 
@@ -403,6 +430,26 @@ spaces.delete("/spaces/:spaceId/notes/:id", async (c) => {
 
 spaces.post("/spaces/:spaceId/notes/:noteId/images", async (c) => {
   await authorize(c.env.DB, c.get("userId"), spaceId(c), "write");
+
+  // Its own cap, far tighter than SPACE_LIMIT, because this is the only route
+  // in the API that spends the scarcest quota in the whole stack: KV's free
+  // tier allows 1,000 WRITES a day — an order of magnitude below D1's 100k row
+  // writes — and one upload is one write. The per-minute binding stops a burst;
+  // the daily budget below is the only thing that can stop a slow drain,
+  // since a binding's window tops out at 60 seconds.
+  const userId = c.get("userId");
+  await enforceRateLimit(
+    c.env.UPLOAD_LIMIT,
+    `img:${userId}`,
+    "Too many image uploads. Wait a moment and try again.",
+  );
+  if (!(await consumeDailyQuota(c.env.DB, `img:${userId}`, QUOTA_LIMITS.imageUploads))) {
+    throw new ApiError(
+      "rate_limited",
+      "You've added a lot of images today. Try again tomorrow.",
+    );
+  }
+
   const input = noteImageCreateSchema.parse(await c.req.json());
   const meta = await createNoteImage(
     c.env.DB, c.env.IMAGES, spaceId(c), c.req.param("noteId"), input,

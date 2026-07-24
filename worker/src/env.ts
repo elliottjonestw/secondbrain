@@ -57,6 +57,34 @@ export interface Bindings {
   /** Outbound mail, keyed by address AND by IP — see routes/auth.ts. */
   EMAIL_LIMIT: RateLimiter;
 
+  /**
+   * The limiters below cover the rest of the API. They are keyed by IP rather
+   * than by user id wherever they guard a route that runs BEFORE an identity
+   * exists — which is most of the auth surface. That makes them subject to the
+   * shared-address problem `auth/throttle.ts` describes at length (a household,
+   * an office, a carrier's CGNAT can be thousands of unrelated people), so
+   * every one of them is set generously: high enough that no honest client can
+   * reach it, low enough to bound a script. A user who trips one of these is
+   * looking at a bug, not a quota to plan around.
+   *
+   * NONE of them can bound a day: the binding's `period` may only be 10 or 60
+   * seconds. Anything guarding a per-day external quota needs `db/quota.ts` as
+   * well, not instead.
+   */
+  /** `/auth/kdf` and `/auth/login` — a D1 read plus a verifier hash per call. */
+  AUTH_LIMIT: RateLimiter;
+  /** `/auth/register` — the burst half of the sign-up defence. */
+  REGISTER_LIMIT: RateLimiter;
+  /** `/auth/refresh` and `/auth/logout` — both write to the sessions table. */
+  SESSION_LIMIT: RateLimiter;
+  /** Every `/v1/spaces/*` route, keyed by user id (identity exists there). */
+  SPACE_LIMIT: RateLimiter;
+  /** Note-image upload, keyed by user id. Far tighter than SPACE_LIMIT: one
+   *  upload is one KV write, and KV's free tier allows 1,000 a day. */
+  UPLOAD_LIMIT: RateLimiter;
+  /** `/v1/health` — public, and it runs a real query. */
+  HEALTH_LIMIT: RateLimiter;
+
   // Secrets — set with `wrangler secret put`, never in wrangler.toml.
   // Absent until M1; typed optional so M0 compiles without them.
   /** HMAC key for signing access-token JWTs. */
@@ -92,6 +120,17 @@ export interface Bindings {
    * renders. The desktop app is never affected either way.
    */
   TURNSTILE_SECRET_KEY?: string;
+  /**
+   * Escape hatch: "1" restores the per-origin Turnstile exemption on
+   * `/auth/register`, so native clients that send no `Origin` skip the check.
+   *
+   * It exists because requiring the widget on desktop is unproven against
+   * Cloudflare's site-key domain allowlist — `tauri://localhost` is a scheme,
+   * not a domain. If desktop sign-up breaks, setting this is a one-command
+   * recovery. Registration then falls back to REGISTER_LIMIT plus the daily
+   * mail budget, which is weaker, so leave it unset unless it is needed.
+   */
+  TURNSTILE_ALLOW_NATIVE?: string;
 }
 
 /**

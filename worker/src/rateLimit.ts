@@ -29,6 +29,7 @@ export async function enforceRateLimit(
   limiter: RateLimiter | undefined,
   key: string,
   message: string,
+  retryAfter = 60,
 ): Promise<void> {
   // A missing binding is a deployment fault, not a request fault — same
   // treatment the auth secrets get. Failing open here would silently leave the
@@ -36,5 +37,21 @@ export async function enforceRateLimit(
   if (!limiter) throw new Error("Rate limit binding is not configured for this environment");
 
   const { success } = await limiter.limit({ key });
-  if (!success) throw new ApiError("rate_limited", message);
+  if (!success) throw new ApiError("rate_limited", message, undefined, retryAfter);
 }
+
+/**
+ * What this limiter CANNOT do, stated here because it is the trap.
+ *
+ * `period` in wrangler.toml accepts only 10 or 60 — seconds. There is no way
+ * to express "N per day" with this binding, so it can bound a burst and
+ * nothing longer. Any limit whose purpose is to protect a quota measured per
+ * day (Resend's ~100 messages, KV's 1,000 writes) needs `db/quota.ts` IN
+ * ADDITION to a binding here, never instead of one: the binding absorbs the
+ * flood cheaply in-colo, and the D1 budget is what survives a caller patient
+ * enough to stay under it.
+ *
+ * A worked example, because the arithmetic is what makes the point: a strict
+ * 5-per-minute cap on registration still allows 7,200 sign-ups a day from a
+ * single address — 72 times the entire daily mail allowance.
+ */

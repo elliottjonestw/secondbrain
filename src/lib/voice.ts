@@ -9,6 +9,7 @@
 
 import { httpFetch as fetch } from "./httpFetch";
 import { getSettings, clampSpeechRate } from "./settings";
+import { getOpenAiKey } from "./secrets";
 import { synthesize, DEFAULT_OPENAI_VOICE } from "./openaiTts";
 import i18next from "i18next";
 import { currentLanguage } from "./i18n";
@@ -88,8 +89,8 @@ export async function transcribe(
   signal?: AbortSignal,
   onUsage?: (totalTokens: number) => void,
 ): Promise<string> {
-  const { openaiApiKey, sttModel } = getSettings();
-  const key = openaiApiKey.trim();
+  const { sttModel } = getSettings();
+  const key = getOpenAiKey();
   if (!key) throw new Error(i18next.t("errors.noApiKey"));
   if (!blob.size) return "";
 

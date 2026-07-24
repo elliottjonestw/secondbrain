@@ -4,12 +4,26 @@ import { isTauri } from "../lib/platform";
 /**
  * Cloudflare Turnstile widget for the login and register forms.
  *
- * Web-only by design: the desktop (Tauri) build serves from `tauri://localhost`
- * with no real hostname, and the Worker exempts that origin from the check
- * (see worker/src/auth/turnstile.ts). So the widget renders only when NOT in
- * Tauri and only when a site key is configured — `TURNSTILE_ENABLED` gates
- * both the render here and the "must have a token before submit" rule in
- * AuthView, so the two never disagree.
+ * There are TWO gates here, and the split is deliberate — it is what bounds
+ * the risk of requiring a captcha on desktop.
+ *
+ * Registration is the one unauthenticated endpoint a stranger can use to spend
+ * a real quota (an account, its seed rows, and a message against a ~100-a-day
+ * mail allowance), and the Worker's per-origin exemption is trivially met by a
+ * script, which sends no `Origin` at all. So registration now demands a token
+ * on EVERY platform, desktop included.
+ *
+ * Login keeps the old web-only rule. Whether Cloudflare will issue a token to
+ * a widget hosted at `tauri://localhost` is unproven — a site key's allowlist
+ * is expressed in domains, and a custom scheme has no obvious spelling in one.
+ * If it does not work, the damage is confined to new sign-ups on desktop; a
+ * user who already has an account can still get in. Extending the requirement
+ * to login would turn that same unknown into "nobody can use the desktop app",
+ * which is not a bet worth making for a path already protected by the durable
+ * failed-attempt throttle.
+ *
+ * The Worker mirrors this exactly (`turnstileRequiredForRegister`), and has
+ * `TURNSTILE_ALLOW_NATIVE=1` as the server-side undo if the bet loses.
  *
  * The site key is public (it identifies the widget to Cloudflare and is meant
  * to ship in the client); the secret half lives only on the Worker.
@@ -18,10 +32,14 @@ import { isTauri } from "../lib/platform";
 const SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined;
 const SCRIPT_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 
-/** Whether the captcha is active in this build. False on desktop and whenever
- *  no site key is set, so a dev build or the packaged app never blocks on a
- *  widget that isn't there. */
+/** The captcha on LOGIN: web only, and only with a site key configured — so a
+ *  dev build or the packaged app never blocks on a widget that isn't there. */
 export const TURNSTILE_ENABLED = !isTauri() && !!SITE_KEY;
+
+/** The captcha on REGISTER: every platform, whenever a site key is configured.
+ *  An environment with no key still skips it entirely, which is what keeps
+ *  local development and unkeyed deploys working. */
+export const TURNSTILE_REQUIRED_FOR_REGISTER = !!SITE_KEY;
 
 interface TurnstileApi {
   render: (

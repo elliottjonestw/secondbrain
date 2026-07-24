@@ -14,7 +14,8 @@ import { useAssistantChat, type UiMessage } from "./components/assistant/useAssi
 import SettingsView from "./views/SettingsView";
 import type { NavTarget } from "./types";
 import { startReminderPoller } from "./lib/notifications";
-import { isAssistantConfigured, syncSettingsFromCloud } from "./lib/settings";
+import { syncSettingsFromCloud } from "./lib/settings";
+import { isAssistantConfigured } from "./lib/secrets";
 import { logout } from "./lib/auth";
 import { applyTheme, watchSystemTheme } from "./lib/theme";
 import { getCachedSession } from "./lib/authStore";

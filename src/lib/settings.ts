@@ -1,16 +1,23 @@
 // App settings, persisted in localStorage, scoped per signed-in account (see
 // the note on KEY). Kept out of the database on purpose: "clear all data" must
-// not erase the user's API key, and settings aren't part of the syncable
+// not erase the user's configuration, and settings aren't part of the syncable
 // calendar data model.
+//
+// **No credentials live in this file.** The OpenAI API key and the iCloud
+// app-specific password are in `secrets.ts`, under their own storage keys and
+// their own accessors, precisely so that nothing here — the cloud-sync
+// allowlist, the backup writer, the Settings draft — has to remember to exclude
+// them. Adding a secret-bearing field to `AppSettings` or `CalDavAccount` puts
+// that burden back; put it in `secrets.ts` instead.
 //
 // MOST settings are per-device and stay that way. The handful on Settings →
 // Widgets also follow the account through the Worker — see the cloud-sync
-// section at the bottom of this file, and the allowlist that keeps the two
-// secrets here (the OpenAI key, the iCloud app password) off the server.
+// section at the bottom of this file.
 //
 // The authStore and api imports are safe in both directions: authStore depends
 // only on @secondbrain/shared, and api.ts depends on authStore/platform/shared
-// but never on this module, so neither can close a cycle.
+// but never on this module, so neither can close a cycle. `secrets.ts` imports
+// `scopedKey` FROM here and this module must never import it back.
 
 import { CLOUD_SETTING_KEYS, type CloudSettingKey } from "@secondbrain/shared";
 import { getCachedSession, getCurrentSpaceId } from "./authStore";
@@ -30,7 +37,9 @@ export function clampSpeechRate(rate: number): number {
 }
 
 export interface AppSettings {
-  openaiApiKey: string;
+  // NOTE: the OpenAI API key is deliberately NOT here — it and the iCloud
+  // app-specific password live in `secrets.ts`, under their own storage keys.
+  // Don't add a credential to this interface; see that module's header.
   openaiModel: string;
   /** Speech-to-text model used for voice input. */
   sttModel: string;
@@ -223,9 +232,9 @@ export interface WeatherLocation {
  *
  * **This is isolation, not secrecy.** Everything here is still plaintext in
  * localStorage, readable from devtools by anyone at the keyboard and by any
- * XSS on the origin. The real fix for the two secret-bearing values is the OS
- * keychain (see the note in `authStore.ts`), and on the web build it is not to
- * hold them at all.
+ * XSS on the origin. That is tolerable for a watchlist and a theme, which is
+ * all this file holds now — the two credentials moved to `secrets.ts`, which
+ * applies the same scoping and additionally clears itself on sign-out.
  */
 const KEY = "secondbrain.settings";
 
@@ -237,14 +246,15 @@ function currentUserId(): string | null {
 
 /**
  * The storage key for this account, migrating the pre-account bucket into it
- * on first touch.
+ * on first touch. Exported for `secrets.ts`, which stores the two credentials
+ * under the same per-account rule; nothing else should need it.
  *
  * The migration is lazy rather than a step in the sign-in flow because it must
  * hold whatever order things load in: whoever reads settings first after an
  * upgrade adopts the old values, and the shared copy is removed so no later
  * account can inherit it.
  */
-function scopedKey(base: string): string {
+export function scopedKey(base: string): string {
   const uid = currentUserId();
   const key = `${base}.${uid ?? "anon"}`;
   if (uid) {
@@ -259,7 +269,6 @@ function scopedKey(base: string): string {
 }
 
 const DEFAULTS: AppSettings = {
-  openaiApiKey: "",
   openaiModel: "gpt-4o-mini",
   sttModel: "whisper-1",
   // Natural voices by default — they're the reason this setting exists. Safe as
@@ -324,11 +333,11 @@ export function saveSettings(patch: Partial<AppSettings>): AppSettings {
 //
 // The rule that makes this safe is CLOUD_SETTING_KEYS in @secondbrain/shared:
 // the client only ever uploads a key on that list, and the Worker rejects any
-// key off it. **The OpenAI API key and the iCloud app-specific password are not
-// on it and must never be.** They are the two secrets in this file; the whole
-// point of the allowlist is that no amount of future code up here can leak them
-// to the server by accident. Adding a key means asking whether the value is a
-// secret first — if it is, the answer is no.
+// key off it. It is now a second line of defence rather than the only one —
+// the two credentials aren't in `AppSettings` at all, so there is nothing here
+// for a careless upload to catch. Both properties are worth keeping: adding a
+// key still means asking whether the value is a secret first, and if it is, it
+// belongs in `secrets.ts` and not on this list.
 //
 // Reads stay synchronous. `getSettings()` is called from render paths all over
 // the app, so the cloud is not a second source of truth to await: it is loaded
@@ -519,29 +528,19 @@ function notifyCloudSettingsApplied(): void {
   for (const fn of cloudApplied) fn();
 }
 
-/**
- * Is an OpenAI key present? This gates the text assistant AND all voice
- * transcription — both run on OpenAI.
- */
-export function hasOpenAiKey(): boolean {
-  return getSettings().openaiApiKey.trim().length > 0;
-}
-
-/** Is the text assistant usable? The assistant runs on OpenAI, so a key is all
- *  it needs. */
-export function isAssistantConfigured(): boolean {
-  return hasOpenAiKey();
-}
-
 // ---------------------------------------------------------------------------
 // Calendar accounts (CalDAV)
 //
 // Which calendars exist, which are visible, and which is the default is
 // *configuration*, not calendar data — and remote events are never stored in
-// SQLite — so all of it lives here in localStorage rather than in the DB. Same
-// trade-off as the OpenAI key: the app-specific password is stored in plain
-// text on this device. Kept under its own key so the shape can grow without
-// disturbing AppSettings.
+// SQLite — so all of it lives here in localStorage rather than in the DB. Kept
+// under its own key so the shape can grow without disturbing AppSettings.
+//
+// The app-specific password that makes these calendars reachable is NOT here:
+// it's in `secrets.ts`, read by `caldav/client.ts` when it builds the auth
+// header. So a `CalDavAccount` can be passed around, logged or serialized
+// freely — which `discovery.ts` and `calendars.ts` do — without carrying a
+// credential along with it.
 // ---------------------------------------------------------------------------
 
 /** A calendar collection discovered on a CalDAV server. */
@@ -558,7 +557,7 @@ export interface CalDavCalendar {
 export interface CalDavAccount {
   provider: "icloud"; // future: "google" | "fastmail" | "generic"
   username: string; // Apple ID
-  appPassword: string; // app-specific password (2FA accounts require one)
+  // The app-specific password lives in `secrets.ts` — see the note above.
   principalUrl?: string; // discovered
   calendarHomeUrl?: string; // discovered
   calendars: CalDavCalendar[]; // discovered, cached here

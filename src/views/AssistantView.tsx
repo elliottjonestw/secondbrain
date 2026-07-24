@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Sparkles, Trash2, Settings as SettingsIcon, VolumeX } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { isAssistantConfigured } from "../lib/settings";
+import { isAssistantConfigured } from "../lib/secrets";
 import { Button } from "../components/ui";
 import type { AssistantChat, UiMessage } from "../components/assistant/useAssistantChat";
 import MessageList from "../components/assistant/MessageList";

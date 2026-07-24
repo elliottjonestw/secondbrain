@@ -249,7 +249,9 @@
       "summaryThrottle": "Today briefing",
       "summaryThrottleLabel": "Keep the written briefing for a while",
       "summaryThrottleHint": "The Today page's “Your day” card is the only thing the app writes without being asked. Holding it means a change to your day — ticking off a todo, adding an event — won't rewrite it until it's this old. The refresh button on the card always rewrites it.",
-      "summaryHours": "hours"
+      "summaryHours": "hours",
+      "apiKeyScopeHint": "It's stored in plain text on this device and cleared when you sign out, so use a key you keep for this app alone and set a spend limit on it — and revoke it here if you lose the device.",
+      "manageKeys": "OpenAI API keys"
     },
     "calendars": {
       "description": "Connect iCloud to see your Apple calendars alongside the built-in one. Events are read from and written to iCloud live — nothing is copied to this device, so Apple calendars need a connection to appear.",
@@ -273,7 +275,9 @@
       "connectPrompt": "Connect an account above to add more calendars.",
       "noneFound": "No Apple event calendars were found on this account.",
       "defaultCalendar": "Default calendar",
-      "defaultHint": "New events land here when you don't pick a calendar — including events the assistant creates. The built-in {{calendar}} calendar is the only one that works offline."
+      "defaultHint": "New events land here when you don't pick a calendar — including events the assistant creates. The built-in {{calendar}} calendar is the only one that works offline.",
+      "passwordScopeHint": "It grants access to your whole iCloud account, not just calendars, and is stored in plain text on this device and cleared when you sign out. Revoke it on the same page if you lose the device.",
+      "passwordCleared": "Your app-specific password isn't stored on this device — signing out cleared it. Enter it again to reconnect these calendars."
     },
     "data": {
       "title": "Data",

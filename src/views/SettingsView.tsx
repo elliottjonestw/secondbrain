@@ -32,6 +32,9 @@ import { OPENAI_VOICES, DEFAULT_OPENAI_VOICE } from "../lib/openaiTts";
 import { discoverAccount } from "../lib/caldav/discovery";
 import { invalidateCache, listCalendars, setCalendarVisible, LOCAL_CALENDAR_NAME } from "../lib/calendars";
 import { LOCAL_CALENDAR_ID } from "../types";
+import {
+  getOpenAiKey, setOpenAiKey, getCalDavPassword, setCalDavPassword,
+} from "../lib/secrets";
 import { exportBackup, importBackup } from "../lib/backup";
 import { clearAllData, newId } from "../db";
 import { deleteAccount, resendVerification } from "../lib/auth";
@@ -39,7 +42,12 @@ import { getCachedSession } from "../lib/authStore";
 import { ApiError, OfflineError } from "../lib/api";
 import { Button } from "../components/ui";
 
+// Where each credential is issued AND revoked. Both are linked from the field
+// that holds them: these secrets sit in plaintext on the device, so the user's
+// ability to revoke a lost one is a real part of the mitigation, not a
+// convenience — see the header of lib/secrets.ts.
 const APPLE_PASSWORD_URL = "https://account.apple.com/account/manage";
+const OPENAI_KEYS_URL = "https://platform.openai.com/api-keys";
 
 type Section = "general" | "account" | "widgets" | "assistant" | "voice" | "calendars" | "data";
 
@@ -61,6 +69,10 @@ export default function SettingsView() {
   // doesn't unmount the inputs and throw away unsaved edits.
   const initial = getSettings();
   const [draft, setDraft] = useState<AppSettings>(initial);
+  // The API key is state of its own rather than a field of the draft: it isn't
+  // part of AppSettings any more (see lib/secrets.ts), and keeping it separate
+  // is what stops a future `saveSettings(draft)` from carrying a credential.
+  const [apiKey, setApiKey] = useState(getOpenAiKey());
   const [saved, setSaved] = useState(false);
   const patch = (p: Partial<AppSettings>) => setDraft((d) => ({ ...d, ...p }));
 
@@ -69,8 +81,8 @@ export default function SettingsView() {
   // as they were when this view mounted. A new field on these panes must be
   // added here too, or Save silently ignores it.
   function save() {
+    setOpenAiKey(apiKey);
     saveSettings({
-      openaiApiKey: draft.openaiApiKey.trim(),
       openaiModel: draft.openaiModel.trim() || "gpt-4o-mini",
       sttModel: draft.sttModel.trim() || "whisper-1",
       ttsEngine: draft.ttsEngine,
@@ -121,10 +133,16 @@ export default function SettingsView() {
           {section === "account" && <AccountSettings />}
           {section === "widgets" && <WidgetSettings />}
           {section === "assistant" && (
-            <AssistantSettings draft={draft} patch={patch} onSave={save} saved={saved} />
+            <AssistantSettings
+              draft={draft} patch={patch} apiKey={apiKey} setApiKey={setApiKey}
+              onSave={save} saved={saved}
+            />
           )}
           {section === "voice" && (
-            <VoiceSettings draft={draft} patch={patch} onSave={save} saved={saved} />
+            <VoiceSettings
+              draft={draft} patch={patch} apiKey={apiKey} setApiKey={setApiKey}
+              onSave={save} saved={saved}
+            />
           )}
           {section === "calendars" && <CalendarSettingsPane />}
           {section === "data" && <DataSettings />}
@@ -195,6 +213,20 @@ function SecretInput({
   );
 }
 
+/** An inline link out to the browser. `openUrl` rather than an <a>: a packaged
+ *  build must not navigate the webview away from the app. */
+function ExternalLinkButton({ url, label }: { url: string; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={() => void openUrl(url)}
+      className="inline-flex items-center gap-1 text-blue-500 hover:underline"
+    >
+      {label} <ExternalLink size={11} />
+    </button>
+  );
+}
+
 function SaveRow({ onSave, saved }: { onSave: () => void; saved: boolean }) {
   const { t } = useTranslation();
   return (
@@ -224,6 +256,9 @@ function Notice({ tone, children }: { tone: "error" | "info"; children: ReactNod
 interface PaneProps {
   draft: AppSettings;
   patch: (p: Partial<AppSettings>) => void;
+  /** The OpenAI key, carried separately from the draft — see lib/secrets.ts. */
+  apiKey: string;
+  setApiKey: (v: string) => void;
   onSave: () => void;
   saved: boolean;
 }
@@ -789,7 +824,7 @@ function WeatherLocationPicker({
 // ---------------------------------------------------------------------------
 // Assistant
 // ---------------------------------------------------------------------------
-function AssistantSettings({ draft, patch, onSave, saved }: PaneProps) {
+function AssistantSettings({ draft, patch, apiKey, setApiKey, onSave, saved }: PaneProps) {
   const { t } = useTranslation();
   return (
     <>
@@ -797,7 +832,7 @@ function AssistantSettings({ draft, patch, onSave, saved }: PaneProps) {
         {t("settings.assistant.description")}
       </PaneHeader>
 
-      <OpenAiFields draft={draft} patch={patch} />
+      <OpenAiFields draft={draft} patch={patch} apiKey={apiKey} setApiKey={setApiKey} />
 
       <SummaryThrottleFields draft={draft} patch={patch} />
 
@@ -856,14 +891,28 @@ function SummaryThrottleFields({ draft, patch }: Pick<PaneProps, "draft" | "patc
   );
 }
 
-function OpenAiFields({ draft, patch }: Pick<PaneProps, "draft" | "patch">) {
+function OpenAiFields({
+  draft, patch, apiKey, setApiKey,
+}: Pick<PaneProps, "draft" | "patch" | "apiKey" | "setApiKey">) {
   const { t } = useTranslation();
   return (
     <>
-      <Field label={t("settings.assistant.apiKey")} hint={t("settings.assistant.apiKeyHint")}>
+      <Field
+        label={t("settings.assistant.apiKey")}
+        hint={
+          <>
+            {t("settings.assistant.apiKeyHint")}{" "}
+            {/* The key is plaintext on this device and unscoped at OpenAI's
+                end, so the honest mitigations are the user's: a key used for
+                nothing else, and a spend limit. Say so where they enter it. */}
+            {t("settings.assistant.apiKeyScopeHint")}{" "}
+            <ExternalLinkButton url={OPENAI_KEYS_URL} label={t("settings.assistant.manageKeys")} />
+          </>
+        }
+      >
         <SecretInput
-          value={draft.openaiApiKey}
-          onChange={(v) => patch({ openaiApiKey: v })}
+          value={apiKey}
+          onChange={setApiKey}
           placeholder="sk-…"
         />
       </Field>
@@ -1138,7 +1187,7 @@ function CalendarSettingsPane() {
   const { t } = useTranslation();
   const stored = getCalendarSettings();
   const [username, setUsername] = useState(stored.account?.username ?? "");
-  const [password, setPassword] = useState(stored.account?.appPassword ?? "");
+  const [password, setPassword] = useState(getCalDavPassword());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
@@ -1150,16 +1199,28 @@ function CalendarSettingsPane() {
   const connected = !!settings.account;
   const calendars = listCalendars();
   const remoteCount = calendars.filter((c) => c.source !== "local").length;
+  // An account with no password: what signing out and back in leaves behind,
+  // since `clearSecrets` forgets the credential but the account — a name and a
+  // calendar list, no secret — survives. Without a word here, the calendars
+  // simply fail to load and the pane still claims to be connected.
+  const needsPassword = connected && !getCalDavPassword();
 
+  /**
+   * Discovery authenticates, and `basicAuth` takes the password from storage
+   * rather than from the account object, so it has to be written BEFORE the
+   * attempt and put back if the attempt fails. Restoring on failure is what
+   * stops a typo from silently knocking out a working connection.
+   */
   async function connect() {
     setBusy(true);
     setError("");
     setStatus("");
+    const previous = getCalDavPassword();
     try {
+      setCalDavPassword(password);
       const draft: CalDavAccount = {
         provider: "icloud",
         username: username.trim(),
-        appPassword: password.trim(),
         calendars: [],
       };
       const account = await discoverAccount(draft, settings.account?.calendars);
@@ -1168,6 +1229,7 @@ function CalendarSettingsPane() {
       setStatus(t("settings.calendars.found", { count: account.calendars.length }));
       refresh();
     } catch (e) {
+      setCalDavPassword(previous);
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
@@ -1177,6 +1239,7 @@ function CalendarSettingsPane() {
   function disconnect() {
     if (!window.confirm(t("settings.calendars.confirmDisconnect"))) return;
     saveCalendarSettings({ account: null, defaultCalendarId: LOCAL_CALENDAR_ID });
+    setCalDavPassword("");
     invalidateCache();
     setPassword("");
     setStatus("");
@@ -1196,12 +1259,18 @@ function CalendarSettingsPane() {
           <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
             {t("settings.calendars.account")}
           </h2>
-          {connected && (
+          {connected && !needsPassword && (
             <span className="flex shrink-0 items-center gap-1 rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-950/40 dark:text-green-400">
               <Check size={12} /> {t("settings.calendars.connected")}
             </span>
           )}
         </div>
+
+        {needsPassword && (
+          <div className="mb-4">
+            <Notice tone="error">{t("settings.calendars.passwordCleared")}</Notice>
+          </div>
+        )}
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -1227,13 +1296,11 @@ function CalendarSettingsPane() {
 
         <p className="mt-3 text-xs leading-relaxed text-neutral-400">
           {t("settings.calendars.passwordHint")}{" "}
-          <button
-            type="button"
-            onClick={() => void openUrl(APPLE_PASSWORD_URL)}
-            className="inline-flex items-center gap-1 text-blue-500 hover:underline"
-          >
-            {t("settings.calendars.appleIdSettings")} <ExternalLink size={11} />
-          </button>
+          {/* An app-specific password is account-wide, not calendar-scoped, and
+              it sits in plaintext on this device — so the page that issues it,
+              which is also the page that revokes it, belongs right here. */}
+          {t("settings.calendars.passwordScopeHint")}{" "}
+          <ExternalLinkButton url={APPLE_PASSWORD_URL} label={t("settings.calendars.appleIdSettings")} />
         </p>
 
         <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-neutral-200 pt-4 dark:border-neutral-700">

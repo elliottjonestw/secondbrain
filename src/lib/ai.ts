@@ -40,6 +40,7 @@ import {
   type EventDraft,
 } from "./calendars";
 import { getSettings, type AppSettings } from "./settings";
+import { getOpenAiKey } from "./secrets";
 // Same live-fetch path the Today card uses, cache included — an assistant
 // question right after that card rendered costs no second request.
 import { getDayWeather, isForecastable, englishCondition } from "./weather";
@@ -1901,7 +1902,7 @@ interface ChatEndpoint {
 function resolveChatEndpoint(s: AppSettings): ChatEndpoint {
   return {
     url: "https://api.openai.com/v1/chat/completions",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${s.openaiApiKey.trim()}` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${getOpenAiKey()}` },
     model: s.openaiModel.trim() || "gpt-4o-mini",
   };
 }
@@ -2075,7 +2076,7 @@ async function shownItemsNote(items: ItemRef[]): Promise<string> {
 export async function askAssistant(history: ChatMessage[], opts: AskOptions = {}): Promise<string> {
   const settings = getSettings();
   const ep = resolveChatEndpoint(settings);
-  if (!ep.model || !settings.openaiApiKey.trim()) {
+  if (!ep.model || !getOpenAiKey()) {
     throw new Error(i18next.t("errors.notConfigured"));
   }
 
@@ -2303,7 +2304,7 @@ const DAY_SUMMARY_PROMPT =
 export async function summarizeDay(input: DaySummaryInput, signal?: AbortSignal): Promise<string> {
   const settings = getSettings();
   const ep = resolveChatEndpoint(settings);
-  if (!ep.model || !settings.openaiApiKey.trim()) {
+  if (!ep.model || !getOpenAiKey()) {
     throw new Error(i18next.t("errors.notConfigured"));
   }
 

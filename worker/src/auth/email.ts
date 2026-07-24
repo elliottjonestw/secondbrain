@@ -1,4 +1,5 @@
 import type { Bindings } from "../env";
+import { QUOTA_LIMITS, consumeDailyQuota } from "../db/quota";
 
 /**
  * Outbound transactional mail, via Resend.
@@ -23,6 +24,23 @@ export class EmailNotConfigured extends Error {
   }
 }
 
+/**
+ * Thrown when today's mail budget is gone (see `db/quota.ts`).
+ *
+ * Distinct from `EmailNotConfigured` so the logs can tell "this deployment
+ * can't send mail" apart from "this deployment has sent all it may today" —
+ * the first is a config error and the second is very likely someone abusing
+ * the sign-up form. Callers treat both the same way in the RESPONSE, because
+ * the alternative is an oracle: a caller who can tell that their own request
+ * was refused for budget can tell that the address was real.
+ */
+export class MailBudgetExhausted extends Error {
+  constructor() {
+    super("The daily outbound mail budget is spent");
+    this.name = "MailBudgetExhausted";
+  }
+}
+
 interface Message {
   to: string;
   subject: string;
@@ -38,8 +56,30 @@ interface Message {
  * safe to surface to our own logs; its body is not, because Resend echoes the
  * submitted message back in some error shapes.
  */
-export async function sendEmail(env: Bindings, msg: Message): Promise<void> {
+export async function sendEmail(env: Bindings, msg: Message, ip: string): Promise<void> {
   if (!env.RESEND_API_KEY) throw new EmailNotConfigured();
+
+  // The daily budget is enforced HERE rather than per-route on purpose. Every
+  // route that mails already carries a per-minute EMAIL_LIMIT, and that is the
+  // pattern a new endpoint will copy; what it will not reliably copy is a
+  // second, differently-shaped check. Putting the ceiling at the one place the
+  // money is actually spent makes forgetting it impossible.
+  //
+  // Order matters: the IP bucket is consumed first, so a caller who is already
+  // over their own share cannot also draw down the global budget. Both count
+  // the attempt rather than the send, which means abuse trips the breaker
+  // slightly early — the conservative direction for a ceiling whose whole job
+  // is to not be crossed.
+  //
+  // A D1 failure propagates and no mail goes out. Failing open here would
+  // reintroduce exactly the unbounded spend this exists to stop, and every
+  // caller already treats a mail failure as survivable.
+  if (!(await consumeDailyQuota(env.DB, `mail:ip:${ip}`, QUOTA_LIMITS.mailIp))) {
+    throw new MailBudgetExhausted();
+  }
+  if (!(await consumeDailyQuota(env.DB, "mail:global", QUOTA_LIMITS.mailGlobal))) {
+    throw new MailBudgetExhausted();
+  }
 
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -88,6 +128,7 @@ export async function sendPasswordResetEmail(
   env: Bindings,
   to: string,
   token: string,
+  ip: string,
 ): Promise<void> {
   await sendEmail(env, {
     to,
@@ -98,13 +139,14 @@ export async function sendPasswordResetEmail(
       `If you didn't ask for this, you can ignore it — nothing has changed, and ` +
       `whoever asked cannot see this message.\n\n` +
       `Note that resetting your password signs you out on every device.`,
-  });
+  }, ip);
 }
 
 export async function sendVerificationEmail(
   env: Bindings,
   to: string,
   token: string,
+  ip: string,
 ): Promise<void> {
   await sendEmail(env, {
     to,
@@ -114,5 +156,5 @@ export async function sendVerificationEmail(
       `The link works once and expires in 24 hours.\n\n` +
       `Confirming means we can reach you if you ever forget your password. ` +
       `If you didn't create a Sekunda account, ignore this message.`,
-  });
+  }, ip);
 }

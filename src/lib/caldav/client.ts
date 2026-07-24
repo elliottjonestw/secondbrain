@@ -20,6 +20,7 @@
 import { httpFetch } from "../httpFetch";
 import { isTauri } from "../platform";
 import { apiRequest } from "../api";
+import { getCalDavPassword } from "../secrets";
 import type { CalDavAccount } from "../settings";
 
 export const NS = {
@@ -46,9 +47,16 @@ export class ConflictError extends CalDavError {
   }
 }
 
-/** Basic auth header value, UTF-8 safe (btoa alone chokes on non-Latin-1). */
+/**
+ * Basic auth header value, UTF-8 safe (btoa alone chokes on non-Latin-1).
+ *
+ * The password is read from `secrets.ts` rather than taken off the account,
+ * which is what keeps `CalDavAccount` credential-free everywhere else. An empty
+ * one produces a header iCloud rejects with a 401 — the same outcome as a wrong
+ * password, and the same thing the user has to do about it.
+ */
 function basicAuth(account: CalDavAccount): string {
-  const raw = `${account.username}:${account.appPassword}`;
+  const raw = `${account.username}:${getCalDavPassword()}`;
   const bytes = new TextEncoder().encode(raw);
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
