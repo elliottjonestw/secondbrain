@@ -32,9 +32,11 @@ export function corsMiddleware(): MiddlewareHandler<AppEnv> {
       allowHeaders: ["Content-Type", "Authorization", "If-None-Match", "If-Match"],
       // Headers a browser build must be able to read off a response. ETag for
       // future conditional revalidation; the image dimensions so NoteImage can
-      // size the <img> before decode. (In Tauri, plugin-http isn't subject to
-      // CORS, so this only matters for the web build.)
-      exposeHeaders: ["ETag", "X-Image-Width", "X-Image-Height"],
+      // size the <img> before decode; Retry-After so a rate-limited caller that
+      // can genuinely wait (the restore's image loop) knows how long, instead of
+      // guessing and hammering the limiter. (In Tauri, plugin-http isn't subject
+      // to CORS, so this only matters for the web build.)
+      exposeHeaders: ["ETag", "X-Image-Width", "X-Image-Height", "Retry-After"],
       maxAge: 86400,
     });
     return handler(c, next);

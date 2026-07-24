@@ -69,7 +69,14 @@ export async function exportBackup(): Promise<string | null> {
   return path;
 }
 
-export interface ImportResult { itemCount: number }
+export interface ImportResult {
+  itemCount: number;
+  /** Images whose bytes couldn't be re-uploaded because the account's daily
+   *  image budget ran out mid-restore. Their notes came back with the reference
+   *  intact and the missing-image chip in place, so this is a warning to show,
+   *  not a failure. */
+  imagesSkipped: number;
+}
 
 /** Restore from a user-selected backup JSON file. DESTRUCTIVE — replaces all
  *  existing data. Returns null if the user cancelled, else a summary. Throws a
@@ -117,7 +124,7 @@ export async function applyBackup(text: string): Promise<ImportResult> {
       itemCount += rows.length;
     }
   }
-  await importTables(tables);
+  const imagesSkipped = await importTables(tables);
 
   // Restore only the non-secret settings that are present — never the API key
   // or the CalDAV account, which aren't in the file to begin with.
@@ -135,5 +142,5 @@ export async function applyBackup(text: string): Promise<ImportResult> {
     if (Object.keys(calPatch).length) saveCalendarSettings(calPatch);
   }
 
-  return { itemCount };
+  return { itemCount, imagesSkipped };
 }

@@ -83,13 +83,25 @@ export class ApiError extends Error {
   readonly code: ErrorCode;
   readonly status: number;
   readonly fields?: Record<string, string>;
+  /** Seconds the server asked us to wait, from `Retry-After`. Only a
+   *  rate-limited response carries one, and only a caller that can genuinely
+   *  wait (the backup restore's image loop) should act on it — everything else
+   *  shows the message and lets the user decide. */
+  readonly retryAfter?: number;
 
-  constructor(code: ErrorCode, message: string, status: number, fields?: Record<string, string>) {
+  constructor(
+    code: ErrorCode,
+    message: string,
+    status: number,
+    fields?: Record<string, string>,
+    retryAfter?: number,
+  ) {
     super(message);
     this.name = "ApiError";
     this.code = code;
     this.status = status;
     this.fields = fields;
+    this.retryAfter = retryAfter;
   }
 }
 
@@ -210,10 +222,20 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
       // A non-JSON error body means something upstream of the Worker failed —
       // keep the generic message rather than surfacing raw HTML.
     }
-    throw new ApiError(code, message, res.status, fields);
+    throw new ApiError(code, message, res.status, fields, retryAfterSeconds(res));
   }
 
   return (await res.json()) as T;
+}
+
+/** `Retry-After` in seconds, when the server sent a sane one. The HTTP-date
+ *  form is legal but nothing here emits it, so a non-numeric value is ignored
+ *  rather than parsed. Capped so a hostile or broken header can't park a caller
+ *  for an hour. */
+function retryAfterSeconds(res: Response): number | undefined {
+  const raw = Number(res.headers.get("Retry-After"));
+  if (!Number.isFinite(raw) || raw <= 0) return undefined;
+  return Math.min(raw, 120);
 }
 
 /**

@@ -820,7 +820,7 @@ export async function exportTables(): Promise<Record<DataTable, Row[]>> {
  */
 export async function importTables(
   tables: Partial<Record<DataTable, Row[]>>,
-): Promise<void> {
+): Promise<number> {
   // Validate BEFORE touching anything, so a malformed file deletes nothing.
   for (const table of DATA_TABLES) {
     for (const row of tables[table] ?? []) {
@@ -832,7 +832,7 @@ export async function importTables(
 
   const snapshot = await exportTables();
   try {
-    await writeAllTables(tables);
+    return await writeAllTables(tables);
   } catch (err) {
     // Roll the account back to its pre-import state. Best-effort: the original
     // error is the one worth reporting.
@@ -841,15 +841,14 @@ export async function importTables(
   }
 }
 
-/** Clear the space, then upload every table in bounded batches. */
-async function writeAllTables(tables: Partial<Record<DataTable, Row[]>>): Promise<void> {
+/** Clear the space, then upload every table in bounded batches. Returns the
+ *  number of images whose BYTES couldn't be uploaded — see `restoreNoteImages`
+ *  for why that is a warning and not a failure. */
+async function writeAllTables(tables: Partial<Record<DataTable, Row[]>>): Promise<number> {
   await apiRequest<void>(spacePath("/data/clear"), { method: "POST" });
   for (const table of DATA_TABLES) {
+    if (table === "note_images") continue; // last, and separately — see below
     const rows = tables[table] ?? [];
-    if (table === "note_images") {
-      await restoreNoteImages(rows);
-      continue;
-    }
     // The Worker rejects batches over 1000 rows; stay well under so one batch
     // is also comfortably inside the CPU budget.
     for (let i = 0; i < rows.length; i += EXPORT_PAGE) {
@@ -859,6 +858,13 @@ async function writeAllTables(tables: Partial<Record<DataTable, Row[]>>): Promis
       });
     }
   }
+
+  // Images go LAST, after every table that can't fail this way. The upload
+  // endpoint is the one rate-limited route in a restore (it spends KV's daily
+  // write budget — the tightest quota in the stack), so it is also the one that
+  // can stop partway through. Doing it last means everything else has already
+  // landed when it does.
+  return restoreNoteImages(tables.note_images ?? []);
 }
 
 /**
@@ -875,19 +881,64 @@ async function writeAllTables(tables: Partial<Record<DataTable, Row[]>>): Promis
  * wants. A row with no `data` (image bytes already lost) is skipped rather than
  * failing the restore — the note keeps its `sbimg:` reference and renders the
  * missing-image chip, which is honest about what happened.
+ *
+ * **Rate limits are why this loop is shaped the way it is.** Upload is capped
+ * twice (`UPLOAD_LIMIT`, 10/min, and a durable 200/user/day), and a restore is
+ * the one thing that legitimately trips both: fifty images arrive in a couple of
+ * seconds. So:
+ *
+ *  - A burst limit is waited out. It carries `Retry-After`, and this is the one
+ *    caller in the app that can honestly sleep — the user is already watching a
+ *    progress state and the alternative is losing their images.
+ *  - The daily budget is not, and deliberately sends no `Retry-After`: nothing
+ *    the user can do in this session clears it, so the remaining images are
+ *    skipped immediately rather than retried for 24 hours.
+ *  - **A rate limit never throws.** It must not fail the restore: the caller's
+ *    rollback re-uploads a snapshot through this same endpoint, so a throw would
+ *    hit the identical limit on the way back and lose the account entirely.
+ *    Skipped images leave the same missing-image chip a lost byte range already
+ *    does, and the count comes back so the UI can say so. Anything else — an
+ *    offline device, a 500 — still throws and still rolls the restore back;
+ *    those are failures the retry can't reason about.
  */
-async function restoreNoteImages(rows: Row[]): Promise<void> {
+async function restoreNoteImages(rows: Row[]): Promise<number> {
+  let skipped = 0;
+  let budgetSpent = false;
+
   for (const row of rows) {
     const data = row.data;
     const noteId = row.note_id;
     if (typeof data !== "string" || !data || typeof noteId !== "string") continue;
-    await putNoteImage(noteId, String(row.id), {
+    if (budgetSpent) { skipped++; continue; }
+
+    const img = {
       mime: typeof row.mime === "string" ? row.mime : "image/jpeg",
       data,
       width: Number(row.width) || 1,
       height: Number(row.height) || 1,
-    });
+    };
+
+    // Two attempts: one wait covers a full burst window, and a second refusal
+    // means the pace isn't the problem.
+    let done = false;
+    for (let attempt = 0; attempt < 2 && !done; attempt++) {
+      try {
+        await putNoteImage(noteId, String(row.id), img);
+        done = true;
+      } catch (err) {
+        if (!(err instanceof ApiError) || err.code !== "rate_limited") throw err;
+        const wait = err.retryAfter;
+        if (wait === undefined) { budgetSpent = true; break; } // the daily cap
+        if (attempt === 0) await sleep(wait * 1000);
+      }
+    }
+    if (!done) skipped++;
   }
+  return skipped;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Remove every row of user data in the signed-in account's space, including

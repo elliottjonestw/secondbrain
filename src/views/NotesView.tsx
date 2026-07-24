@@ -21,6 +21,7 @@ import NoteImage, {
 } from "../components/NoteImage";
 import { NoteLink, normalizeEmbeds, youTubeId, youTubeUrl } from "../components/YouTubeEmbed";
 import { encodeNoteImage } from "../lib/images";
+import { ApiError } from "../lib/api";
 import { TagEditor, LinksPanel, PeoplePanel, LinkTarget } from "../components/ItemMeta";
 import { fmtDateTime } from "../lib/format";
 import { useFirstLoad, firstLoadScreen, SlowLoad } from "../components/ViewGate";
@@ -150,7 +151,7 @@ function NoteEditor({
   // than the snapshot they closed over before encoding started.
   const bodyRef = useRef(body);
   const imageSeq = useRef(0);
-  const [imageError, setImageError] = useState(false);
+  const [imageError, setImageError] = useState("");
   const dictateSeq = useRef(0);
   const [dictateError, setDictateError] = useState("");
 
@@ -208,9 +209,17 @@ function NoteEditor({
       const id = await insertNoteImage(note.id, encoded);
       primeNoteImage(id, encoded.mime, encoded.data, encoded.width, encoded.height);
       swapToken(token, `${SBIMG}${id}`);
-    } catch {
+    } catch (err) {
       swapToken(token, null); // drop the placeholder rather than leave a dead ref
-      setImageError(true);
+      // Upload is rate-limited (KV's daily write budget is the tightest quota
+      // in the stack), and "that image couldn't be added" reads as corruption
+      // when the real answer is "wait, or you've had a lot of images today".
+      // The server's own message says which, so pass it through.
+      setImageError(
+        err instanceof ApiError && err.code === "rate_limited"
+          ? err.message
+          : t("notes.md.imageError"),
+      );
     }
   }
 
@@ -324,7 +333,7 @@ function NoteEditor({
     const file = Array.from(e.clipboardData.files).find((f) => f.type.startsWith("image/"));
     if (!file) return;
     e.preventDefault();
-    setImageError(false);
+    setImageError("");
     void insertImage(file);
   }
 
@@ -426,7 +435,7 @@ function NoteEditor({
             textareaRef={textareaRef}
             body={body}
             onEdit={applyEdit}
-            onInsertImage={(file) => { setImageError(false); void insertImage(file); }}
+            onInsertImage={(file) => { setImageError(""); void insertImage(file); }}
             onInsertVideo={insertVideo}
             onInsertTable={insertLine}
           />
@@ -453,7 +462,7 @@ function NoteEditor({
               className="absolute bottom-3 right-3"
             />
           </div>
-          {imageError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{t("notes.md.imageError")}</p>}
+          {imageError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{imageError}</p>}
           {dictateError && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{dictateError}</p>}
         </div>
       )}

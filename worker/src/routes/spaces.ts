@@ -443,6 +443,12 @@ spaces.post("/spaces/:spaceId/notes/:noteId/images", async (c) => {
     `img:${userId}`,
     "Too many image uploads. Wait a moment and try again.",
   );
+  // No `Retry-After` on this one, and that omission is load-bearing rather than
+  // an oversight: the burst limit above carries one, so its absence is how a
+  // caller tells "wait a minute" from "wait until tomorrow". A backup restore
+  // uploads images in a tight loop and reads exactly that distinction — it
+  // sleeps through the first and gives up on the second (`restoreNoteImages` in
+  // src/db.ts). A day-long Retry-After would be honest and useless.
   if (!(await consumeDailyQuota(c.env.DB, `img:${userId}`, QUOTA_LIMITS.imageUploads))) {
     throw new ApiError(
       "rate_limited",

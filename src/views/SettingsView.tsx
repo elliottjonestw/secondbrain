@@ -1575,6 +1575,12 @@ function DataSettings() {
     try {
       const result = await importBackup();
       if (result) {
+        // The reload below wipes any status message, so a partial restore has to
+        // be reported with something modal. Images are the only part that can be
+        // skipped (the daily upload budget); their notes came back intact.
+        if (result.imagesSkipped > 0) {
+          window.alert(t("settings.data.imagesSkipped", { count: result.imagesSkipped }));
+        }
         // Reload so every view re-reads the DB and the restored language applies.
         window.location.reload();
       }

@@ -294,6 +294,7 @@
       "importing": "Importing…",
       "importTitle": "Import Sekunda data",
       "confirmImport": "Importing will replace ALL current data in the app with the contents of the backup file. This cannot be undone. Continue?",
+      "imagesSkipped": "Everything was restored except some pictures: the daily image limit was reached, so {{count}} of the images in this backup came back missing from their notes. Import the same file again tomorrow to fill them in.",
       "errorInvalid": "That file isn't a valid Sekunda backup.",
       "errorNewer": "This backup was made by a newer version of Sekunda. Update the app before restoring it.",
       "resetHeading": "Reset",
