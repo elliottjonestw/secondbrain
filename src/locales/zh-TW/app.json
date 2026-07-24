@@ -244,7 +244,7 @@
       "apiKey": "OpenAI API 金鑰",
       "apiKeyHint": "可於 platform.openai.com 取得金鑰。用量將由你自己的 OpenAI 帳戶計費。",
       "model": "模型",
-      "modelHint": "任何你的金鑰可存取的 chat-completions 模型，例如",
+      "modelHint": "由便宜到昂貴排列。你的金鑰必須能存取所選的模型。",
       "summaryThrottle": "今日摘要",
       "summaryThrottleLabel": "已產生的摘要保留一段時間",
       "summaryThrottleHint": "今日頁面的「你的一天」是本程式唯一未經你要求就自動產生的內容。保留期間內，即使當天的資料有變動（勾選待辦、新增行程），也不會重新產生；超過這個時數才會。卡片上的重新整理按鈕則一律重寫。",

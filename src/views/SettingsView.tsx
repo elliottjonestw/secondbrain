@@ -11,7 +11,7 @@ import {
   getSettings, saveSettings, getCalendarSettings, saveCalendarSettings,
   MIN_SPEECH_RATE, MAX_SPEECH_RATE, clampSpeechRate,
   MIN_SUMMARY_MAX_AGE_HOURS, MAX_SUMMARY_MAX_AGE_HOURS, clampSummaryMaxAge,
-  MIN_RSS_ITEMS, MAX_RSS_ITEMS, MAX_FEEDS, clampRssItemCount,
+  MIN_RSS_ITEMS, MAX_RSS_ITEMS, MAX_FEEDS, clampRssItemCount, OPENAI_MODELS,
   type AppSettings, type CalDavAccount, type TtsEngine,
   type TemperatureUnit, type WeatherLocation, type StockSymbol, type RssFeed,
 } from "../lib/settings";
@@ -919,15 +919,23 @@ function OpenAiFields({
 
       <Field
         label={t("settings.assistant.model")}
-        hint={<>{t("settings.assistant.modelHint")} <code>gpt-4o-mini</code> / <code>gpt-4o</code></>}
+        hint={t("settings.assistant.modelHint")}
       >
-        <input
+        <select
           value={draft.openaiModel}
           onChange={(e) => patch({ openaiModel: e.target.value })}
-          placeholder="gpt-4o-mini"
-          spellCheck={false}
           className={`${INPUT_CLASS} font-mono`}
-        />
+        >
+          {/* A model typed in before this became a dropdown — or set on another
+              device with a newer build — must stay selected rather than silently
+              snapping to whatever the first option happens to be. */}
+          {!(OPENAI_MODELS as readonly string[]).includes(draft.openaiModel) && (
+            <option value={draft.openaiModel}>{draft.openaiModel}</option>
+          )}
+          {OPENAI_MODELS.map((m) => (
+            <option key={m} value={m}>{m}</option>
+          ))}
+        </select>
       </Field>
     </>
   );

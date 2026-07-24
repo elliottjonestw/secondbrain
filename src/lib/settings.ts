@@ -36,6 +36,29 @@ export function clampSpeechRate(rate: number): number {
   return Math.min(MAX_SPEECH_RATE, Math.max(MIN_SPEECH_RATE, rate));
 }
 
+/**
+ * The models offered for the assistant, cheapest first.
+ *
+ * Membership is not "every model OpenAI sells" — it's every model that can run
+ * *this* assistant, which means chat-completions with function calling, since
+ * `ai.ts` is a tool-calling loop and a model without tools would answer every
+ * question by making the answer up. Prices aren't shown: they move, and a stale
+ * number in the UI is worse than none.
+ *
+ * The gpt-5 family only accepts the default `temperature`, so `callChat` omits
+ * the field for those — see `supportsTemperature`.
+ */
+export const OPENAI_MODELS = [
+  "gpt-5-nano",
+  "gpt-4.1-nano",
+  "gpt-4o-mini",
+  "gpt-5-mini",
+  "gpt-4.1-mini",
+  "gpt-5",
+  "gpt-4.1",
+  "gpt-4o",
+] as const;
+
 export interface AppSettings {
   // NOTE: the OpenAI API key is deliberately NOT here — it and the iCloud
   // app-specific password live in `secrets.ts`, under their own storage keys.

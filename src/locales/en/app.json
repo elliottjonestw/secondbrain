@@ -245,7 +245,7 @@
       "apiKey": "OpenAI API key",
       "apiKeyHint": "Get a key at platform.openai.com. Usage is billed to your own OpenAI account.",
       "model": "Model",
-      "modelHint": "Any chat-completions model your key can access, e.g.",
+      "modelHint": "Listed cheapest first. Your key needs access to the one you pick.",
       "summaryThrottle": "Today briefing",
       "summaryThrottleLabel": "Keep the written briefing for a while",
       "summaryThrottleHint": "The Today page's “Your day” card is the only thing the app writes without being asked. Holding it means a change to your day — ticking off a todo, adding an event — won't rewrite it until it's this old. The refresh button on the card always rewrites it.",

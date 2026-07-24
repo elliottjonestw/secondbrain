@@ -1917,6 +1917,17 @@ function toolsFor(tools: unknown): unknown[] | null {
   return Array.isArray(t) && t.length === 0 ? null : t;
 }
 
+/**
+ * The gpt-5 family rejects any `temperature` other than the default with a 400
+ * ("Unsupported value"), so the field has to be *omitted*, not clamped to 1 —
+ * and a hard 400 on every turn is what the model dropdown would otherwise ship.
+ * The cost is that the card-recovery round can't cool to 0 on those models; it
+ * still narrows the toolset, which is the load-bearing half.
+ */
+function supportsTemperature(model: string): boolean {
+  return !/^gpt-5/.test(model.trim());
+}
+
 async function callChat(
   ep: ChatEndpoint,
   messages: OAIMessage[],
@@ -1937,7 +1948,7 @@ async function callChat(
       ...(tools ? { tools, tool_choice: "auto" } : {}),
       // Warmer than the 0.2 this used when replies were data dumps: the prompt now
       // asks for natural spoken-sounding prose, which 0.2 renders stiff and formulaic.
-      temperature: opts.temperature ?? 0.6,
+      ...(supportsTemperature(ep.model) ? { temperature: opts.temperature ?? 0.6 } : {}),
     }),
     signal: opts.signal,
   });

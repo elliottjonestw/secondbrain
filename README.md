@@ -254,7 +254,9 @@ Connect your iCloud account and your Apple calendars work alongside the built-in
 
 An optional assistant that answers questions about your events, to-dos, reminders, notes, and people — and can also **create, update, link, and delete** them for you. Its text model runs on **OpenAI, with your own API key** — configuration stays on-device.
 
-**Setup:** open **Settings → Assistant** (sidebar, bottom), paste your `sk-…` key, pick a model (default `gpt-4o-mini`), and Save.
+**Setup:** open **Settings → Assistant** (sidebar, bottom), paste your `sk-…` key, pick a model, and Save.
+
+**Model** is a dropdown (`OPENAI_MODELS` in `settings.ts`), listed cheapest first and defaulting to `gpt-4o-mini`. The list is every model that can run *this* assistant rather than everything OpenAI sells: `ai.ts` is a tool-calling loop, so a model without function calling would answer by inventing rather than looking. Prices aren't shown — they move, and a stale number in the UI is worse than none. A model set before the dropdown existed stays selected as an extra option rather than snapping to the first entry. The `gpt-5` family accepts only the default `temperature`, so `callChat` omits the field for those (`supportsTemperature`); the card-recovery round therefore can't cool to 0 on them, though it still narrows the toolset.
 
 Then open **Assistant** and try:
 - *"What's due next week in Work?"* / *"Which notes mention the Q3 report?"* (read)
